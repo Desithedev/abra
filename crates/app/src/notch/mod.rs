@@ -183,11 +183,16 @@ fn auto_tier(over: Option<Tier>) -> Tier {
 static ISLAND_GAP: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 fn island_gap(dpi: f32) -> f32 {
-    if crate::prefs::get().notch_island {
-        (7.0 * dpi).round()
+    let s = crate::prefs::get();
+    if s.notch_island {
+        (s.island_gap as f32 * dpi).round().max(1.0)
     } else {
         0.0
     }
+}
+
+fn notch_dpi(hwnd: HWND) -> f32 {
+    unsafe { GetDpiForWindow(hwnd) }.max(96) as f32 / 96.0 * crate::prefs::ui_scale() * crate::prefs::get().notch_scale as f32 / 100.0
 }
 
 fn win_size(dpi: f32, screen_w: i32) -> (i32, i32) {
@@ -265,6 +270,7 @@ pub struct Notch {
     app_icons: std::collections::HashMap<String, Option<CompositionDrawingSurface>>,
     vis: Vis,
     reserved: bool,
+    island_shape: bool,
     off: bool,
     shown: bool,
     starting: bool,
@@ -296,7 +302,7 @@ impl Notch {
                 0, 0, 400, 200,
                 None, None, Some(hi), None,
             )?;
-            let dpi = GetDpiForWindow(hwnd).max(96) as f32 / 96.0 * crate::prefs::ui_scale();
+            let dpi = notch_dpi(hwnd);
             let screen_w = sys::screen_size().0;
             let win = win_size(dpi, screen_w);
             let _ = SetWindowPos(hwnd, None, (screen_w - win.0) / 2, 0, win.0, win.1, SWP_NOACTIVATE | SWP_NOZORDER);
@@ -394,6 +400,7 @@ impl Notch {
                 app_icons: std::collections::HashMap::new(),
                 vis: opts.mode,
                 reserved: false,
+                island_shape: crate::prefs::get().notch_island,
                 off: !crate::prefs::get().notch_enabled,
                 shown: true,
                 starting: true,
@@ -1530,7 +1537,7 @@ impl Notch {
             let r = nacre_platform::shell::appbar::reserve_top(self.hwnd, self.screen_w, strip);
             log::line("appbar", &format!("atas strip={strip} hasil={r:?}"));
         } else {
-            nacre_platform::shell::appbar::release_top();
+            nacre_platform::shell::appbar::release_top_if(self.hwnd);
         }
     }
 
@@ -1560,8 +1567,28 @@ impl Notch {
         self.update_visibility();
         self.sync_download_watch();
         self.first = true;
+        self.on_reconfigure();
         self.refresh();
+        if s.notch_island != self.island_shape {
+            self.island_shape = s.notch_island;
+            self.morph(s.notch_island);
+        }
         log::line("notch", &format!("pengaturan: perilaku={vis:?} cadangan={reserve} mati={}", self.off));
+    }
+
+    fn morph(&mut self, to_island: bool) {
+        if !crate::prefs::get().anim || !self.shown {
+            return;
+        }
+        let Ok(comp) = self.body.stage.Compositor() else { return };
+        let (x0, w, h, gap) = (self.x0(), self.size.w, self.size.h, island_gap(self.dpi));
+        let cx = x0 + w / 2.0;
+        let center = windows_numerics::Vector3 { X: cx, Y: if to_island { gap + h / 2.0 } else { 0.0 }, Z: 0.0 };
+        let _ = crate::motion::droplet(&comp, &self.body.stage, center, to_island);
+        let rgb = if crate::prefs::get().notch_material == nacre_core::settings::Material::Black { [body::ONYX.0, body::ONYX.1, body::ONYX.2] } else { [235, 240, 255] };
+        let land = if to_island { gap } else { (7.0 * self.dpi).round() };
+        let _ = crate::motion::drip(&comp, &self.body.ghost, cx, land, (11.0 * self.dpi).round(), rgb, to_island);
+        timer(self.hwnd, T_GHOST, crate::motion::MORPH_MS + 80);
     }
 
     fn refresh_tier(&mut self) {
@@ -1575,7 +1602,7 @@ impl Notch {
 
     fn on_reconfigure(&mut self) {
         let screen_w = sys::screen_size().0;
-        let dpi = unsafe { GetDpiForWindow(self.hwnd) }.max(96) as f32 / 96.0 * crate::prefs::ui_scale();
+        let dpi = notch_dpi(self.hwnd);
         let win = win_size(dpi, screen_w);
         if win == self.win && screen_w == self.screen_w && (dpi - self.dpi).abs() < 0.01 {
             return;

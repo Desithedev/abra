@@ -3,7 +3,7 @@ use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS};
 use windows::Win32::UI::WindowsAndMessaging::{
     GetClassNameW, GetWindowLongW, GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible,
-    IsZoomed, GWL_EXSTYLE, GWL_STYLE, WS_CAPTION, WS_EX_TOOLWINDOW,
+    IsZoomed, GWL_EXSTYLE, WS_EX_TOOLWINDOW,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -63,12 +63,16 @@ pub fn evaluate(fg: isize, own_pid: u32, dock: (i32, i32, i32, i32), screen: (i3
             return none;
         }
         let covers = r.left <= 0 && r.top <= 0 && r.right >= screen.0 && r.bottom >= screen.1;
-        let captioned_max = IsZoomed(h).as_bool() && (GetWindowLongW(h, GWL_STYLE) as u32 & WS_CAPTION.0) != 0;
-        let fullscreen = covers && !captioned_max;
+        let fullscreen = (covers && !IsZoomed(h).as_bool()) || exclusive_fullscreen();
         if fullscreen || IsZoomed(h).as_bool() {
             return Overlap { overlapped: true, fullscreen };
         }
         let hit = r.bottom > dock.1 && r.top < dock.3 && r.right > dock.0 && r.left < dock.2;
         Overlap { overlapped: hit, fullscreen: false }
     }
+}
+
+fn exclusive_fullscreen() -> bool {
+    use windows::Win32::UI::Shell::{SHQueryUserNotificationState, QUNS_RUNNING_D3D_FULL_SCREEN};
+    unsafe { SHQueryUserNotificationState().is_ok_and(|s| s == QUNS_RUNNING_D3D_FULL_SCREEN) }
 }

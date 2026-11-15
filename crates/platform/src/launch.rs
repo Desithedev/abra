@@ -67,6 +67,20 @@ pub fn toggle_start(was_open_at_press: bool) {
     }
 }
 
+pub fn properties(path: &str) -> bool {
+    use windows::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_INVOKEIDLIST, SHELLEXECUTEINFOW};
+    let file = HSTRING::from(path);
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_INVOKEIDLIST,
+        lpVerb: w!("properties"),
+        lpFile: windows::core::PCWSTR(file.as_ptr()),
+        nShow: SW_SHOWNORMAL.0,
+        ..Default::default()
+    };
+    unsafe { ShellExecuteExW(&mut info).is_ok() }
+}
+
 pub fn run(file: &str, params: &str) {
     let file = system_tool(file);
     let params = params.to_string();

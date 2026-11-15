@@ -42,3 +42,25 @@ pub fn is_alive(pid: u32) -> bool {
         }
     }
 }
+
+pub fn image_name(pid: u32) -> Option<String> {
+    use windows::core::PWSTR;
+    use windows::Win32::System::Threading::{QueryFullProcessImageNameW, PROCESS_NAME_WIN32};
+    unsafe {
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut buf = [0u16; 1024];
+        let mut len = buf.len() as u32;
+        let ok = QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut len).is_ok();
+        let _ = CloseHandle(h);
+        if !ok {
+            return None;
+        }
+        let path = String::from_utf16_lossy(&buf[..len as usize]);
+        std::path::Path::new(&path).file_name().map(|n| n.to_string_lossy().to_lowercase())
+    }
+}
+
+pub fn is_same_program(pid: u32) -> bool {
+    let Some(mine) = std::env::current_exe().ok().and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase())) else { return false };
+    is_alive(pid) && image_name(pid).is_some_and(|n| n == mine)
+}

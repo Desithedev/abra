@@ -152,7 +152,7 @@ pub fn recover_leftover(path: &Path) -> bool {
         return true;
     }
     let m = read_marker(path).unwrap_or_else(|| Marker::new(-1, 0));
-    if m.pid != 0 && m.pid != std::process::id() && crate::process::is_alive(m.pid) {
+    if m.pid != 0 && m.pid != std::process::id() && crate::process::is_same_program(m.pid) {
         crate::log::line("taskbar", "marker dimiliki proses Nacre lain yang masih hidup; tidak disentuh");
         return false;
     }
@@ -170,7 +170,12 @@ pub fn hide(marker_path: &Path, guard_exe: &Path) -> Result<(), String> {
         return Ok(());
     }
     if marker_path.exists() && !recover_leftover(marker_path) {
-        return Err("sisa sesi sebelumnya belum bisa dipulihkan".into());
+        let owner = read_marker(marker_path).map(|m| m.pid).unwrap_or(0);
+        if owner != 0 && owner != std::process::id() && crate::process::is_same_program(owner) {
+            return Err("taskbar sedang dipegang ABRA lain".into());
+        }
+        crate::log::line("taskbar", "sisa sesi lama tidak bisa dipulihkan; diganti sesi baru");
+        let _ = std::fs::remove_file(marker_path);
     }
     let p = primary().ok_or("taskbar tidak ditemukan")?;
     let pid = std::process::id();
@@ -185,8 +190,7 @@ pub fn hide(marker_path: &Path, guard_exe: &Path) -> Result<(), String> {
 
     write_marker(marker_path, &m).map_err(|e| format!("marker: {e}"))?;
     if let Err(e) = super::guard_spawn::spawn_once(guard_exe, pid, marker_path) {
-        let _ = std::fs::remove_file(marker_path);
-        return Err(format!("guard tidak bisa dijalankan ({}): {e}", guard_exe.display()));
+        crate::log::line("taskbar", &format!("guard tidak bisa dijalankan, taskbar tetap disembunyikan: {e}"));
     }
 
     *lock(&ACTIVE) = Some(Active { marker: m, path: marker_path.to_path_buf() });

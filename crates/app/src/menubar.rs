@@ -1,3 +1,5 @@
+use nacre_core::appmenus::{Act, Line, Menu as AppMenu};
+use nacre_core::settings::Behavior;
 use crate::dock::menu::{Item, Menu, MENU_CLOSE, MENU_PICK};
 use crate::popup::Popup;
 use crate::{prefs, services};
@@ -32,16 +34,19 @@ const T_STATUS: usize = 2;
 const T_APP: usize = 3;
 const T_FS: usize = 4;
 const T_SIG: usize = 5;
+const T_EDGE: usize = 6;
+const WM_RAIL_EDGE: u32 = WM_APP + 76;
+static RAIL_SMART: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static RAIL_EDGE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static RAIL_ZONE: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(40);
 const BAR_W: i32 = 600;
 const APP_W: i32 = 800;
 
 const LOGO: u32 = 1;
 const APP: u32 = 2;
-const M_FILE: u32 = 3;
-const M_EDIT: u32 = 4;
-const M_VIEW: u32 = 5;
-const M_WIN: u32 = 6;
-const M_HELP: u32 = 7;
+const PROF0: u32 = 30;
+const PROF_CMD: usize = 200_000;
+const GUIDE_URL: &str = "https://github.com/abdeealfarizi/abra/blob/main/docs/PANDUAN.md";
 const CLOCK: u32 = 10;
 const CTRL: u32 = 11;
 const SEARCH: u32 = 12;
@@ -66,6 +71,7 @@ struct Bar {
     left: Vec<Placed>,
     right: Vec<Placed>,
     app: String,
+    app_path: String,
     hidden: Vec<isize>,
     menu: Menu,
     open: Option<u32>,
@@ -80,6 +86,8 @@ struct Bar {
     native: Vec<nacre_platform::menus::Top>,
     native_hwnd: isize,
     fullscreen: bool,
+    edge: bool,
+    smart_hidden: bool,
 }
 
 struct Ctl {
@@ -104,9 +112,8 @@ pub fn refresh_radios() {
     });
 }
 
-fn mt(key: &'static str) -> String {
-    let t = prefs::tr(key);
-    t.strip_prefix("Menu:").unwrap_or(t).to_string()
+fn english() -> bool {
+    prefs::get().lang == nacre_core::i18n::Lang::En
 }
 
 fn recolor(b: &Bitmap, rgb: [u8; 3]) -> Vec<u8> {
@@ -133,6 +140,18 @@ fn noop_fg() {
 unsafe extern "system" fn ll_mouse(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     if code >= 0 {
         let m = wp.0 as u32;
+        if m == WM_MOUSEMOVE && RAIL_SMART.load(std::sync::atomic::Ordering::Relaxed) {
+            let y = (*(lp.0 as *const MSLLHOOKSTRUCT)).pt.y;
+            let was = RAIL_EDGE.load(std::sync::atomic::Ordering::Relaxed);
+            let now = if y <= 1 { true } else if y > RAIL_ZONE.load(std::sync::atomic::Ordering::Relaxed) { false } else { was };
+            if now != was {
+                RAIL_EDGE.store(now, std::sync::atomic::Ordering::Relaxed);
+                let ctl = BAR_CTL.load(std::sync::atomic::Ordering::Relaxed);
+                if ctl != 0 {
+                    let _ = PostMessageW(Some(HWND(ctl as *mut _)), WM_RAIL_EDGE, WPARAM(now as usize), LPARAM(0));
+                }
+            }
+        }
         if m == WM_LBUTTONDOWN || m == WM_RBUTTONDOWN || m == WM_MBUTTONDOWN {
             let ctl = BAR_CTL.load(std::sync::atomic::Ordering::Relaxed);
             if ctl != 0 {
@@ -151,7 +170,7 @@ unsafe extern "system" fn ll_mouse(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT
 }
 
 fn loc_hook(ev: u32, hwnd: isize) {
-    if ev == tracker::EV_LOCATION && hwnd != 0 && hwnd == focus::foreground() {
+    if hwnd != 0 && (ev == tracker::EV_FOREGROUND || (ev == tracker::EV_LOCATION && hwnd == focus::foreground())) {
         CTL.with(|c| {
             if let Some(ctl) = c.borrow().as_ref() {
                 unsafe {
@@ -163,21 +182,7 @@ fn loc_hook(ev: u32, hwnd: isize) {
 }
 
 fn is_fullscreen(hwnd: isize) -> bool {
-    unsafe {
-        let h = HWND(hwnd as *mut _);
-        let mut cls = [0u16; 64];
-        let n = GetClassNameW(h, &mut cls);
-        let cls = String::from_utf16_lossy(&cls[..n.max(0) as usize]);
-        if cls == "Progman" || cls == "WorkerW" || cls == "Shell_TrayWnd" {
-            return false;
-        }
-        let mut r = windows::Win32::Foundation::RECT::default();
-        if GetWindowRect(h, &mut r).is_err() {
-            return false;
-        }
-        let (sw, sh) = sys::screen_size();
-        r.left <= 0 && r.top <= 0 && r.right >= sw && r.bottom >= sh
-    }
+    nacre_platform::wins::overlap::evaluate(hwnd, std::process::id(), (0, 0, 0, 0), sys::screen_size()).fullscreen
 }
 
 pub fn init(comp: &Compositor) -> windows_core::Result<()> {
@@ -214,6 +219,7 @@ fn apply_prefs() {
                         b.refresh_app();
                         b.relayout();
                         b.render();
+                        b.sync_behavior();
                     });
                     services::post_island(WM_APP + 72);
                     CTL.with(|c| {
@@ -233,11 +239,11 @@ fn apply_prefs() {
         let b = BAR.with(|c| c.borrow_mut().take());
         if let Some(b) = b {
             b.menu.hide();
+            shell::appbar::release_top_if(b.popup.hwnd);
             unsafe {
                 let _ = DestroyWindow(b.popup.hwnd);
             }
         }
-        shell::appbar::release_top();
         log::line("menubar", "dihancurkan");
         services::post_island(crate::prefs::WM_PREFS);
     } else if want {
@@ -250,11 +256,11 @@ fn apply_prefs() {
             let b = BAR.with(|c| c.borrow_mut().take());
             if let Some(b) = b {
                 b.menu.hide();
+                shell::appbar::release_top_if(b.popup.hwnd);
                 unsafe {
                     let _ = DestroyWindow(b.popup.hwnd);
                 }
             }
-            shell::appbar::release_top();
             apply_prefs();
             return;
         }
@@ -262,6 +268,7 @@ fn apply_prefs() {
             b.apply_look();
             b.relayout();
             b.render();
+            b.sync_behavior();
         });
     }
 }
@@ -294,7 +301,9 @@ fn create(comp: &Compositor) -> windows_core::Result<Box<Bar>> {
     let gfx = Gfx::shared(comp)?;
     let menu = Menu::new(comp, popup.hwnd, dpi, screen, tier)?;
     popup.show();
-    shell::appbar::reserve_top(popup.hwnd, screen.0, h);
+    if prefs::get().rail == Behavior::Fixed {
+        shell::appbar::reserve_top(popup.hwnd, screen.0, h);
+    }
     unsafe {
         SetTimer(Some(popup.hwnd), T_CLOCK, time::ms_to_next_minute().max(200), None);
         SetTimer(Some(popup.hwnd), T_STATUS, 60_000, None);
@@ -341,6 +350,7 @@ fn create(comp: &Compositor) -> windows_core::Result<Box<Bar>> {
         left: vec![],
         right: vec![],
         app: String::new(),
+        app_path: String::new(),
         hidden: vec![],
         menu,
         open: None,
@@ -355,6 +365,8 @@ fn create(comp: &Compositor) -> windows_core::Result<Box<Bar>> {
         native: vec![],
         native_hwnd: 0,
         fullscreen: false,
+        edge: false,
+        smart_hidden: false,
     });
     bar.apply_bg();
     Ok(bar)
@@ -386,6 +398,26 @@ unsafe extern "system" fn ctl_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                     }
                 });
             }
+            LRESULT(0)
+        }
+        WM_RAIL_EDGE => {
+            if wp.0 != 0 {
+                SetTimer(Some(hwnd), T_EDGE, 150, None);
+            } else {
+                let _ = KillTimer(Some(hwnd), T_EDGE);
+                with_bar(|b| {
+                    b.edge = false;
+                    b.apply_visibility();
+                });
+            }
+            LRESULT(0)
+        }
+        WM_TIMER if wp.0 == T_EDGE => {
+            let _ = KillTimer(Some(hwnd), T_EDGE);
+            with_bar(|b| {
+                b.edge = RAIL_EDGE.load(std::sync::atomic::Ordering::Relaxed);
+                b.apply_visibility();
+            });
             LRESULT(0)
         }
         WM_TIMER if wp.0 == T_FS => {
@@ -513,19 +545,51 @@ impl Bar {
     }
 
     fn check_fullscreen(&mut self) {
-        let fg = focus::foreground();
-        if fg == 0 || fg == self.popup.hwnd.0 as isize {
-            return;
-        }
-        let full = is_fullscreen(fg) && !prefs::get().above_fullscreen;
+        let fg = tracker::external_foreground();
+        let full = fg != 0 && is_fullscreen(fg) && !prefs::get().above_fullscreen;
         if full != self.fullscreen {
             self.fullscreen = full;
             if full {
                 self.close_menu();
-                self.popup.hide();
-            } else {
+            }
+        }
+        self.apply_visibility();
+    }
+
+    fn sync_behavior(&mut self) {
+        let mode = prefs::get().rail;
+        RAIL_SMART.store(mode == Behavior::Smart, std::sync::atomic::Ordering::Relaxed);
+        RAIL_ZONE.store(self.h + (12.0 * self.dpi) as i32, std::sync::atomic::Ordering::Relaxed);
+        if mode == Behavior::Fixed {
+            shell::appbar::reserve_top(self.popup.hwnd, self.screen.0, self.h);
+        } else {
+            shell::appbar::release_top_if(self.popup.hwnd);
+        }
+        if mode != Behavior::Smart {
+            self.edge = false;
+        }
+        self.apply_visibility();
+    }
+
+    fn apply_visibility(&mut self) {
+        let smart = prefs::get().rail == Behavior::Smart;
+        let mut hide_smart = false;
+        if smart && !self.fullscreen {
+            let fg = tracker::external_foreground();
+            let ov = nacre_platform::wins::overlap::evaluate(fg, std::process::id(), (0, 0, self.screen.0, self.h), self.screen);
+            let busy = self.open.is_some() || self.tracking || self.edge;
+            hide_smart = ov.overlapped && !busy;
+        }
+        let want = !self.fullscreen && !hide_smart;
+        self.smart_hidden = hide_smart;
+        if want != self.popup.is_visible() {
+            if want {
                 self.popup.show();
+                self.popup.fade_in(&self.comp, true);
                 crate::topmost::request_raise();
+            } else {
+                self.close_menu();
+                self.popup.hide();
             }
         }
     }
@@ -552,7 +616,9 @@ impl Bar {
             .iter()
             .find(|w| w.hwnd == fg)
             .map(|w| {
-                if !w.name.is_empty() {
+                if nacre_platform::wins::names::is_host(&w.path) {
+                    w.title.chars().take(40).collect::<String>().trim().to_string()
+                } else if !w.name.is_empty() {
                     w.name.clone()
                 } else {
                     nacre_core::dock::items::name_from_path(&w.path)
@@ -560,7 +626,10 @@ impl Bar {
             })
             .filter(|n| !n.is_empty());
         let Some(name) = name else { return changed };
-        if name == self.app {
+        let path = wins.iter().find(|w| w.hwnd == fg).map(|w| w.path.clone()).unwrap_or_default();
+        let profile_changed = nacre_core::appmenus::exe_of(&path) != nacre_core::appmenus::exe_of(&self.app_path);
+        self.app_path = path;
+        if name == self.app && !profile_changed {
             return changed;
         }
         self.app = name;
@@ -581,11 +650,10 @@ impl Bar {
             LItem { id: APP, width: t(&self.app_label(), APP_W) },
         ];
         if self.native.is_empty() {
-            left.push(LItem { id: M_FILE, width: t(&mt("Berkas"), BAR_W) });
-            left.push(LItem { id: M_EDIT, width: t(&mt("Edit"), BAR_W) });
-            left.push(LItem { id: M_VIEW, width: t(&mt("Menu:Tampilan"), BAR_W) });
-            left.push(LItem { id: M_WIN, width: t(&mt("Menu:Jendela"), BAR_W) });
-            left.push(LItem { id: M_HELP, width: t(&mt("Bantuan"), BAR_W) });
+            let en = english();
+            for (i, m) in self.profile().iter().enumerate() {
+                left.push(LItem { id: PROF0 + i as u32, width: t(m.title(en), BAR_W) });
+            }
         } else {
             for (i, top) in self.native.iter().enumerate().take(20) {
                 left.push(LItem { id: NATIVE0 + i as u32, width: t(&top.title, BAR_W) });
@@ -617,7 +685,7 @@ impl Bar {
             let _ = self.popup.set_rect(0, 0, self.screen.0, self.h);
             let _ = self.popup.panel.set_radius(0.0);
             self.apply_bg();
-            shell::appbar::reserve_top(self.popup.hwnd, self.screen.0, self.h);
+            self.sync_behavior();
         }
     }
 
@@ -892,11 +960,10 @@ impl Bar {
             match p.id {
                 LOGO => self.draw_logo(p.x, p.w),
                 APP => self.draw_text(&app, APP_W, p.x, p.w, 1.0),
-                M_FILE => self.draw_text(&mt("Berkas"), BAR_W, p.x, p.w, 1.0),
-                M_EDIT => self.draw_text(&mt("Edit"), BAR_W, p.x, p.w, 1.0),
-                M_VIEW => self.draw_text(&mt("Menu:Tampilan"), BAR_W, p.x, p.w, 1.0),
-                M_WIN => self.draw_text(&mt("Menu:Jendela"), BAR_W, p.x, p.w, 1.0),
-                M_HELP => self.draw_text(&mt("Bantuan"), BAR_W, p.x, p.w, 1.0),
+                n if (PROF0..PROF0 + 12).contains(&n) => {
+                    let title = self.profile().get((n - PROF0) as usize).map(|m| m.title(english())).unwrap_or("");
+                    self.draw_text(title, BAR_W, p.x, p.w, 1.0)
+                }
                 n if n >= NATIVE0 && n < NATIVE0 + 20 => {
                     let title = self.native.get((n - NATIVE0) as usize).map(|t| t.title.clone()).unwrap_or_default();
                     self.draw_text(&title, BAR_W, p.x, p.w, 1.0)
@@ -1042,7 +1109,7 @@ impl Bar {
     }
 
     fn has_menu(id: u32) -> bool {
-        matches!(id, LOGO | APP | M_FILE | M_EDIT | M_VIEW | M_WIN | M_HELP) || (NATIVE0..NATIVE0 + 20).contains(&id)
+        matches!(id, LOGO | APP) || (NATIVE0..NATIVE0 + 20).contains(&id) || (PROF0..PROF0 + 12).contains(&id)
     }
 
     fn open_menu(&mut self, id: u32) {
@@ -1062,9 +1129,18 @@ impl Bar {
     }
 
     fn close_menu(&mut self) {
+        let was = self.open.is_some();
         self.menu.hide();
         self.open = None;
         self.update_capsule();
+        if was && prefs::get().rail == Behavior::Smart {
+            let ctl = BAR_CTL.load(std::sync::atomic::Ordering::Relaxed);
+            if ctl != 0 {
+                unsafe {
+                    SetTimer(Some(HWND(ctl as *mut _)), T_EDGE, 600, None);
+                }
+            }
+        }
     }
 
     fn menu_items(&self, id: u32) -> Vec<Item> {
@@ -1158,38 +1234,21 @@ impl Bar {
                     a(204, &format!("{} {}", prefs::tr("Keluar dari"), name)).with_accel("Ctrl+Alt+Q"),
                 ]
             }
-            M_FILE => vec![
-                a(300, &prefs::tr("Baru")).with_accel("Ctrl+N"),
-                a(301, &prefs::tr("Buka…")).with_accel("Ctrl+O"),
-                Item::separator(),
-                a(302, &prefs::tr("Simpan")).with_accel("Ctrl+S"),
-                a(303, &prefs::tr("Tutup Jendela")).with_accel("Ctrl+W"),
-                Item::separator(),
-                a(304, &prefs::tr("Cetak…")).with_accel("Ctrl+P"),
-            ],
-            M_EDIT => vec![
-                a(400, &prefs::tr("Urungkan")).with_accel("Ctrl+Z"),
-                a(401, &prefs::tr("Ulangi")).with_accel("Ctrl+Y"),
-                Item::separator(),
-                a(402, &prefs::tr("Potong")).with_accel("Ctrl+X"),
-                a(403, &prefs::tr("Salin")).with_accel("Ctrl+C"),
-                a(404, &prefs::tr("Tempel")).with_accel("Ctrl+V"),
-                a(405, &prefs::tr("Pilih Semua")).with_accel("Ctrl+A"),
-                Item::separator(),
-                a(406, &prefs::tr("Cari…")).with_accel("Ctrl+F"),
-            ],
-            M_VIEW => vec![
-                a(500, &prefs::tr("Layar Penuh")).with_accel("F11"),
-                Item::separator(),
-                a(501, &prefs::tr("Perbesar")).with_accel("Ctrl++"),
-                a(502, &prefs::tr("Perkecil")).with_accel("Ctrl+-"),
-                a(503, &prefs::tr("Ukuran Asli")).with_accel("Ctrl+0"),
-            ],
-            M_WIN => vec![
-                a(600, &prefs::tr("Minimalkan")).with_accel("Win+↓"),
-                a(601, &prefs::tr("Zoom")).with_accel("Win+↑"),
-            ],
-            M_HELP => vec![a(700, &prefs::tr("Cari Bantuan")).with_accel("F1")],
+            n if (PROF0..PROF0 + 12).contains(&n) => {
+                let en = english();
+                let Some(m) = self.profile().get((n - PROF0) as usize) else { return vec![] };
+                m.lines
+                    .iter()
+                    .enumerate()
+                    .map(|(j, l)| match l {
+                        Line::Sep => Item::separator(),
+                        Line::Cmd { accel, .. } => {
+                            let it = a(PROF_CMD + (n - PROF0) as usize * 100 + j, l.label(en));
+                            if accel.is_empty() { it } else { it.with_accel(accel) }
+                        }
+                    })
+                    .collect()
+            }
             _ => vec![],
         }
     }
@@ -1223,6 +1282,15 @@ impl Bar {
 
     fn pick(&mut self, cmd: usize) {
         self.close_menu();
+        if cmd >= PROF_CMD {
+            let (mi, li) = ((cmd - PROF_CMD) / 100, (cmd - PROF_CMD) % 100);
+            match self.profile().get(mi).and_then(|m| m.lines.get(li)) {
+                Some(Line::Cmd { act: Act::Keys(k), .. }) => keys::chord(k),
+                Some(Line::Cmd { act: Act::Guide, .. }) => launch::open(GUIDE_URL),
+                _ => {}
+            }
+            return;
+        }
         if cmd >= NATIVE_CMD {
             nacre_platform::menus::invoke(self.native_hwnd, (cmd - NATIVE_CMD) as u32);
             return;
@@ -1261,31 +1329,27 @@ impl Bar {
             809 => crate::launchpad::toggle(),
             810 => crate::settings_win::open(&self.comp),
             811 => launch::open("ms-settings:"),
-            200 => crate::settings_win::open(&self.comp),
+            200 => self.about_app(),
             201 => self.hide_app(false),
             202 => self.hide_app(true),
             203 => self.show_all(),
             204 => crate::macshortcuts::quit_foreground_app(),
-            300 => keys::chord(&[keys::CTRL, 0x4E]),
-            301 => keys::chord(&[keys::CTRL, 0x4F]),
-            302 => keys::chord(&[keys::CTRL, 0x53]),
-            303 => keys::chord(&[keys::CTRL, 0x57]),
-            304 => keys::chord(&[keys::CTRL, 0x50]),
-            400 => keys::chord(&[keys::CTRL, 0x5A]),
-            401 => keys::chord(&[keys::CTRL, 0x59]),
-            402 => keys::chord(&[keys::CTRL, 0x58]),
-            403 => keys::chord(&[keys::CTRL, 0x43]),
-            404 => keys::chord(&[keys::CTRL, 0x56]),
-            405 => keys::chord(&[keys::CTRL, 0x41]),
-            406 => keys::chord(&[keys::CTRL, 0x46]),
-            500 => keys::chord(&[0x7A]),
-            501 => keys::chord(&[keys::CTRL, 0xBB]),
-            502 => keys::chord(&[keys::CTRL, 0xBD]),
-            503 => keys::chord(&[keys::CTRL, 0x30]),
-            600 => keys::chord(&[keys::WIN, 0x28]),
-            601 => keys::chord(&[keys::WIN, 0x26]),
-            700 => keys::chord(&[0x70]),
             _ => {}
+        }
+    }
+
+    fn profile(&self) -> &'static [AppMenu] {
+        nacre_core::appmenus::for_path(&self.app_path)
+    }
+
+    fn about_app(&self) {
+        let path = self.app_path.clone();
+        if path.is_empty() {
+            crate::settings_win::open(&self.comp);
+        } else if path.to_lowercase().starts_with("shell:") || path.contains('?') {
+            launch::open("ms-settings:appsfeatures");
+        } else if !launch::properties(&path) {
+            launch::open("ms-settings:appsfeatures");
         }
     }
 
@@ -1360,6 +1424,9 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                 b.tracking = false;
                 b.hover = None;
                 b.update_capsule();
+                if prefs::get().rail == Behavior::Smart {
+                    b.apply_visibility();
+                }
             });
             LRESULT(0)
         }

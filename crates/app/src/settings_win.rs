@@ -89,6 +89,7 @@ enum Action {
     Takeover,
     Dock(Behavior),
     Notch(Behavior),
+    Rail(Behavior),
     Theme(Theme),
     Lang(Lang),
     Tab(u8),
@@ -449,6 +450,8 @@ impl Win {
             9 => (0.0, 60.0, " dp"),
             10 => (2.0, 10.0, ""),
             11 => (50.0, 200.0, "%"),
+            12 => (80.0, 130.0, "%"),
+            13 => (0.0, 40.0, " dp"),
             _ => (0.0, 100.0, "%"),
         }
     }
@@ -733,9 +736,13 @@ impl Win {
                     RowDef::Toggle(prefs::tr("Aktifkan Visor"), s.notch_enabled, Action::NotchOn),
                     RowDef::Seg(prefs::tr("Bentuk"), vec![(prefs::tr("Visor"), Action::NotchShape(false)), (prefs::tr("Capsule"), Action::NotchShape(true))], if s.notch_island { 1 } else { 0 }),
                     RowDef::Seg(prefs::tr("Perilaku"), behaviors(false), beh_idx(s.notch)),
+                    RowDef::Slider(prefs::tr("Ukuran"), s.notch_scale, 12),
                     RowDef::Slider(prefs::tr("Kebulatan sudut"), s.notch_round, 3),
-                    RowDef::Toggle(prefs::tr("Buka otomatis saat kursor di Visor"), s.notch_hover_open, Action::HoverOpen),
-                ],
+                ]
+                .into_iter()
+                .chain(s.notch_island.then(|| RowDef::Slider(prefs::tr("Jarak dari tepi atas"), s.island_gap, 13)))
+                .chain(std::iter::once(RowDef::Toggle(prefs::tr("Buka otomatis saat kursor di Visor"), s.notch_hover_open, Action::HoverOpen)))
+                .collect(),
             ), (
                 Some(prefs::tr("Saat Visor diam")),
                 {
@@ -785,6 +792,14 @@ impl Win {
                     None,
                     vec![
                         RowDef::Toggle(prefs::tr("Aktifkan Rail"), s.menubar, Action::MenuBarOn),
+                        RowDef::Seg(
+                            prefs::tr("Perilaku"),
+                            [(prefs::tr("Tetap"), Behavior::Fixed), (prefs::tr("Menimpa"), Behavior::Overlay), (prefs::tr("Pintar"), Behavior::Smart)]
+                                .into_iter()
+                                .map(|(t, b)| (t, Action::Rail(b)))
+                                .collect(),
+                            beh_idx(s.rail),
+                        ),
                         RowDef::Seg(
                             prefs::tr("Latar Rail"),
                             vec![(prefs::tr("Transparan"), Action::BarStyle(0)), (prefs::tr("Terang"), Action::BarStyle(1)), (prefs::tr("Gelap"), Action::BarStyle(2)), (prefs::tr("Material"), Action::BarStyle(3))],
@@ -1201,6 +1216,8 @@ impl Win {
                 9 => s.stage_gap = v,
                 10 => s.stage_count = v,
                 11 => s.stage_speed = v,
+                12 => s.notch_scale = v,
+                13 => s.island_gap = v,
                 _ => s.dock_margin = v,
             }
         });
@@ -1503,6 +1520,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 Some(Action::Takeover) => prefs::update(|s| s.takeover = !s.takeover),
                 Some(Action::Dock(b)) => prefs::update(|s| s.dock = b),
                 Some(Action::Notch(b)) => prefs::update(|s| s.notch = b),
+                Some(Action::Rail(b)) => prefs::update(|s| s.rail = b),
                 Some(Action::Theme(t)) => prefs::update(|s| s.theme = t),
                 Some(Action::Lang(l)) => prefs::update(|s| s.lang = l),
                 Some(Action::WinShadow) => prefs::update(|s| s.win_shadow = !s.win_shadow),

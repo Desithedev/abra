@@ -1,4 +1,5 @@
 pub mod appcat;
+pub mod appmenus;
 pub mod controls;
 pub mod dock;
 pub mod i18n;

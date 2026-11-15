@@ -15,6 +15,7 @@ struct State {
     enter: u32,
     leave: u32,
     inside: bool,
+    last: u64,
 }
 
 unsafe extern "system" fn proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESULT {
@@ -22,17 +23,20 @@ unsafe extern "system" fn proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESULT
     match m {
         WM_MOUSEMOVE if !st.is_null() => {
             let s = &mut *st;
-            if !s.inside {
-                s.inside = true;
-                let mut t = TRACKMOUSEEVENT {
-                    cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
-                    dwFlags: TME_LEAVE,
-                    hwndTrack: h,
-                    dwHoverTime: 0,
-                };
-                let _ = TrackMouseEvent(&mut t);
-                let _ = PostMessageW(Some(s.target), s.enter, WPARAM(0), LPARAM(0));
+            let now = windows::Win32::System::SystemInformation::GetTickCount64();
+            if s.inside && now.saturating_sub(s.last) < 400 {
+                return LRESULT(0);
             }
+            s.inside = true;
+            s.last = now;
+            let mut t = TRACKMOUSEEVENT {
+                cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                dwFlags: TME_LEAVE,
+                hwndTrack: h,
+                dwHoverTime: 0,
+            };
+            let _ = TrackMouseEvent(&mut t);
+            let _ = PostMessageW(Some(s.target), s.enter, WPARAM(0), LPARAM(0));
             LRESULT(0)
         }
         WM_MOUSELEAVE if !st.is_null() => {
@@ -87,7 +91,7 @@ impl Strip {
                 0, 0, 10, 2,
                 None, None, Some(hi), None,
             )?;
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(Box::new(State { target, enter, leave, inside: false })) as isize);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(Box::new(State { target, enter, leave, inside: false, last: 0 })) as isize);
             SetLayeredWindowAttributes(hwnd, COLORREF(0), 1, LWA_ALPHA)?;
             Ok(Strip { hwnd })
         }

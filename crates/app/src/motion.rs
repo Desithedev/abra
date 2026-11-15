@@ -124,3 +124,58 @@ pub fn hover_pop(comp: &Compositor, v: &impl Interface, center: Vector3, to: f32
     a.SetDuration(dur(HOVER_POP_MS))?;
     vis.cast::<CompositionObject>()?.StartAnimation(&HSTRING::from("Scale"), &a)
 }
+
+pub const MORPH_MS: u32 = 640;
+
+pub fn droplet(comp: &Compositor, v: &ContainerVisual, center: Vector3, to_island: bool) -> Result<()> {
+    v.SetCenterPoint(center)?;
+    let e = ease(comp)?;
+    let keys: [(f32, f32, f32); 4] = if to_island {
+        [(0.18, 0.9, 1.14), (0.42, 1.09, 0.9), (0.68, 0.97, 1.04), (1.0, 1.0, 1.0)]
+    } else {
+        [(0.2, 1.12, 0.86), (0.45, 0.94, 1.08), (0.72, 1.02, 0.98), (1.0, 1.0, 1.0)]
+    };
+    let s = comp.CreateVector3KeyFrameAnimation()?;
+    s.InsertKeyFrame(0.0, Vector3 { X: 1.0, Y: 1.0, Z: 1.0 })?;
+    for (t, x, y) in keys {
+        s.InsertKeyFrameWithEasingFunction(t, Vector3 { X: x, Y: y, Z: 1.0 }, &e)?;
+    }
+    s.SetDuration(dur(MORPH_MS))?;
+    v.cast::<CompositionObject>()?.StartAnimation(&HSTRING::from("Scale"), &s)
+}
+
+pub fn drip(comp: &Compositor, parent: &ContainerVisual, x: f32, land: f32, size: f32, rgb: [u8; 3], falling: bool) -> Result<()> {
+    let geo = comp.CreateEllipseGeometry()?;
+    geo.SetRadius(Vector2 { X: size / 2.0, Y: size / 2.0 })?;
+    geo.SetCenter(Vector2 { X: size / 2.0, Y: size / 2.0 })?;
+    let shape = comp.CreateSpriteShapeWithGeometry(&geo)?;
+    shape.SetFillBrush(&comp.CreateColorBrushWithColor(windows::UI::Color { A: 255, R: rgb[0], G: rgb[1], B: rgb[2] })?)?;
+    let sv = comp.CreateShapeVisual()?;
+    sv.SetSize(Vector2 { X: size, Y: size })?;
+    sv.Shapes()?.Append(&shape)?;
+    sv.SetCenterPoint(Vector3 { X: size / 2.0, Y: size / 2.0, Z: 0.0 })?;
+    parent.Children()?.InsertAtTop(&sv)?;
+    let (top, bottom) = (-size, (land - size * 0.4).max(0.0));
+    let (from, to) = if falling { (top, bottom) } else { (bottom, top) };
+    let e: CompositionEasingFunction = comp.CreateCubicBezierEasingFunction(Vector2 { X: 0.55, Y: 0.0 }, Vector2 { X: 0.9, Y: 0.6 })?.cast()?;
+    let ms = MORPH_MS / 2;
+    let o = comp.CreateVector3KeyFrameAnimation()?;
+    o.InsertKeyFrame(0.0, Vector3 { X: x - size / 2.0, Y: from, Z: 0.0 })?;
+    o.InsertKeyFrameWithEasingFunction(1.0, Vector3 { X: x - size / 2.0, Y: to, Z: 0.0 }, &e)?;
+    o.SetDuration(dur(ms))?;
+    let sc = comp.CreateVector3KeyFrameAnimation()?;
+    sc.InsertKeyFrame(0.0, Vector3 { X: 0.7, Y: 1.0, Z: 1.0 })?;
+    sc.InsertKeyFrame(0.6, Vector3 { X: 0.85, Y: 1.25, Z: 1.0 })?;
+    sc.InsertKeyFrame(1.0, Vector3 { X: 1.3, Y: 0.55, Z: 1.0 })?;
+    sc.SetDuration(dur(ms))?;
+    let op = comp.CreateScalarKeyFrameAnimation()?;
+    op.InsertKeyFrame(0.0, 0.0)?;
+    op.InsertKeyFrame(0.2, 1.0)?;
+    op.InsertKeyFrame(0.85, 1.0)?;
+    op.InsertKeyFrame(1.0, 0.0)?;
+    op.SetDuration(dur(ms))?;
+    let obj = sv.cast::<CompositionObject>()?;
+    obj.StartAnimation(&HSTRING::from("Offset"), &o)?;
+    obj.StartAnimation(&HSTRING::from("Scale"), &sc)?;
+    obj.StartAnimation(&HSTRING::from("Opacity"), &op)
+}

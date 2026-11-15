@@ -267,31 +267,30 @@ fn send_card(p: &mut Painter, c: &ContainerVisual, f: Frame, d: &Data, regions: 
             p.place(c, q, qx + inset, qy + inset, sv.qr_px, sv.qr_px, 1.0);
         }
     }
+    let label = tr(if sv.done || sv.error { "Tutup" } else { "Batal" });
+    let (bw, bh) = (p.measure(label, 12.0, 600) + p.px(26.0), p.px(26.0));
+    let (bx, by) = (x0 + w - p.px(12.0) - bw, top + p.px(10.0));
     let tx = qx + s + p.px(18.0);
     let tw = x0 + w - p.px(16.0) - tx;
-    let accent = crate::prefs::accent();
+    let head = bx - p.px(10.0) - tx;
     if sv.error {
-        p.text(c, tr("Tidak tersambung ke jaringan lokal"), tx, top + p.px(16.0), 14.0, 700, WHITE, 1.0, Anchor::Left, tw);
+        p.text(c, &p.fit(tr("Tidak tersambung ke jaringan lokal"), 14.0, 700, head), tx, top + p.px(16.0), 14.0, 700, WHITE, 1.0, Anchor::Left, head + p.px(4.0));
         p.text(c, tr("Sambungkan laptop ke Wi-Fi yang sama dengan HP."), tx, top + p.px(40.0), 12.0, 500, WHITE, 0.6, Anchor::Left, tw);
     } else {
-        p.text(c, &p.fit(&sv.title, 14.0, 700, tw), tx, top + p.px(12.0), 14.0, 700, WHITE, 1.0, Anchor::Left, tw + p.px(4.0));
+        p.text(c, &p.fit(&sv.title, 14.0, 700, head), tx, top + p.px(12.0), 14.0, 700, WHITE, 1.0, Anchor::Left, head + p.px(4.0));
         p.text(c, &p.fit(tr("Pindai QR dengan kamera HP (Wi-Fi yang sama)"), 11.5, 500, tw), tx, top + p.px(33.0), 11.5, 500, WHITE, 0.6, Anchor::Left, tw + p.px(4.0));
         let green = Color { A: 255, R: GREEN[0], G: GREEN[1], B: GREEN[2] };
         p.text(c, &sv.status, tx, top + p.px(55.0), 12.0, 600, if sv.done { GREEN } else { WHITE }, 0.95, Anchor::Left, tw);
         let (by, bh) = (top + p.px(76.0), p.px(4.0));
-        let bar = tw - p.measure(tr("Selesai"), 12.0, 600) - p.px(28.0 + 16.0);
-        p.rect(c, tx, by, bar, bh, bh / 2.0, white(30));
+        p.rect(c, tx, by, tw, bh, bh / 2.0, white(30));
         if sv.frac > 0.0 {
-            p.rect(c, tx, by, (bar * sv.frac.clamp(0.0, 1.0)).max(bh), bh, bh / 2.0, green);
+            p.rect(c, tx, by, (tw * sv.frac.clamp(0.0, 1.0)).max(bh), bh, bh / 2.0, green);
         }
-        p.text(c, tr("Izinkan ABRA di Windows Firewall bila diminta."), tx, top + h - p.px(22.0), 10.0, 500, WHITE, 0.4, Anchor::Left, tw - p.px(100.0));
+        p.text(c, tr("Izinkan ABRA di Windows Firewall bila diminta."), tx, top + h - p.px(22.0), 10.0, 500, WHITE, 0.4, Anchor::Left, tw);
     }
-    let label = tr("Selesai");
-    let (bw, bh) = (p.measure(label, 12.0, 600) + p.px(28.0), p.px(28.0));
-    let (bx, by) = (x0 + w - p.px(14.0) - bw, top + h - p.px(12.0) - bh);
-    p.rect(c, bx, by, bw, bh, bh / 2.0, Color { A: 255, R: accent[0], G: accent[1], B: accent[2] });
+    p.rect(c, bx, by, bw, bh, bh / 2.0, white(if sv.done || sv.error { 46 } else { 34 }));
     let th = p.px(12.0) * 1.3;
-    p.text(c, label, bx + bw / 2.0, by + bh / 2.0 - th / 2.0, 12.0, 600, WHITE, 1.0, Anchor::Center, bw);
+    p.text(c, label, bx + bw / 2.0, by + bh / 2.0 - th / 2.0, 12.0, 600, WHITE, 0.95, Anchor::Center, bw);
     regions.push(Region { x: bx, y: by, w: bw, h: bh, action: Action::SendDone, vis: None });
 }
 

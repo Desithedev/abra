@@ -153,28 +153,39 @@ pub fn spawn(notify: impl Fn() + Send + 'static) -> Media {
         let mut subs = Subscriptions { session: None, tokens: (0, 0, 0) };
         let mut art_state = ArtState { key: String::new(), hash: 0, since: std::time::Instant::now() };
         let mut pending = true;
+        let mut quiet = false;
+        let mut last = String::new();
 
         loop {
             if pending {
                 pending = false;
-                let current = manager.GetCurrentSession().ok().or_else(|| {
-                    manager.GetSessions().ok().and_then(|v| v.GetAt(0).ok())
-                });
-                subs.follow(current.clone(), &tx_for_events);
-                let recheck = PROPS_DIRTY.swap(false, std::sync::atomic::Ordering::Relaxed);
-                let snap = build(current.as_ref(), &mut art_state, recheck);
-                if snap_tx.send(snap).is_err() {
-                    return;
+                let current = choose(&manager);
+                let id = current.as_ref().and_then(|s| s.SourceAppUserModelId().ok()).map(|h| h.to_string()).unwrap_or_default();
+                let sig = format!("{id}|{}", current.as_ref().is_some_and(is_playing));
+                let changed = sig != last;
+                last = sig;
+                if !quiet || changed {
+                    subs.follow(current.clone(), &tx_for_events);
+                    let recheck = PROPS_DIRTY.swap(false, std::sync::atomic::Ordering::Relaxed);
+                    let snap = build(current.as_ref(), &mut art_state, recheck);
+                    if snap_tx.send(snap).is_err() {
+                        return;
+                    }
+                    notify();
                 }
-                notify();
+                quiet = false;
             }
-            match cmd_rx.recv() {
+            match cmd_rx.recv_timeout(Duration::from_secs(3)) {
+                Err(RecvTimeoutError::Timeout) => {
+                    pending = true;
+                    quiet = true;
+                }
                 Ok(Command::Refresh) => {
                     loop {
                         match cmd_rx.recv_timeout(Duration::from_millis(80)) {
                             Ok(Command::Refresh) => continue,
                             Ok(other) => {
-                                act(&manager, other);
+                                act(subs.session.as_ref(), other);
                                 break;
                             }
                             Err(RecvTimeoutError::Timeout) => break,
@@ -184,19 +195,45 @@ pub fn spawn(notify: impl Fn() + Send + 'static) -> Media {
                     pending = true;
                 }
                 Ok(other) => {
-                    act(&manager, other);
+                    act(subs.session.as_ref(), other);
                     std::thread::sleep(Duration::from_millis(120));
                     pending = true;
                 }
-                Err(_) => return,
+                Err(RecvTimeoutError::Disconnected) => return,
             }
         }
     });
     Media { commands: cmd_tx, snapshots: snap_rx }
 }
 
-fn act(manager: &GlobalSystemMediaTransportControlsSessionManager, cmd: Command) {
-    let Ok(s) = manager.GetCurrentSession() else { return };
+fn is_playing(s: &GlobalSystemMediaTransportControlsSession) -> bool {
+    s.GetPlaybackInfo()
+        .ok()
+        .and_then(|p| p.PlaybackStatus().ok())
+        .is_some_and(|st| st == GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing)
+}
+
+fn has_title(s: &GlobalSystemMediaTransportControlsSession) -> bool {
+    s.TryGetMediaPropertiesAsync().ok().and_then(|o| o.join().ok()).and_then(|p| p.Title().ok()).is_some_and(|t| !t.is_empty())
+}
+
+fn choose(manager: &GlobalSystemMediaTransportControlsSessionManager) -> Option<GlobalSystemMediaTransportControlsSession> {
+    let current = manager.GetCurrentSession().ok();
+    if current.as_ref().is_some_and(is_playing) {
+        return current;
+    }
+    let all: Vec<_> = manager.GetSessions().ok().map(|v| v.into_iter().collect()).unwrap_or_default();
+    if let Some(s) = all.iter().find(|s| is_playing(s) && has_title(s)) {
+        return Some(s.clone());
+    }
+    if current.as_ref().is_some_and(has_title) {
+        return current;
+    }
+    all.into_iter().find(has_title).or(current)
+}
+
+fn act(session: Option<&GlobalSystemMediaTransportControlsSession>, cmd: Command) {
+    let Some(s) = session else { return };
     match cmd {
         Command::PlayPause => {
             let _ = s.TryTogglePlayPauseAsync();

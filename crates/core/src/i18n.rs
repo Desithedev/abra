@@ -272,6 +272,8 @@ const EN: &[(&str, &str)] = &[
     ("Sistem", "System"),
     ("Tidak diputar", "Not Playing"),
     ("Selesai", "Done"),
+    ("Batal", "Cancel"),
+    ("Jarak dari tepi atas", "Distance from top edge"),
     ("Edit Kontrol…", "Edit Controls…"),
     ("Cari Kontrol", "Search Controls"),
     ("Semua Kontrol", "All Controls"),
