@@ -4,6 +4,12 @@ ABRA mengganti taskbar Windows 11 dengan pengalaman desktop modern: **Deck**, **
 **Apps**, **Overview**, **Scene**, **Quick Panel**, dan **Screen Corners**, semuanya bergaya Crystal
 dan ringan.
 
+> [!WARNING]
+> **Akses awal (Early Access).** ABRA masih aktif dikembangkan. Bug bisa muncul, tampilan bisa berubah, dan beberapa
+> pengaturan bisa berpindah atau kembali ke bawaan di versi berikutnya. Laporkan masalah atau ide di
+> [Issues](https://github.com/abdeealfarizi/abra/issues). Sejak 0.5, ABRA bisa memperbarui dirinya sendiri
+> (Pengaturan → Umum → Tentang).
+
 > Panduan ini berbahasa Indonesia. Ringkasan dalam bahasa Inggris, cara build, dan informasi pengembangan ada di
 > [README](../README.md).
 
@@ -46,6 +52,10 @@ Begitu `abra.exe` dijalankan, taskbar bawaan Windows disembunyikan lalu Rail, Vi
   tidak, jalankan `abra.exe` lagi lalu keluar secara normal.
 - **Buka pengaturan:** klik kanan Deck → **Pengaturan ABRA…**, ikon roda gigi di Deck, atau logo bulat di Rail → **Pengaturan ABRA…**.
 - **Mulai otomatis saat login:** Pengaturan → Umum → **Jalankan saat login Windows**.
+- **Pembaruan:** ABRA memeriksa versi baru di GitHub kira-kira tiap 12 jam. Bila ada, Visor menampilkan pill "Pembaruan
+  tersedia" dan Pengaturan → Umum → Tentang menampilkan tombol **Perbarui ke …**. Satu klik mengunduh installer, mencocokkan
+  sidik jari SHA-256-nya dengan yang tercatat di GitHub (installer yang tidak cocok ditolak), memasangnya, lalu membuka ABRA lagi.
+  Versi portabel (zip) hanya membuka halaman unduhan. Pemeriksaan otomatis bisa dimatikan di tempat yang sama.
 
 Hanya satu ABRA yang berjalan; menjalankannya lagi hanya membangunkan yang sudah ada. Taskbar Windows tidak dimatikan selamanya: ia
 hanya disembunyikan selama ABRA berjalan (bisa dimatikan di Pengaturan → Umum → **Sembunyikan taskbar Windows**).
@@ -125,7 +135,7 @@ halaman yang muncul. Kemajuan tampil di kartu dan di Visor tertutup (busur hijau
 - Laptop dan HP harus tersambung ke **Wi-Fi/jaringan yang sama**.
 - Saat pertama dipakai, Windows Firewall bisa menanyakan izin untuk ABRA: pilih **Jaringan pribadi** agar HP bisa
   mengunduh.
-- Sesi berakhir saat **Selesai** diklik, setelah 15 menit tanpa aktivitas, atau saat ABRA ditutup.
+- Sesi berakhir saat **Batal** (atau **Tutup** setelah selesai) diklik, setelah 15 menit tanpa aktivitas, atau saat ABRA ditutup.
 - Matikan zona ini lewat Pengaturan → Visor → Aktivitas → "Kirim ke HP lewat QR (Wi-Fi yang sama)".
 
 Perilaku (tetap, menimpa, sembunyi otomatis, saat tertimpa) dan kebulatan sudut diatur di Pengaturan → Visor; Visor bisa
@@ -158,6 +168,32 @@ Sumber lirik, berurutan:
 
 Lirik tanpa cap waktu hanya tampil di kartu Lirik. Baris lirik di Visor tertutup bisa dimatikan lewat "Tampilkan lirik di Visor".
 
+### Tab Tugas dan pengingat
+
+Tab **Tugas** berisi daftar tugas Anda. Klik sebuah tugas untuk mencentangnya; **Hapus yang selesai** membersihkan yang sudah
+dicentang. Tombol **+ Tambah** (atau `Ctrl+Alt+N` dari mana saja) membuka Quick Search dalam mode **Tugas**: ketik lalu tekan
+Enter. Di mode itu Enter juga mencentang tugas yang dipilih dan Delete menghapusnya.
+
+Waktu di awal teks menjadikannya pengingat:
+- `15:30 rapat tim` – hari ini pukul 15.30 (besok bila jamnya sudah lewat), `09.15` juga bisa;
+- `10m minum` / `2j istirahat` – sepuluh menit / dua jam dari sekarang;
+- `besok 08:00 kirim laporan` – besok pagi; awalan `ingatkan` boleh dipakai.
+
+Saat jatuh tempo, Visor menampilkan pill pengingat yang menetap sampai diklik (klik membuka tab Tugas). Bila Visor mati atau Anda
+sedang layar penuh, pengingat muncul sebagai balon di area tray. Tugas disimpan di `%APPDATA%\ABRA\todo.txt`.
+
+### Pill dan konteks
+
+Pill adalah kabar singkat di Visor: pengingat, pembaruan, dan perangkat yang tersambung atau terputus (earbuds, mouse, keyboard
+Bluetooth, flashdisk). Klik pill untuk menindaklanjutinya (mis. membuka flashdisk), klik kanan untuk menutupnya. Pilih yang ingin
+tampil di Pengaturan → Visor → **Pill & Konteks**. Di sana juga ada **Glow warna album**: saat musik main, Visor dan Capsule berpendar
+lembut dengan warna sampul album dan berdenyut mengikuti irama.
+
+### Ukuran dan jarak
+
+Pengaturan → Visor → **Ukuran** (80–130%) mengubah besar Visor dan Capsule. Untuk bentuk Capsule ada **Jarak dari tepi atas**.
+Berganti Visor ↔ Capsule memakai animasi "tetesan air".
+
 ## 4. Rail
 
 Rail aktif secara bawaan. Matikan atau nyalakan di Pengaturan → Umum → **Aktifkan Rail**.
@@ -167,8 +203,22 @@ Rail aktif secara bawaan. Matikan atau nyalakan di Pengaturan → Umum → **Akt
   (membuka Task Manager), Tidur, Mulai Ulang, Matikan, Kunci Layar. Aksi daya meminta konfirmasi lebih dulu.
 - **Nama app aktif** (tebal): Tentang, Sembunyikan, Sembunyikan Lainnya, Tampilkan Semua, Keluar.
 - **Menu app:** bila app aktif memiliki menu Win32 klasik (File, Edit, dst.), menu aslinya ditampilkan dan bisa diklik. App tanpa menu
-  klasik (browser, app Electron, Notepad baru) memakai menu standar (Berkas, Edit, Tampilan, Jendela, Bantuan) yang mengirim pintasan
-  keyboard ke app. Setelah satu menu terbuka, gerakkan kursor ke judul lain untuk berpindah tanpa klik.
+  klasik mendapat menu yang disesuaikan dengan app-nya dan mengirim pintasan keyboard resmi app itu:
+  - **Browser** (Chrome, Edge, Brave, Firefox, Opera, Vivaldi): tab baru/tutup/buka lagi, jendela penyamaran, riwayat, unduhan,
+    bookmark, pindah dan geser tab, alat pengembang.
+  - **File Explorer**: jendela/tab baru, folder baru, properti, salin jalur, ganti nama, mode tampilan ikon/daftar/detail, panel
+    pratinjau, menu Buka (mundur, maju, folder induk, bilah alamat).
+  - **Word, Excel, PowerPoint**: simpan sebagai, ganti, format tebal/miring/garis bawah dan perataan.
+  - **VS Code dan editor sejenis**: palet perintah, buka cepat, terminal, cari di berkas, ke baris, jalankan/debug.
+  - **Spotify**: putar/jeda, lagu berikut/sebelumnya, volume.
+  - App lain memakai menu umum (Berkas, Edit, Tampilan, Jendela, Bantuan).
+
+  **Tentang [app]** membuka jendela Properti berkas app tersebut (untuk app Store: halaman Aplikasi di Pengaturan Windows), dan
+  **Bantuan → Panduan ABRA** membuka panduan ini. Setelah satu menu terbuka, gerakkan kursor ke judul lain untuk berpindah tanpa klik.
+
+**Perilaku Rail** (Pengaturan → Rail): **Tetap** (jendela yang dimaksimalkan berada di bawah Rail), **Menimpa** (Rail selalu tampil
+tanpa memesan ruang), atau **Pintar** (Rail menyingkir saat tertutup jendela yang dimaksimalkan dan muncul lagi saat kursor menyentuh
+tepi atas layar).
 
 **Sisi kanan** (dari kanan ke kiri): jam (klik membuka Pusat Notifikasi Windows), **Quick Panel**, **Quick Search**, Wi-Fi, baterai
 (klik membuka pengaturan Windows terkait). Ada ikon Scene saat fiturnya aktif.
@@ -189,8 +239,8 @@ Warna teks menyesuaikan wallpaper atau warna latar. Tema terang/gelap tidak meng
 **Nama app di kiri** mengikuti jendela yang terakhir Anda klik dengan mouse (juga saat jendela itu tidak berpindah fokus), dan jendela
 depan bila fokus berpindah lewat keyboard atau Scene.
 
-Secara bawaan Deck, Rail, dan Visor **selalu berada di atas semua jendela, termasuk app layar penuh**. Bila Anda lebih suka
-mereka menyingkir saat layar penuh (video, game, F11), matikan Pengaturan → Umum → **Selalu di atas jendela layar penuh**.
+Secara bawaan Deck, Rail, dan Visor **menyingkir saat ada video, game, atau app lain yang layar penuh** (jendela yang hanya
+dimaksimalkan tidak dihitung). Bila Anda ingin mereka tetap di atas, nyalakan Pengaturan → Umum → **Selalu di atas jendela layar penuh**.
 
 ## 5. Quick Panel
 
@@ -316,6 +366,7 @@ Semua perubahan langsung berlaku. Berkas konfigurasi ada di folder `%APPDATA%\AB
 |---|---|
 | `Ctrl+Space` | Quick Search |
 | `Ctrl+Shift+Space` | Apps |
+| `Ctrl+Alt+N` | Tambah tugas atau pengingat (Quick Search mode Tugas) |
 | `Ctrl+↑` | Overview |
 | `Alt+Tab` | Pengalih ABRA (hanya saat Scene aktif) |
 | `` Alt+` `` / `` Alt+Shift+` `` | Pindah ke jendela berikut / sebelumnya dari app yang sama |
@@ -329,8 +380,10 @@ Pintasan lain (screen corner) diatur di Pengaturan. Bila sebuah pintasan tidak b
 
 ## 13. Privasi dan keamanan
 
-- **Tanpa telemetri.** ABRA tidak mengumpulkan atau mengirim data pemakaian. Satu-satunya permintaan jaringan yang dilakukan ABRA
-  sendiri adalah **pencarian lirik** untuk Visor: bila lagu tidak punya berkas `.lrc` lokal, ABRA bertanya ke
+- **Tanpa telemetri.** ABRA tidak mengumpulkan atau mengirim data pemakaian.
+- **Cek pembaruan.** Kira-kira tiap 12 jam ABRA membaca daftar rilis publik dari `api.github.com`; tidak ada data tentang Anda yang
+  dikirim. Installer baru hanya diunduh bila Anda mengklik **Perbarui**. Matikan di Pengaturan → Umum → Tentang.
+- **Pencarian lirik** untuk Visor: bila lagu tidak punya berkas `.lrc` lokal, ABRA bertanya ke
   [LRCLIB](https://lrclib.net) dengan judul, artis, album, dan durasi lagu saja, lalu menyimpan jawabannya di
   `%APPDATA%\ABRA\lyrics\cache`. Aktif bawaan; matikan di Pengaturan → Visor → Lirik → "Cari lirik online (LRCLIB)".
   Baris "Cari di web" di Quick Search hanya membuka browser Anda bila Anda memilihnya.

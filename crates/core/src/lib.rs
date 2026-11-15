@@ -20,6 +20,8 @@ pub mod settings;
 pub mod spotlight;
 pub mod stage;
 pub mod symbols;
+pub mod todo;
 pub mod trash;
+pub mod update;
 pub mod visibility;
 pub mod widgets;

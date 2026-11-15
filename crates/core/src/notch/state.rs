@@ -3,16 +3,18 @@ pub enum Tab {
     Play,
     Shelf,
     Timer,
+    Todo,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 3] = [Tab::Play, Tab::Shelf, Tab::Timer];
+    pub const ALL: [Tab; 4] = [Tab::Play, Tab::Shelf, Tab::Timer, Tab::Todo];
 
     pub fn title(self) -> &'static str {
         match self {
             Tab::Play => "Putar",
             Tab::Shelf => "Rak",
             Tab::Timer => "Timer",
+            Tab::Todo => "Tugas",
         }
     }
 }
@@ -66,6 +68,7 @@ pub fn step(mode: Mode, ev: Event, open_on: OpenOn, hovering: bool) -> Mode {
 pub enum Activity {
     TimerEnding,
     Download,
+    Pill,
     Player,
     Lyrics,
     Music,
@@ -87,6 +90,7 @@ pub struct Live {
     pub glance: bool,
     pub download: bool,
     pub wide_music: bool,
+    pub pill: bool,
 }
 
 pub fn activity(l: &Live) -> Option<Activity> {
@@ -95,6 +99,9 @@ pub fn activity(l: &Live) -> Option<Activity> {
     }
     if l.download {
         return Some(Activity::Download);
+    }
+    if l.pill {
+        return Some(Activity::Pill);
     }
     if l.media && l.wide_music {
         return Some(Activity::Player);
@@ -159,6 +166,7 @@ pub fn size(l: Look, dpi: f32) -> Size {
         View::Compact(Activity::Lyrics) => (420.0, 32.0, 16.0),
         View::Compact(Activity::Glance) => (220.0, 30.0, 15.0),
         View::Compact(Activity::Download) => (300.0, 36.0, 18.0),
+        View::Compact(Activity::Pill) => (330.0, 36.0, 18.0),
         View::Compact(Activity::Player) => (540.0, 100.0, 30.0),
         View::Compact(_) => (292.0, 30.0, 15.0),
         View::Open(Tab::Play) => (600.0, 214.0, 28.0),
@@ -244,7 +252,7 @@ mod tests {
 
     #[test]
     fn activity_priority() {
-        let base = Live { media: true, playing: true, lyric_line: true, lyrics_on: true, timer_left_s: Some(30), charging_fresh: true, shelf: 2, glance: true, download: true, wide_music: false };
+        let base = Live { media: true, playing: true, lyric_line: true, lyrics_on: true, timer_left_s: Some(30), charging_fresh: true, shelf: 2, glance: true, download: true, wide_music: false, pill: false };
         assert_eq!(activity(&base), Some(Activity::TimerEnding));
         assert_eq!(activity(&Live { timer_left_s: Some(300), ..base }), Some(Activity::Download), "unduhan di atas lirik dan musik");
         let l = Live { timer_left_s: Some(300), download: false, ..base };
@@ -252,6 +260,8 @@ mod tests {
         assert_eq!(activity(&Live { wide_music: true, playing: false, ..l }), Some(Activity::Player), "dijeda: tetap tampil");
         assert_eq!(activity(&Live { wide_music: true, media: false, playing: false, charging_fresh: false, timer_left_s: None, shelf: 0, glance: false, ..l }), None, "tanpa lagu: notch kosong");
         assert_eq!(activity(&Live { wide_music: true, download: true, ..l }), Some(Activity::Download));
+        assert_eq!(activity(&Live { pill: true, ..l }), Some(Activity::Pill), "pill di atas musik, di bawah unduhan");
+        assert_eq!(activity(&Live { pill: true, download: true, ..l }), Some(Activity::Download));
         assert_eq!(activity(&l), Some(Activity::Lyrics));
         assert_eq!(activity(&Live { lyrics_on: false, ..l }), Some(Activity::Music));
         assert_eq!(activity(&Live { playing: false, ..l }), Some(Activity::Music), "dijeda: lirik ringkas tidak tampil");

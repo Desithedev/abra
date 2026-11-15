@@ -25,6 +25,9 @@ pub enum Action {
     TimerMinus,
     CalDay(i32),
     SendDone,
+    TodoToggle(u32),
+    TodoAdd,
+    TodoClear,
 }
 
 pub struct Region {
@@ -90,6 +93,23 @@ pub struct Data<'a> {
     pub cal: CalView<'a>,
     pub send: Option<SendView<'a>>,
     pub send_zone: bool,
+    pub pill: Option<PillView>,
+    pub todo: Vec<TodoRow>,
+    pub todo_open: usize,
+}
+
+pub struct PillView {
+    pub kind: nacre_core::notch::pills::Kind,
+    pub title: String,
+    pub sub: String,
+}
+
+pub struct TodoRow {
+    pub id: u32,
+    pub text: String,
+    pub done: bool,
+    pub due: String,
+    pub late: bool,
 }
 
 pub struct SendView<'a> {
@@ -181,6 +201,7 @@ pub fn draw(p: &mut Painter, c: &ContainerVisual, look: Look, f: Frame, d: &Data
         View::Compact(Activity::Shelf) => compact_shelf(p, c, f, d),
         View::Compact(Activity::Download) => compact_download(p, c, f, d),
         View::Compact(Activity::Player) => compact_player(p, c, f, d, regions, live),
+        View::Compact(Activity::Pill) => compact_pill(p, c, f, d),
         View::Open(tab) => {
             header(p, c, f, tab, d, regions);
             match tab {
@@ -189,6 +210,7 @@ pub fn draw(p: &mut Painter, c: &ContainerVisual, look: Look, f: Frame, d: &Data
                 Tab::Shelf if d.shelf.is_empty() => shelf_empty(p, c, f),
                 Tab::Shelf => shelf_tab(p, c, f, d, regions),
                 Tab::Timer => timer(p, c, f, d, regions),
+                Tab::Todo => todo_tab(p, c, f, d, regions),
             }
         }
         View::Drop => drop_zones(p, c, f, d, regions),
@@ -574,6 +596,115 @@ fn spin(p: &Painter, v: &SpriteVisual, n: f32, now_ms: i64) {
         v.StartAnimation(&HSTRING::from("RotationAngleInDegrees"), &a)
     };
     let _ = go();
+}
+
+fn compact_pill(p: &mut Painter, c: &ContainerVisual, f: Frame, d: &Data) {
+    use nacre_core::notch::pills::Kind;
+    let Some(pv) = &d.pill else { return };
+    let cy = f.h / 2.0;
+    let accent = crate::prefs::accent();
+    let (sym, rgb) = match pv.kind {
+        Kind::Reminder => (Sym::Clock, ORANGE),
+        Kind::Notice => (Sym::Info, accent),
+        Kind::Update => (Sym::ArrowDown, GREEN),
+        Kind::Device => {
+            let t = pv.title.to_lowercase();
+            let s = if pv.sub.contains(':') || t.contains("disk") || t.contains("usb") || t.contains("drive") {
+                Sym::Folder
+            } else if t.contains("mouse") {
+                Sym::Mouse
+            } else if t.contains("keyboard") || t.contains("keyb") {
+                Sym::Keyboard
+            } else if ["buds", "airpods", "headphone", "headset", "earphone", "wh-", "wf-", "jbl", "tws"].iter().any(|k| t.contains(k)) {
+                Sym::Headphones
+            } else {
+                Sym::Bluetooth
+            };
+            (s, accent)
+        }
+    };
+    let ix = f.x0 + p.px(22.0);
+    let r = p.px(11.0);
+    p.rect(c, ix - r, cy - r, 2.0 * r, 2.0 * r, r, Color { A: 255, R: rgb[0], G: rgb[1], B: rgb[2] });
+    p.sym(c, sym, ix, cy, 12.0, WHITE, 1.0);
+    let th = p.px(12.5) * 1.3;
+    let sub_w = if pv.sub.is_empty() { 0.0 } else { (p.measure(&pv.sub, 11.5, 500) + p.px(4.0)).min(f.w * 0.42) };
+    let tx = ix + r + p.px(10.0);
+    let tw = (f.x0 + f.w - p.px(16.0) - sub_w - p.px(10.0) - tx).max(p.px(40.0));
+    let title = p.fit(&pv.title, 12.5, 600, tw);
+    p.text(c, &title, tx, cy - th / 2.0, 12.5, 600, WHITE, 0.98, Anchor::Left, tw + p.px(4.0));
+    if !pv.sub.is_empty() {
+        let sh = p.px(11.5) * 1.3;
+        p.text(c, &p.fit(&pv.sub, 11.5, 500, sub_w), f.x0 + f.w - p.px(16.0), cy - sh / 2.0, 11.5, 500, WHITE, 0.62, Anchor::Right, sub_w + p.px(4.0));
+    }
+}
+
+fn todo_tab(p: &mut Painter, c: &ContainerVisual, f: Frame, d: &Data, regions: &mut Vec<Region>) {
+    let pad = p.px(14.0);
+    let (top, h) = (p.px(48.0), f.h - p.px(48.0) - pad);
+    let (x0, w) = (f.x0 + pad, f.w - 2.0 * pad);
+    card(p, c, x0, top, w, h);
+    let accent = crate::prefs::accent();
+    let en = crate::prefs::get().lang == nacre_core::i18n::Lang::En;
+    let add = tr("Tambah");
+    let (bw, bh) = (p.measure(add, 12.0, 600) + p.px(40.0), p.px(26.0));
+    let (bx, by) = (x0 + w - p.px(10.0) - bw, top + p.px(10.0));
+    let n0 = kids(c);
+    p.rect(c, bx, by, bw, bh, bh / 2.0, Color { A: 255, R: accent[0], G: accent[1], B: accent[2] });
+    p.sym(c, Sym::Plus, bx + p.px(15.0), by + bh / 2.0, 11.0, WHITE, 1.0);
+    let th = p.px(12.0) * 1.3;
+    p.text(c, add, bx + p.px(26.0), by + bh / 2.0 - th / 2.0, 12.0, 600, WHITE, 1.0, Anchor::Left, bw);
+    regions.push(Region { x: bx, y: by, w: bw, h: bh, action: Action::TodoAdd, vis: group_since(c, n0) });
+    if d.todo.is_empty() {
+        let mh = p.px(13.0) * 1.3;
+        p.text(c, tr("Belum ada tugas"), x0 + p.px(16.0), top + p.px(14.0), 13.0, 600, WHITE, 0.9, Anchor::Left, w - bw - p.px(30.0));
+        let hint = if en { "Ctrl+Alt+N \u{00B7} try \u{201C}15:30 meeting\u{201D} or \u{201C}10m stretch\u{201D}" } else { "Ctrl+Alt+N \u{00B7} coba \u{201C}15:30 rapat\u{201D} atau \u{201C}10m minum\u{201D}" };
+        p.text(c, hint, x0 + p.px(16.0), top + p.px(14.0) + mh + p.px(4.0), 11.5, 500, WHITE, 0.55, Anchor::Left, w - p.px(32.0));
+        return;
+    }
+    let done_n = d.todo.iter().filter(|t| t.done).count();
+    let left = if en { format!("{} open", d.todo_open) } else { format!("{} belum selesai", d.todo_open) };
+    let lh = p.px(11.5) * 1.3;
+    p.text(c, &left, x0 + p.px(16.0), by + bh / 2.0 - lh / 2.0, 11.5, 600, WHITE, 0.55, Anchor::Left, p.px(160.0));
+    if done_n > 0 {
+        let clear = tr("Hapus yang selesai");
+        let cw = p.measure(clear, 11.5, 600) + p.px(20.0);
+        let cx = bx - p.px(8.0) - cw;
+        let n0 = kids(c);
+        p.rect(c, cx, by, cw, bh, bh / 2.0, white(26));
+        p.text(c, clear, cx + cw / 2.0, by + bh / 2.0 - lh / 2.0, 11.5, 600, WHITE, 0.85, Anchor::Center, cw);
+        regions.push(Region { x: cx, y: by, w: cw, h: bh, action: Action::TodoClear, vis: group_since(c, n0) });
+    }
+    let row_h = p.px(20.0);
+    let mut y = by + bh + p.px(6.0);
+    for t in &d.todo {
+        if y + row_h > top + h - p.px(4.0) {
+            break;
+        }
+        let cy = y + row_h / 2.0;
+        let n0 = kids(c);
+        let r = p.px(7.0);
+        let cxk = x0 + p.px(16.0) + r;
+        if t.done {
+            p.rect(c, cxk - r, cy - r, 2.0 * r, 2.0 * r, r, Color { A: 255, R: GREEN[0], G: GREEN[1], B: GREEN[2] });
+            p.sym(c, Sym::Check, cxk, cy, 9.0, WHITE, 1.0);
+        } else {
+            p.rect(c, cxk - r, cy - r, 2.0 * r, 2.0 * r, r, white(60));
+            p.rect(c, cxk - r + p.px(1.5), cy - r + p.px(1.5), 2.0 * r - p.px(3.0), 2.0 * r - p.px(3.0), r - p.px(1.5), Color { A: 255, R: 30, G: 30, B: 32 });
+        }
+        let due_w = if t.due.is_empty() { 0.0 } else { p.measure(&t.due, 11.0, 600) + p.px(6.0) };
+        let tx = cxk + r + p.px(10.0);
+        let tw = x0 + w - p.px(16.0) - due_w - p.px(8.0) - tx;
+        let rh = p.px(12.5) * 1.3;
+        p.text(c, &p.fit(&t.text, 12.5, 500, tw), tx, cy - rh / 2.0, 12.5, 500, WHITE, if t.done { 0.45 } else { 0.95 }, Anchor::Left, tw + p.px(4.0));
+        if !t.due.is_empty() {
+            let dh = p.px(11.0) * 1.3;
+            let col = if t.late { ORANGE } else { WHITE };
+            p.text(c, &t.due, x0 + w - p.px(16.0), cy - dh / 2.0, 11.0, 600, col, if t.done { 0.4 } else { 0.8 }, Anchor::Right, due_w + p.px(4.0));
+        }
+        regions.push(Region { x: x0, y, w, h: row_h, action: Action::TodoToggle(t.id), vis: group_since(c, n0) });
+        y += row_h + p.px(2.0);
+    }
 }
 
 fn compact_charging(p: &mut Painter, c: &ContainerVisual, f: Frame, d: &Data) {

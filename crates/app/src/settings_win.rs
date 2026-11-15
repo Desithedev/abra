@@ -85,6 +85,13 @@ enum Action {
     LyricsOnline,
     LyricsDir,
     Donate,
+    UpdateCheck,
+    UpdateAct,
+    UpdateNotes,
+    PillReminders,
+    PillDevices,
+    NotchGlow,
+    TodoHotkey,
     Close,
     Takeover,
     Dock(Behavior),
@@ -704,7 +711,26 @@ impl Win {
                 ),
                 (
                     Some(prefs::tr("Tentang")),
-                    vec![RowDef::Pick(prefs::tr("Dibuat oleh kreativa.dev"), prefs::tr("Belikan aku kopi").to_string(), Action::Donate)],
+                    {
+                        use crate::updater::Phase;
+                        let en = s.lang == Lang::En;
+                        let ver: &'static str = if en { concat!("Version ", env!("CARGO_PKG_VERSION"), " \u{00B7} Early Access") } else { concat!("Versi ", env!("CARGO_PKG_VERSION"), " \u{00B7} Early Access") };
+                        let button = match crate::updater::phase() {
+                            Phase::Idle => prefs::tr("Periksa pembaruan").to_string(),
+                            Phase::Checking => prefs::tr("Memeriksa\u{2026}").to_string(),
+                            Phase::Latest => prefs::tr("Sudah terbaru").to_string(),
+                            Phase::Available(r) if crate::updater::installed() => format!("{} {}", prefs::tr("Perbarui ke"), r.version),
+                            Phase::Available(r) => format!("{} {}", prefs::tr("Unduh"), r.version),
+                            Phase::Downloading(v) => format!("{} {v}\u{2026}", prefs::tr("Mengunduh")),
+                            Phase::Failed(e) => format!("{} \u{00B7} {e}", prefs::tr("Coba lagi")),
+                        };
+                        vec![
+                            RowDef::Pick(ver, button, Action::UpdateAct),
+                            RowDef::Toggle(prefs::tr("Periksa pembaruan otomatis"), s.update_check, Action::UpdateCheck),
+                            RowDef::Pick(prefs::tr("Catatan rilis"), prefs::tr("Buka").to_string(), Action::UpdateNotes),
+                            RowDef::Pick(prefs::tr("Dibuat oleh kreativa.dev"), prefs::tr("Belikan aku kopi").to_string(), Action::Donate),
+                        ]
+                    },
                 ),
             ],
             1 => vec![
@@ -775,6 +801,14 @@ impl Win {
                 vec![
                     RowDef::Toggle(prefs::tr("Tampilkan unduhan (Store, Steam, peramban)"), s.notch_downloads, Action::NotchDownloads),
                     RowDef::Toggle(prefs::tr("Kirim ke HP lewat QR (Wi-Fi yang sama)"), s.notch_send, Action::NotchSend),
+                ],
+            ), (
+                Some(prefs::tr("Pill & Konteks")),
+                vec![
+                    RowDef::Toggle(prefs::tr("Pengingat tugas"), s.pill_reminders, Action::PillReminders),
+                    RowDef::Toggle(prefs::tr("Shortcut Ctrl+Alt+N untuk menambah tugas"), s.todo_hotkey, Action::TodoHotkey),
+                    RowDef::Toggle(prefs::tr("Perangkat Bluetooth & flashdisk tersambung"), s.pill_devices, Action::PillDevices),
+                    RowDef::Toggle(prefs::tr("Glow warna album saat musik main"), s.notch_glow, Action::NotchGlow),
                 ],
             )],
             3 => {
@@ -1462,6 +1496,17 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 Some(Action::NotchSend) => prefs::update(|s| s.notch_send = !s.notch_send),
                 Some(Action::LyricsOnline) => prefs::update(|s| s.lyrics_online = !s.lyrics_online),
                 Some(Action::Donate) => nacre_platform::launch::open(DONATE_URL),
+                Some(Action::UpdateCheck) => prefs::update(|s| s.update_check = !s.update_check),
+                Some(Action::UpdateNotes) => crate::updater::open_release_notes(),
+                Some(Action::UpdateAct) => match crate::updater::phase() {
+                    crate::updater::Phase::Available(_) => crate::updater::install(),
+                    crate::updater::Phase::Downloading(_) => {}
+                    _ => crate::updater::check_now(),
+                },
+                Some(Action::PillReminders) => prefs::update(|s| s.pill_reminders = !s.pill_reminders),
+                Some(Action::PillDevices) => prefs::update(|s| s.pill_devices = !s.pill_devices),
+                Some(Action::NotchGlow) => prefs::update(|s| s.notch_glow = !s.notch_glow),
+                Some(Action::TodoHotkey) => prefs::update(|s| s.todo_hotkey = !s.todo_hotkey),
                 Some(Action::MenuLogoPick) => {
                     let _ = SetWindowPos(hwnd, Some(HWND_NOTOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
                     let picked = nacre_platform::pick::open_file(prefs::tr("Pilih gambar"), &[(prefs::tr("Gambar logo"), "*.png;*.jpg;*.jpeg;*.bmp;*.ico;*.gif;*.webp;*.tif;*.tiff")]);

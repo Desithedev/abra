@@ -1,11 +1,11 @@
 use crate::{paths, single_instance};
 use nacre_platform::shell::taskbar;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
+    Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_INFO, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -15,6 +15,7 @@ pub const ID_QUIT: usize = 2;
 const TIMER_EXIT: usize = 1;
 
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
+static MAIN: AtomicIsize = AtomicIsize::new(0);
 
 pub fn create() -> windows::core::Result<HWND> {
     unsafe {
@@ -67,10 +68,38 @@ fn tray_data(hwnd: HWND) -> NOTIFYICONDATAW {
 }
 
 pub fn add_tray(hwnd: HWND) {
+    MAIN.store(hwnd.0 as isize, Ordering::Relaxed);
     let nid = tray_data(hwnd);
     unsafe {
         let _ = Shell_NotifyIconW(NIM_ADD, &nid);
     }
+}
+
+pub fn balloon(title: &str, text: &str) {
+    let h = MAIN.load(Ordering::Relaxed);
+    if h == 0 {
+        return;
+    }
+    let mut nid = tray_data(HWND(h as *mut _));
+    nid.uFlags |= NIF_INFO;
+    nid.dwInfoFlags = NIIF_INFO;
+    for (i, c) in title.encode_utf16().take(nid.szInfoTitle.len() - 1).enumerate() {
+        nid.szInfoTitle[i] = c;
+    }
+    for (i, c) in text.encode_utf16().take(nid.szInfo.len() - 1).enumerate() {
+        nid.szInfo[i] = c;
+    }
+    unsafe {
+        let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
+    }
+}
+
+pub fn request_quit() -> bool {
+    let h = MAIN.load(Ordering::Relaxed);
+    if h == 0 {
+        return false;
+    }
+    unsafe { PostMessageW(Some(HWND(h as *mut _)), WM_COMMAND, WPARAM(ID_QUIT), LPARAM(0)).is_ok() }
 }
 
 fn remove_tray(hwnd: HWND) {

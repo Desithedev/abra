@@ -26,6 +26,8 @@ mod strip;
 mod topmost;
 mod macshortcuts;
 mod single_instance;
+mod tasks;
+mod updater;
 
 use nacre_core::visibility::policy::Mode;
 use nacre_platform::{log, shell::taskbar};
@@ -198,6 +200,7 @@ fn main() {
     if let Err(e) = spotlight::init(&host.compositor) {
         log::line("spotlight", &format!("gagal: {e}"));
     }
+    updater::init();
     if let Err(e) = stage::init(&host.compositor) {
         log::line("stage", &format!("gagal: {e}"));
     }

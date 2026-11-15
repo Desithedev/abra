@@ -17,6 +17,9 @@ pub struct Shadow {
     _surface: Surface,
     stage: ContainerVisual,
     sprite: SpriteVisual,
+    glow: SpriteVisual,
+    glow_key: Option<(i32, i32, [u8; 3])>,
+    glow_m: f32,
     brushes: HashMap<(i32, i32, i32), (CompositionBrush, f32, f32)>,
     key: (i32, i32, i32),
     pub pad: f32,
@@ -49,10 +52,13 @@ impl Shadow {
             let surface = nacre_ui::host::attach(comp, hwnd, (size.0 as f32, size.1 as f32))?;
             let stage = comp.CreateContainerVisual()?;
             surface.root.Children()?.InsertAtTop(&stage)?;
+            let glow = comp.CreateSpriteVisual()?;
+            glow.SetOpacity(0.0)?;
+            stage.Children()?.InsertAtTop(&glow)?;
             let sprite = comp.CreateSpriteVisual()?;
             sprite.SetOpacity(0.0)?;
             stage.Children()?.InsertAtTop(&sprite)?;
-            Ok(Shadow { hwnd, comp: comp.clone(), _surface: surface, stage, sprite, brushes: HashMap::new(), key: (0, 0, 0), pad, island: 0.0 })
+            Ok(Shadow { hwnd, comp: comp.clone(), _surface: surface, stage, sprite, glow, glow_key: None, glow_m: 0.0, brushes: HashMap::new(), key: (0, 0, 0), pad, island: 0.0 })
         }
     }
 
@@ -122,6 +128,47 @@ impl Shadow {
     pub fn stage_y(&self, y: f32, ratio: f32, period: u32) {
         let o: CompositionObject = self.stage.cast().unwrap();
         spring(&self.comp, &o, "Offset.Y", y + self.island, ratio, period);
+    }
+
+    pub fn set_glow(&mut self, gfx: &Gfx, body: (f32, f32, f32, f32), radius: f32, blur: f32, rgb: Option<[u8; 3]>, opacity: f32) {
+        let Some(rgb) = rgb.filter(|_| opacity > 0.01) else {
+            let _ = self.glow.SetOpacity(0.0);
+            return;
+        };
+        let key = (radius.round() as i32, blur.round() as i32, rgb);
+        if self.glow_key != Some(key) {
+            let sh = shade::rounded(radius, blur, 0.0);
+            let mut px = sh.bgra.clone();
+            for c in px.chunks_mut(4) {
+                let a = (c[3] as u32 * 2).min(255);
+                c[3] = a as u8;
+                c[0] = (rgb[2] as u32 * a / 255) as u8;
+                c[1] = (rgb[1] as u32 * a / 255) as u8;
+                c[2] = (rgb[0] as u32 * a / 255) as u8;
+            }
+            let make = || -> windows_core::Result<CompositionBrush> {
+                let surf = gfx.surface_from_bgra(sh.w, sh.h, &px)?;
+                let src = self.comp.CreateSurfaceBrushWithSurface(&surf)?;
+                src.SetStretch(CompositionStretch::Fill)?;
+                let ng = self.comp.CreateNineGridBrush()?;
+                ng.SetSource(&src)?;
+                let (l, t, r, b) = sh.insets;
+                ng.SetInsetsWithValues(l, t, r, b)?;
+                ng.cast()
+            };
+            match make() {
+                Ok(b) => {
+                    let _ = self.glow.SetBrush(&b);
+                    self.glow_key = Some(key);
+                    self.glow_m = sh.margin as f32;
+                }
+                Err(_) => return,
+            }
+        }
+        let m = self.glow_m;
+        let _ = self.glow.SetOffset(Vector3 { X: body.0 + self.pad - m, Y: body.1 - m, Z: 0.0 });
+        let _ = self.glow.SetSize(Vector2 { X: body.2 + 2.0 * m, Y: body.3 + 2.0 * m });
+        let _ = self.glow.SetOpacity(opacity.clamp(0.0, 1.0));
     }
 
     pub fn set_island(&mut self, gap: f32, shown: bool) {

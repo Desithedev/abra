@@ -81,6 +81,15 @@ pub fn properties(path: &str) -> bool {
     unsafe { ShellExecuteExW(&mut info).is_ok() }
 }
 
+pub fn run_visible(file: &str, params: &str) -> bool {
+    use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE};
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+        let r = ShellExecuteW(None, w!("open"), &HSTRING::from(file), &HSTRING::from(params), None, SW_SHOWNORMAL);
+        r.0 as isize > 32
+    }
+}
+
 pub fn run(file: &str, params: &str) {
     let file = system_tool(file);
     let params = params.to_string();

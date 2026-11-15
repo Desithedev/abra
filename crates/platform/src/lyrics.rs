@@ -1,10 +1,7 @@
 use nacre_core::notch::lrclib::{self, Track};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::time::{Duration, Instant, SystemTime};
-use windows::Foundation::Uri;
-use windows::Web::Http::HttpClient;
-use windows_core::HSTRING;
+use std::time::{Duration, SystemTime};
 
 const NONE_TTL: Duration = Duration::from_secs(3 * 24 * 3600);
 const TIMEOUT: Duration = Duration::from_secs(8);
@@ -53,40 +50,8 @@ fn local_file(dir: &Path, t: &Track) -> Option<String> {
     None
 }
 
-fn finish(status: impl Fn() -> Option<i32>, cancel: impl Fn(), limit: Duration) -> bool {
-    let start = Instant::now();
-    loop {
-        match status() {
-            Some(1) => return true,
-            Some(0) => {}
-            _ => return false,
-        }
-        if start.elapsed() > limit {
-            cancel();
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(40));
-    }
-}
-
 fn http_get(url: &str) -> Option<(i32, String)> {
-    let client = HttpClient::new().ok()?;
-    if let Ok(h) = client.DefaultRequestHeaders() {
-        if let Ok(ua) = h.UserAgent() {
-            let _ = ua.TryParseAdd(&HSTRING::from(concat!("ABRA/", env!("CARGO_PKG_VERSION"))));
-        }
-    }
-    let op = client.GetAsync(&Uri::CreateUri(&HSTRING::from(url)).ok()?).ok()?;
-    if !finish(|| op.Status().ok().map(|s| s.0), || drop(op.Cancel()), TIMEOUT) {
-        return None;
-    }
-    let resp = op.GetResults().ok()?;
-    let status = resp.StatusCode().ok()?.0;
-    let read = resp.Content().ok()?.ReadAsStringAsync().ok()?;
-    if !finish(|| read.Status().ok().map(|s| s.0), || drop(read.Cancel()), TIMEOUT) {
-        return None;
-    }
-    Some((status, read.GetResults().ok()?.to_string()))
+    crate::net::http_get(url, TIMEOUT)
 }
 
 fn ask_lrclib(t: &Track) -> Result<Option<lrclib::Found>, ()> {

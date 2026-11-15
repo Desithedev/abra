@@ -4,6 +4,11 @@
 
 <h1 align="center">ABRA</h1>
 
+> [!WARNING]
+> **Early Access.** ABRA is still in active development. Things can break, look unfinished or change between versions,
+> and some settings may move or reset in a later release. Please [report bugs and ideas](https://github.com/abdeealfarizi/abra/issues)
+> — every report helps. ABRA 0.5 and later can update itself (*Settings → General → About*).
+
 > [!IMPORTANT]
 > **Disclaimer.** ABRA is an independent, fan‑made project. It is **not affiliated with, endorsed by or sponsored by
 > Apple Inc.** in any way. ABRA uses its own names (Deck, Visor, Rail, Scene, Quick Search, Quick Panel, Crystal and so on).
@@ -18,6 +23,7 @@
 
 <p align="center">
   <a href="https://github-release-stats.ghostbyte.dev/abdeealfarizi/abra"><img alt="Total downloads" src="https://img.shields.io/github/downloads/abdeealfarizi/abra/total?label=downloads&color=brightgreen"></a>  <img alt="Windows 11" src="https://img.shields.io/badge/Windows-11-0078D4?logo=windows11&logoColor=white">
+  <img alt="Status" src="https://img.shields.io/badge/status-early%20access-orange">
   <img alt="Rust" src="https://img.shields.io/badge/Made%20with-Rust-orange?logo=rust">
   <img alt="License" src="https://img.shields.io/badge/License-PolyForm%20Noncommercial-blue">
   <img alt="Telemetry" src="https://img.shields.io/badge/data%20collected-none-success">
@@ -54,14 +60,34 @@ It is one small native program: no Electron, no web view, no background services
   <img src="assets/screenshots/desktop.png" alt="ABRA desktop: Deck, Rail, Visor and widgets" width="900">
 </p>
 
-### 🆕 New in 0.4.1
+### 🆕 New in 0.5.0
+
+- **Built‑in updates**: ABRA checks GitHub for a new release, shows it in the Visor and installs it with one click
+  (*Settings → General → About*). The installer is checked against its SHA‑256 fingerprint before it runs.
+- **Tasks & reminders**: press `Ctrl` + `Alt` + `N`, type `15:30 meeting`, `10m stretch` or `tomorrow 08:00 report` and
+  press Enter. A new **Tasks** tab in the Visor lists them, and reminders pop up in the Visor when they are due.
+- **Visor pills**: short notices when Bluetooth earbuds, a mouse or a USB drive connects or disconnects.
+- **Album glow**: while music plays, the Visor and Capsule glow softly in the colour of the album art, pulsing with the beat.
+- **Visor & Capsule**: adjustable **size**, adjustable **distance from the top edge** for the Capsule, and a springy
+  “water drop” animation when switching between them. **Send** now has a **Cancel** button.
+- **Rail**: a **behaviour** setting like the Deck’s (Fixed · Overlay · Smart), **menus that match the app**
+  (browsers, File Explorer, Office, code editors, Spotify), *About* opens the app’s own details, *Help → ABRA Guide*
+  opens the guide, and Store apps show their real names.
+- **Fullscreen**: the Rail, Visor and Deck now hide during fullscreen videos and games.
+- **Fixes**: the Windows taskbar stays hidden after a restart, maximized apps no longer get an extra gap under the Rail,
+  the Smart Visor reappears at the top edge reliably, and the Visor follows the app that is actually playing music.
+
+<details>
+<summary><b>In 0.4.1</b></summary>
 
 - **New look out of the box**: a fresh install now starts with the Rail, Visor and Deck together, with an auto‑hiding
   Deck. Settings you already changed are kept.
 - **Fixes**: the Visor battery percentage keeps updating instead of freezing after the first reading, and the Wi‑Fi and
   Bluetooth controls in the Quick Panel open their menus again instead of closing straight away.
+</details>
 
-### In 0.4.0
+<details>
+<summary><b>In 0.4.0</b></summary>
 
 - **Desktop widgets**: Clock, World Clock, Today, Month, Digital Clock, Battery and System Monitor, in the **Original** or
   **Crystal** material. Add them from a widget gallery; they snap to a tidy grid with a placeholder while you drag.
@@ -79,6 +105,7 @@ It is one small native program: no Electron, no web view, no background services
   Deck, opening apps no longer freezes ABRA, the Visor and Deck always stay above other windows, and text can no longer be
   garbled by third‑party fonts.
 - **Lighter**: about a third of the memory of the previous development build.
+</details>
 
 <details>
 <summary><b>In 0.3.0</b></summary>
@@ -118,12 +145,12 @@ Download from the **[Releases](https://github.com/abdeealfarizi/abra/releases)**
 
 | File | Best for |
 |---|---|
-| `ABRA-Setup-0.4.1.exe` | Most people. Per‑user install, **no administrator rights**, optional Start menu shortcut and “launch at sign‑in”, clean uninstall from *Windows Settings → Apps*. |
-| `ABRA-0.4.1-win-x64.zip` | Portable. Extract anywhere and keep `abra.exe`, `abra-guard.exe` and the `fonts` folder **together**. |
+| `ABRA-Setup-0.5.0.exe` | Most people. Per‑user install, **no administrator rights**, optional Start menu shortcut and “launch at sign‑in”, clean uninstall from *Windows Settings → Apps*. |
+| `ABRA-0.5.0-win-x64.zip` | Portable. Extract anywhere and keep `abra.exe`, `abra-guard.exe` and the `fonts` folder **together**. |
 
 ### Installer
 
-1. Run `ABRA-Setup-0.4.1.exe`.
+1. Run `ABRA-Setup-0.5.0.exe`.
 2. Windows SmartScreen may warn about an unsigned app: choose **More info → Run anyway** (only for files from this repository).
 3. Pick the options you want (Start menu shortcut, launch at sign‑in) and finish. ABRA starts.
 
@@ -141,7 +168,8 @@ Download from the **[Releases](https://github.com/abdeealfarizi/abra/releases)**
 
 ### Updating from an older version
 
-Install 0.4.1 over the old version. Your settings, pinned apps and Quick Panel layout are kept.
+Install 0.5.0 over the old version. Your settings, pinned apps and Quick Panel layout are kept. From 0.5.0 on, ABRA
+offers new versions itself.
 
 ### Quit and uninstall
 
@@ -207,6 +235,11 @@ The glass pill at the top center of the screen. Choose **Visor** (attached to th
 </p>
 
 - **Timer tab**: a timer next to a calendar strip with your Windows calendar events.
+- **Tasks tab**: your to‑do list. Click a task to tick it off, **+ Add** opens Quick Search in Tasks mode. A time at the
+  start of a task makes it a reminder: `15:30 …`, `10m …` / `2h …`, `tomorrow 08:00 …`.
+- **Pills**: reminders, available updates and connected devices appear briefly in the Visor. Click a pill to act on it,
+  right‑click to dismiss it. Choose which ones you want in *Settings → Visor → Pills & Context*.
+- **Size and Capsule distance**: *Settings → Visor → Size* and *Distance from top edge*.
 </details>
 
 <details open>
@@ -214,7 +247,11 @@ The glass pill at the top center of the screen. Choose **Visor** (attached to th
 
 - **Logo menu**: About this PC, System Settings, Microsoft Store, ABRA Settings, App Grid, Overview, Force Quit, Sleep,
   Restart, Shut Down, Lock Screen. Use your own image as the logo in *Settings → Rail → Rail logo*.
-- **App name and menus**: the active app’s real menus (File, Edit…) when it has classic menus.
+- **App name and menus**: the active app’s real menus (File, Edit…) when it has classic menus; otherwise menus made for
+  the app — tabs and bookmarks in browsers, new folder and view modes in File Explorer, formatting in Office, the command
+  palette in code editors. *About* opens the app’s details and *Help → ABRA Guide* opens this guide.
+- **Behaviour**: Fixed (windows stay below the Rail), Overlay, or Smart (hides under maximized windows and comes back
+  when you touch the top edge) in *Settings → Rail*.
 - **Right side**: battery, **Wi‑Fi**, Quick Search, Quick Panel and the clock. The Wi‑Fi icon shows live signal strength;
   the battery percentage can sit inside the icon, next to it, or be hidden (*Settings → Rail*).
 - **Background**: transparent (with a soft shade), light, dark or the glass material.
@@ -320,6 +357,7 @@ The glass pill at the top center of the screen. Choose **Visor** (attached to th
 | `Ctrl` + `Space` | Quick Search |
 | `Ctrl` + `Shift` + `Space` | App Grid |
 | `Ctrl` + `1` … `4` | Inside Quick Search: Apps · Files · Actions · Clipboard |
+| `Ctrl` + `Alt` + `N` | Add a task or reminder |
 | `Ctrl` + `↑` | Overview |
 | `Alt` + `Tab` | ABRA window switcher (while Scene is on) |
 | `Esc` | Close the active overlay |
@@ -333,10 +371,13 @@ The complete guide in Indonesian is in [`docs/PANDUAN.md`](docs/PANDUAN.md).
 **ABRA does not collect, store or send any data about you.** There is no telemetry, no analytics, no account and no ads.
 Everything ABRA knows stays on your PC, in `%APPDATA%\ABRA`.
 
-- **Lyrics** are the only internet request ABRA makes on its own: if a song has no local `.lrc` file, ABRA asks
-  [LRCLIB](https://lrclib.net) using only the title, artist, album and length. You can turn it off (*Settings → Visor*).
+- **Lyrics**: if a song has no local `.lrc` file, ABRA asks [LRCLIB](https://lrclib.net) using only the title, artist,
+  album and length. You can turn it off (*Settings → Visor*).
+- **Update check**: about once every 12 hours ABRA reads the public list of releases from `api.github.com`. Nothing about
+  you is sent. Turn it off in *Settings → General → About*. Updates are only downloaded when you click **Update**.
+- **Tasks** are stored on your PC in `%APPDATA%\ABRA\todo.txt`.
 - **Send to phone** runs a tiny temporary web server on your **local network only**, under a random link, serving only the files
-  you dropped. It stops when you click Done, after 15 idle minutes, or when ABRA quits.
+  you dropped. It stops when you click Cancel, after 15 idle minutes, or when ABRA quits.
 - **Read‑only, on demand**: saved Wi‑Fi network names and signal strength, Bluetooth devices, calendar events, download
   progress (file names and sizes only), and which apps use the microphone / camera. ABRA never reads your location.
 - **Clipboard history** is optional, text only, kept in memory for 8 hours and never written to disk.
@@ -396,11 +437,11 @@ You get `abra.exe` and `abra-guard.exe` in `target\release\`.
 cargo test --workspace
 
 winget install JRSoftware.InnoSetup                            # once
-powershell -File installer\build-installer.ps1 -Version 0.4.1
+powershell -File installer\build-installer.ps1 -Version 0.5.0
 ```
 
 The release script rebuilds ABRA with local paths stripped, **refuses to continue** if a binary still contains your user
-name or a local path, and writes `dist\ABRA-Setup-0.4.1.exe` and `dist\ABRA-0.4.1-win-x64.zip`.
+name or a local path, and writes `dist\ABRA-Setup-0.5.0.exe` and `dist\ABRA-0.5.0-win-x64.zip`.
 
 ### 4. Safe experiments
 

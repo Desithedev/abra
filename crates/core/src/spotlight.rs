@@ -7,6 +7,7 @@ pub enum Mode {
     Files,
     Actions,
     Clipboard,
+    Tasks,
 }
 
 impl Mode {
@@ -16,6 +17,7 @@ impl Mode {
             2 => Some(Mode::Files),
             3 => Some(Mode::Actions),
             4 => Some(Mode::Clipboard),
+            5 => Some(Mode::Tasks),
             _ => None,
         }
     }
@@ -27,6 +29,7 @@ impl Mode {
             Mode::Files => 2,
             Mode::Actions => 3,
             Mode::Clipboard => 4,
+            Mode::Tasks => 5,
         }
     }
 
@@ -37,6 +40,7 @@ impl Mode {
             Mode::Files => "Berkas Saya",
             Mode::Actions => "Aksi",
             Mode::Clipboard => "Papan Klip",
+            Mode::Tasks => "Tugas",
         }
     }
 }

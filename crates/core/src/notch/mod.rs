@@ -4,6 +4,7 @@ pub mod glance;
 pub mod json;
 pub mod lrclib;
 pub mod lyrics;
+pub mod pills;
 pub mod shade;
 pub mod shelf;
 pub mod state;

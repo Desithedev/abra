@@ -23,7 +23,7 @@ use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, RegisterHotKey, UnregisterHotKey, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, VK_BACK, VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_RETURN, VK_RIGHT,
+    GetKeyState, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, RegisterHotKey, UnregisterHotKey, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, VK_BACK, VK_DELETE, VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_RETURN, VK_RIGHT,
     VK_SPACE, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -39,6 +39,28 @@ const T_REGION: usize = 2;
 const T_FINISH: usize = 9;
 const HOTKEY_ID: i32 = 0xAB01;
 const HOTKEY_APPS: i32 = 0xAB02;
+const HOTKEY_TASKS: i32 = 0xAB03;
+static TASKS_KEY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn sync_tasks_hotkey(hwnd: HWND) {
+    let want = prefs::get().todo_hotkey;
+    let have = TASKS_KEY.load(std::sync::atomic::Ordering::Relaxed);
+    if want == have {
+        return;
+    }
+    unsafe {
+        if want {
+            if RegisterHotKey(Some(hwnd), HOTKEY_TASKS, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 0x4E).is_ok() {
+                TASKS_KEY.store(true, std::sync::atomic::Ordering::Relaxed);
+            } else {
+                log::line("spotlight", "Ctrl+Alt+N dipakai program lain; hot key Tugas tidak aktif");
+            }
+        } else {
+            let _ = UnregisterHotKey(Some(hwnd), HOTKEY_TASKS);
+            TASKS_KEY.store(false, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
 const COLS: usize = 5;
 const FTYPES: [(&str, &[&str]); 4] = [
     ("Gambar", &["png", "jpg", "jpeg", "gif", "webp", "heic", "bmp", "svg", "tif", "tiff"]),
@@ -71,6 +93,8 @@ enum RKind {
     Action(usize),
     File,
     Clip,
+    TaskAdd,
+    Task(u32),
 }
 
 #[derive(Clone)]
@@ -281,6 +305,7 @@ pub fn init(comp: &Compositor) -> windows_core::Result<()> {
         let h = hwnd.0 as isize;
         CTL.with(|c| *c.borrow_mut() = Some(Ctl { hwnd, comp: comp.clone() }));
         prefs::listen(hwnd);
+        sync_tasks_hotkey(hwnd);
         clipboard::set_enabled(prefs::get().clipboard_history);
         apps::refresh(move || {
             let _ = PostMessageW(Some(HWND(h as *mut _)), WM_APPS, WPARAM(0), LPARAM(0));
@@ -295,6 +320,7 @@ pub fn shutdown() {
             unsafe {
                 let _ = UnregisterHotKey(Some(ctl.hwnd), HOTKEY_ID);
                 let _ = UnregisterHotKey(Some(ctl.hwnd), HOTKEY_APPS);
+                let _ = UnregisterHotKey(Some(ctl.hwnd), HOTKEY_TASKS);
             }
         }
     });
@@ -766,6 +792,30 @@ impl Spot {
                     }
                 }
             }
+            Mode::Tasks => {
+                let en = crate::tasks::english();
+                let now = crate::tasks::now();
+                if !q.is_empty() {
+                    let (text, due) = nacre_core::todo::parse(&q, now);
+                    let sub = match due {
+                        Some(d) => format!("{} \u{00B7} {}", prefs::tr("Pengingat"), nacre_core::todo::due_label(d, now, en)),
+                        None => prefs::tr("Tekan Enter untuk menambah").to_string(),
+                    };
+                    self.rows.push(Row { kind: RKind::TaskAdd, title: format!("{} \u{201C}{}\u{201D}", prefs::tr("Tambah"), text), sub, path: q.clone() });
+                }
+                let ql = q.to_lowercase();
+                let list = crate::tasks::snapshot();
+                for t in list.ordered() {
+                    if !ql.is_empty() && !t.text.to_lowercase().contains(&ql) {
+                        continue;
+                    }
+                    let mut sub = prefs::tr(if t.done { "Selesai" } else { "Belum selesai" }).to_string();
+                    if let Some(d) = t.due {
+                        sub = format!("{sub} \u{00B7} {}", nacre_core::todo::due_label(d, now, en));
+                    }
+                    self.rows.push(Row { kind: RKind::Task(t.id), title: t.text.clone(), sub, path: if t.done { "1".into() } else { String::new() } });
+                }
+            }
             Mode::Clipboard => {
                 let ql = q.to_lowercase();
                 for e in clipboard::history() {
@@ -947,6 +997,7 @@ impl Spot {
             Mode::Files => self.glyph(parent, "\u{E8B7}", cx, cy, size * 0.95, rgb, op),
             Mode::Actions => self.sym(parent, Sym::Windows, cx, cy, size, rgb, op),
             Mode::Clipboard => self.glyph(parent, "\u{E77F}", cx, cy, size * 0.95, rgb, op),
+            Mode::Tasks => self.sym(parent, Sym::Check, cx, cy, size, rgb, op),
         }
     }
 
@@ -1368,6 +1419,21 @@ impl Spot {
                     self.rect(area, (icx - ic / 2.0, icy - ic / 2.0, ic, ic), 8.0 * d, Color { A: 255, R: col[0], G: col[1], B: col[2] });
                     self.glyph(area, g, icx, icy, 17.0 * d, [255, 255, 255], 1.0);
                 }
+                RKind::TaskAdd => {
+                    self.rect(area, (icx - ic / 2.0, icy - ic / 2.0, ic, ic), ic / 2.0, crate::prefs::accent_c(255));
+                    self.glyph(area, "\u{E710}", icx, icy, 15.0 * d, [255, 255, 255], 1.0);
+                }
+                RKind::Task(_) => {
+                    let done = row.path == "1";
+                    let r = ic * 0.36;
+                    if done {
+                        self.rect(area, (icx - r, icy - r, 2.0 * r, 2.0 * r), r, Color { A: 255, R: 48, G: 209, B: 88 });
+                        self.glyph(area, "\u{E73E}", icx, icy, 11.0 * d, [255, 255, 255], 1.0);
+                    } else {
+                        self.rect(area, (icx - r, icy - r, 2.0 * r, 2.0 * r), r, Color { A: 110, R: fg[0], G: fg[1], B: fg[2] });
+                        self.rect(area, (icx - r + 2.0 * d, icy - r + 2.0 * d, 2.0 * r - 4.0 * d, 2.0 * r - 4.0 * d), r - 2.0 * d, Color { A: 255, R: 40, G: 40, B: 44 });
+                    }
+                }
                 RKind::Clip => {
                     self.rect(area, (icx - ic * 0.36, icy - ic / 2.0, ic * 0.72, ic), 4.0 * d, Color { A: 240, R: 250, G: 250, B: 252 });
                     self.glyph(area, "\u{E8A5}", icx, icy, 14.0 * d, [120, 120, 128], 1.0);
@@ -1407,6 +1473,24 @@ impl Spot {
             RKind::Calc => Run::Nothing,
             RKind::Action(i) => Run::Action(ACTIONS[i].id),
             RKind::Clip => Run::Copy(r.path),
+            RKind::TaskAdd => {
+                crate::tasks::with(|l| l.add(&r.path, crate::tasks::now()));
+                crate::tasks::changed();
+                self.query.clear();
+                self.rebuild_rows();
+                self.render();
+                Run::Nothing
+            }
+            RKind::Task(id) => {
+                crate::tasks::with(|l| l.toggle(id));
+                crate::notch::dismiss_pill(&format!("todo:{id}"));
+                crate::tasks::changed();
+                let sel = self.sel;
+                self.rebuild_rows();
+                self.sel = sel.min(self.rows.len().saturating_sub(1));
+                self.render();
+                Run::Nothing
+            }
         }
     }
 
@@ -1527,6 +1611,8 @@ unsafe extern "system" fn ctl_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
         WM_HOTKEY => {
             if wp.0 as i32 == HOTKEY_APPS {
                 toggle_mode(Mode::Apps);
+            } else if wp.0 as i32 == HOTKEY_TASKS {
+                toggle_mode(Mode::Tasks);
             } else {
                 toggle();
             }
@@ -1571,6 +1657,7 @@ unsafe extern "system" fn ctl_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
         }
         m if m == prefs::WM_PREFS => {
             clipboard::set_enabled(prefs::get().clipboard_history);
+            sync_tasks_hotkey(hwnd);
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wp, lp),
@@ -1669,6 +1756,21 @@ unsafe extern "system" fn spot_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                         return;
                     }
                     s.move_sel(dx, dy);
+                });
+            } else if vk == VK_DELETE.0 {
+                with_spot(|s| {
+                    if s.mode != Mode::Tasks {
+                        return;
+                    }
+                    if let Some(RKind::Task(id)) = s.rows.get(s.sel).map(|r| r.kind.clone()) {
+                        crate::tasks::with(|l| l.remove(id));
+                        crate::notch::dismiss_pill(&format!("todo:{id}"));
+                        crate::tasks::changed();
+                        let sel = s.sel;
+                        s.rebuild_rows();
+                        s.sel = sel.min(s.rows.len().saturating_sub(1));
+                        s.render();
+                    }
                 });
             } else if vk == VK_RETURN.0 {
                 let run = with_spot(|s| {

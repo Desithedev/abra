@@ -12,6 +12,7 @@ use draw::Painter;
 use nacre_core::island::calendar;
 use nacre_core::island::timer::{Phase, Timer};
 use nacre_core::notch::glance;
+use nacre_core::notch::pills::{Kind as PillKind, Queue as Pills};
 use nacre_core::notch::state::{self, motion, Event, Live, Look, Mode, OpenOn, Size, Tab, View};
 use nacre_core::visibility::policy::{should_hide, Inputs, Mode as Vis};
 use nacre_platform::loopback::{self, Loopback};
@@ -75,6 +76,11 @@ const T_DLDONE: usize = 18;
 const T_SEND: usize = 19;
 const T_SENDDONE: usize = 20;
 const T_TESTSEND: usize = 21;
+const T_PILL: usize = 22;
+const T_TODO: usize = 23;
+const WM_PILLS: u32 = WM_APP + 26;
+const WM_TASKS: u32 = WM_APP + 27;
+const WM_DEVICECHANGE_MSG: u32 = 0x0219;
 const SEND_IDLE: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
 struct SendSess {
@@ -159,6 +165,36 @@ fn post(hwnd: isize, msg: u32) {
 fn post_w(hwnd: isize, msg: u32, w: usize) {
     unsafe {
         let _ = PostMessageW(Some(HWND(hwnd as *mut _)), msg, WPARAM(w), LPARAM(0));
+    }
+}
+
+enum PillMsg {
+    Push { kind: PillKind, key: String, title: String, sub: String, linger: Option<i64> },
+    Dismiss(String),
+}
+
+static PILL_INBOX: std::sync::Mutex<Vec<PillMsg>> = std::sync::Mutex::new(Vec::new());
+
+fn send_pill_msg(m: PillMsg) {
+    PILL_INBOX.lock().unwrap_or_else(|e| e.into_inner()).push(m);
+    let h = NOTCH_HWND.load(Ordering::Relaxed);
+    if h != 0 {
+        post(h, WM_PILLS);
+    }
+}
+
+pub fn push_pill(kind: PillKind, key: &str, title: &str, sub: &str, linger: Option<i64>) {
+    send_pill_msg(PillMsg::Push { kind, key: key.to_string(), title: title.to_string(), sub: sub.to_string(), linger });
+}
+
+pub fn dismiss_pill(key: &str) {
+    send_pill_msg(PillMsg::Dismiss(key.to_string()));
+}
+
+pub fn tasks_changed() {
+    let h = NOTCH_HWND.load(Ordering::Relaxed);
+    if h != 0 {
+        post(h, WM_TASKS);
     }
 }
 
@@ -280,6 +316,9 @@ pub struct Notch {
     strip: Option<Strip>,
     tier: Tier,
     glass_override: Option<Tier>,
+    pills: Pills,
+    glow_level: f32,
+    _bt: Option<nacre_platform::devices::Watchers>,
 }
 
 impl Notch {
@@ -410,6 +449,9 @@ impl Notch {
                 strip: None,
                 tier,
                 glass_override: opts.glass,
+                pills: Pills::default(),
+                glow_level: 0.0,
+                _bt: None,
             });
             n.refresh();
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(n) as isize);
@@ -420,7 +462,18 @@ impl Notch {
             timer(hwnd, T_START, 1600);
             timer(hwnd, T_MINUTE, nacre_platform::time::ms_to_next_minute());
             timer(hwnd, T_PRIVACY, 1500);
+            timer(hwnd, T_TODO, 2500);
             with(hwnd, |d| {
+                d._bt = Some(nacre_platform::devices::watch_bluetooth(|name, on| {
+                    let en = crate::prefs::get().lang == nacre_core::i18n::Lang::En;
+                    let sub = match (on, en) {
+                        (true, true) => "Connected",
+                        (false, true) => "Disconnected",
+                        (true, false) => "Tersambung",
+                        (false, false) => "Terputus",
+                    };
+                    push_pill(PillKind::Device, &format!("bt:{name}"), &name, sub, Some(nacre_core::notch::pills::DEVICE_MS));
+                }));
                 d._drop_target = drop::register(hwnd, WM_DND, d.dnd.clone());
                 if d._drop_target.is_none() {
                     log::line("notch", "seret-taruh tidak tersedia");
@@ -467,6 +520,7 @@ impl Notch {
             glance: crate::prefs::get().notch_idle == 0,
             download: (crate::prefs::get().notch_downloads && (self.dl.is_some() || self.dl_done.is_some())) || self.send_compact().is_some(),
             wide_music: crate::prefs::get().notch_idle == 2,
+            pill: self.pills.current(self.now_ms()).is_some(),
         }
     }
 
@@ -796,6 +850,7 @@ impl Notch {
         if let Some(sh) = self.shadow.as_mut() {
             sh.follow(&self.paint.gfx, (x0, -over, z.w, z.h + over), z.radius, (blur * self.dpi, dy * self.dpi, op), springy);
         }
+        self.paint_glow();
         let e = self.body.ear;
         let (l, r) = (px0.min(x0) - e, (px0 + pw).max(x0 + z.w) + e);
         self.set_region((l.max(0.0), 0.0, r.min(self.win.0 as f32), gap + ph.max(z.h)));
@@ -892,6 +947,9 @@ impl Notch {
             cal,
             send,
             send_zone: crate::prefs::get().notch_send,
+            pill: self.pills.current(now_ms).map(|p| views::PillView { kind: p.kind, title: p.title.clone(), sub: p.sub.clone() }),
+            todo: if self.mode == Mode::Open(Tab::Todo) { Self::todo_rows() } else { Vec::new() },
+            todo_open: if self.mode == Mode::Open(Tab::Todo) { crate::tasks::with(|l| l.open_count()) } else { 0 },
         };
         views::draw(&mut self.paint, &c, self.look, f, &d, &mut self.regions, &mut self.live_vis);
         if let Some(r) = self.hover_act.and_then(|a| self.regions.iter().find(|r| r.action == a)) {
@@ -1102,6 +1160,10 @@ impl Notch {
         } else if !want && self.loopback.is_some() {
             self.loopback = None;
         }
+        if !want {
+            self.glow_level = 0.0;
+        }
+        self.paint_glow();
     }
 
     fn on_bands(&mut self) {
@@ -1109,6 +1171,26 @@ impl Notch {
         for (i, bar) in self.live_vis.bars.iter().enumerate() {
             let v = b.get(i).copied().unwrap_or(0.0).clamp(0.0, 1.0);
             let _ = bar.SetScale(Vector3 { X: 1.0, Y: 0.25 + 0.75 * v, Z: 1.0 });
+        }
+        let level = b.iter().copied().fold(0.0f32, f32::max).clamp(0.0, 1.0);
+        self.glow_level = if level > self.glow_level { 0.55 * level + 0.45 * self.glow_level } else { 0.18 * level + 0.82 * self.glow_level };
+        self.paint_glow();
+    }
+
+    fn glow_on(&self) -> bool {
+        crate::prefs::get().notch_glow && self.has_media && self.playing && self.shown && !self.off && !self.overlap.fullscreen && crate::prefs::get().anim
+    }
+
+    fn paint_glow(&mut self) {
+        let on = self.glow_on();
+        let level = if on { self.glow_level } else { 0.0 };
+        let rgb = on.then(|| self.tint.unwrap_or_else(crate::prefs::accent));
+        let gap = island_gap(self.dpi);
+        let over = if gap > 0.0 { 0.0 } else { self.body.top_over };
+        let rect = (self.x0(), -over, self.size.w, self.size.h + over);
+        let (radius, dpi) = (self.size.radius, self.dpi);
+        if let Some(sh) = self.shadow.as_mut() {
+            sh.set_glow(&self.paint.gfx, rect, radius, 20.0 * dpi, rgb, 0.55 + 0.45 * level);
         }
     }
 
@@ -1262,7 +1344,129 @@ impl Notch {
         }
     }
 
+    fn on_pills(&mut self) {
+        let msgs: Vec<PillMsg> = std::mem::take(&mut *PILL_INBOX.lock().unwrap_or_else(|e| e.into_inner()));
+        let s = crate::prefs::get();
+        let now = self.now_ms();
+        let mut changed = false;
+        for m in msgs {
+            match m {
+                PillMsg::Push { kind, key, title, sub, linger } => {
+                    let on = match kind {
+                        PillKind::Device => s.pill_devices,
+                        PillKind::Notice => s.pill_notices,
+                        PillKind::Reminder => s.pill_reminders,
+                        PillKind::Update => true,
+                    };
+                    if on {
+                        self.pills.push(kind, &key, &title, &sub, now, linger);
+                        changed = true;
+                    }
+                }
+                PillMsg::Dismiss(k) => changed |= self.pills.dismiss_key(&k),
+            }
+        }
+        if changed {
+            self.sync_pills();
+        }
+    }
+
+    fn sync_pills(&mut self) {
+        let now = self.now_ms();
+        self.pills.prune(now);
+        match self.pills.next_expiry() {
+            Some(t) => timer(self.hwnd, T_PILL, (t - now).clamp(30, 600_000) as u32),
+            None => kill(self.hwnd, T_PILL),
+        }
+        self.update_visibility();
+        self.refresh();
+    }
+
+    fn pill_click(&mut self) {
+        let Some(p) = self.pills.current(self.now_ms()).cloned() else { return };
+        self.pills.dismiss(p.id);
+        match p.kind {
+            PillKind::Reminder => {
+                self.sync_pills();
+                self.dispatch(Event::Click);
+                self.dispatch(Event::SelectTab(Tab::Todo));
+                return;
+            }
+            PillKind::Update => {
+                if let Ok(comp) = self.body.stage.Compositor() {
+                    crate::settings_win::open(&comp);
+                }
+            }
+            PillKind::Device => {
+                if let Some(path) = p.key.strip_prefix("drive:") {
+                    nacre_platform::launch::open(path);
+                }
+            }
+            PillKind::Notice => {}
+        }
+        self.sync_pills();
+    }
+
+    fn schedule_tasks(&mut self) {
+        let now_m = crate::tasks::now_minutes();
+        let (fired, next) = crate::tasks::with(|l| {
+            let ids = l.due_now(now_m);
+            for id in &ids {
+                l.mark_fired(*id);
+            }
+            (ids.iter().filter_map(|id| l.get(*id).cloned()).collect::<Vec<_>>(), l.next_due())
+        });
+        if !fired.is_empty() {
+            crate::tasks::save();
+            let en = crate::tasks::english();
+            let now = self.now_ms();
+            let s = crate::prefs::get();
+            let title = if en { "Reminder" } else { "Pengingat" };
+            for t in &fired {
+                log::line("tugas", &format!("pengingat #{} jatuh tempo", t.id));
+                let label = t.due.map(|d| nacre_core::todo::due_label(d, crate::tasks::now(), en)).unwrap_or_default();
+                if s.pill_reminders {
+                    self.pills.push(PillKind::Reminder, &format!("todo:{}", t.id), &t.text, &label, now, None);
+                }
+                if self.off || !self.shown || self.overlap.fullscreen || !s.pill_reminders {
+                    crate::mainwin::balloon(title, &t.text);
+                }
+            }
+            self.sync_pills();
+        }
+        match next {
+            Some(m) => timer(self.hwnd, T_TODO, crate::tasks::ms_to_minute(m)),
+            None => kill(self.hwnd, T_TODO),
+        }
+    }
+
+    fn todo_rows() -> Vec<views::TodoRow> {
+        let en = crate::tasks::english();
+        let now = crate::tasks::now();
+        let now_m = now.minutes();
+        crate::tasks::with(|l| {
+            l.ordered()
+                .into_iter()
+                .take(4)
+                .map(|t| views::TodoRow {
+                    id: t.id,
+                    text: t.text.clone(),
+                    done: t.done,
+                    due: t.due.map(|d| nacre_core::todo::due_label(d, now, en)).unwrap_or_default(),
+                    late: !t.done && t.due.is_some_and(|d| d <= now_m),
+                })
+                .collect()
+        })
+    }
+
     fn on_right_click(&mut self, x: f32, y: f32) {
+        if self.look.view == View::Compact(state::Activity::Pill) && !matches!(self.mode, Mode::Open(_)) {
+            if let Some(id) = self.pills.current(self.now_ms()).map(|p| p.id) {
+                self.pills.dismiss(id);
+                self.sync_pills();
+            }
+            return;
+        }
         if self.mode != Mode::Open(Tab::Shelf) {
             return;
         }
@@ -1353,6 +1557,10 @@ impl Notch {
     }
 
     fn on_click(&mut self, x: f32, y: f32) {
+        if self.look.view == View::Compact(state::Activity::Pill) && !matches!(self.mode, Mode::Open(_)) {
+            self.pill_click();
+            return;
+        }
         if !matches!(self.mode, Mode::Open(_)) && !self.on_media_button(x, y) {
             kill(self.hwnd, T_DWELL);
             self.dispatch(Event::Click);
@@ -1406,6 +1614,17 @@ impl Notch {
                 self.refresh();
             }
             Action::SendDone => self.stop_send(),
+            Action::TodoToggle(id) => {
+                crate::tasks::with(|l| l.toggle(id));
+                self.pills.dismiss_key(&format!("todo:{id}"));
+                crate::tasks::changed();
+                self.sync_pills();
+            }
+            Action::TodoClear => {
+                crate::tasks::with(|l| l.clear_done());
+                crate::tasks::changed();
+            }
+            Action::TodoAdd => crate::spotlight::toggle_mode(nacre_core::spotlight::Mode::Tasks),
             Action::CalDay(n) => {
                 self.cal_sel = (self.cal_sel + n).clamp(-3650, 3650);
                 self.render();
@@ -1490,7 +1709,7 @@ impl Notch {
             edge_armed: self.edge_armed,
             starting: self.starting,
             fullscreen: self.overlap.fullscreen,
-            revealing: false,
+            revealing: !self.overlap.fullscreen && self.pills.current(self.now_ms()).is_some(),
         };
         let hide = self.off || should_hide(self.vis, &inputs);
         if let Some(s) = &self.strip {
@@ -1701,6 +1920,8 @@ impl Notch {
                 kill(self.hwnd, T_SENDDONE);
                 self.refresh();
             }
+            T_PILL => self.sync_pills(),
+            T_TODO => self.schedule_tasks(),
             T_TESTSEND => {
                 kill(self.hwnd, T_TESTSEND);
                 if let Ok(p) = std::env::var("NACRE_TEST_SEND") {
@@ -1812,6 +2033,37 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         }
         WM_AGENDA => {
             with(hwnd, |d| d.on_agenda());
+            LRESULT(0)
+        }
+        WM_DEVICECHANGE_MSG => {
+            let ev = wp.0 as u32;
+            if ev == 0x8000 || ev == 0x8004 {
+                let en = crate::prefs::get().lang == nacre_core::i18n::Lang::En;
+                for l in nacre_platform::devices::volume_letters(lp.0) {
+                    let label = nacre_platform::devices::drive_label(l);
+                    let title = if label.is_empty() { if en { "USB drive".to_string() } else { "Flashdisk".to_string() } } else { label };
+                    let state = match (ev == 0x8000, en) {
+                        (true, true) => "connected",
+                        (false, true) => "removed",
+                        (true, false) => "tersambung",
+                        (false, false) => "dilepas",
+                    };
+                    push_pill(PillKind::Device, &format!("drive:{l}:\\"), &title, &format!("({l}:) {state}"), Some(nacre_core::notch::pills::DEVICE_MS));
+                }
+            }
+            DefWindowProcW(hwnd, msg, wp, lp)
+        }
+        WM_PILLS => {
+            with(hwnd, |d| d.on_pills());
+            LRESULT(0)
+        }
+        WM_TASKS => {
+            with(hwnd, |d| {
+                d.schedule_tasks();
+                if d.mode == Mode::Open(Tab::Todo) {
+                    d.render();
+                }
+            });
             LRESULT(0)
         }
         WM_SEND => {
@@ -1934,7 +2186,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
 }
 
 fn hover_scale(a: Action) -> f32 {
-    if matches!(a, Action::ShelfItem(_)) {
+    if matches!(a, Action::ShelfItem(_) | Action::TodoToggle(_)) {
         crate::motion::HOVER_ROW
     } else {
         crate::motion::HOVER_BUTTON

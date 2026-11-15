@@ -323,6 +323,12 @@ pub struct Settings {
     pub rail: Behavior,
     pub notch_scale: u8,
     pub island_gap: u8,
+    pub update_check: bool,
+    pub notch_glow: bool,
+    pub pill_devices: bool,
+    pub pill_notices: bool,
+    pub pill_reminders: bool,
+    pub todo_hotkey: bool,
 }
 
 impl Default for Settings {
@@ -395,6 +401,12 @@ impl Default for Settings {
             rail: Behavior::Fixed,
             notch_scale: 100,
             island_gap: 7,
+            update_check: true,
+            notch_glow: true,
+            pill_devices: true,
+            pill_notices: false,
+            pill_reminders: true,
+            todo_hotkey: true,
         }
     }
 }
@@ -606,6 +618,12 @@ impl Settings {
                 "rail" => s.rail = Behavior::parse(v).unwrap_or(s.rail),
                 "notch_scale" => s.notch_scale = v.trim_end_matches('%').parse::<u16>().map(|n| n.clamp(80, 130) as u8).unwrap_or(s.notch_scale),
                 "island_gap" => s.island_gap = v.parse::<u16>().map(|n| n.min(40) as u8).unwrap_or(s.island_gap),
+                "update_check" => s.update_check = parse_bool(v).unwrap_or(s.update_check),
+                "notch_glow" => s.notch_glow = parse_bool(v).unwrap_or(s.notch_glow),
+                "pill_devices" => s.pill_devices = parse_bool(v).unwrap_or(s.pill_devices),
+                "pill_notices" => s.pill_notices = parse_bool(v).unwrap_or(s.pill_notices),
+                "pill_reminders" => s.pill_reminders = parse_bool(v).unwrap_or(s.pill_reminders),
+                "todo_hotkey" => s.todo_hotkey = parse_bool(v).unwrap_or(s.todo_hotkey),
                 "autostart" => {
                     if let Some(b) = parse_bool(v) {
                         s.autostart = b;
@@ -622,7 +640,7 @@ impl Settings {
 
     pub fn serialize(&self) -> String {
         format!(
-            "# ABRA settings\ntakeover={}\ndock={}\nnotch={}\nblur={}\nstyle={}\ntransparency={}\ntheme={}\nlang={}\ndock_material={}\ndock_round={}\nnotch_material={}\nnotch_round={}\nautostart={}\ndock_size={}\ndock_gap={}\ndock_zoom={}\ndock_margin={}\nanim={}\nrefraction={}\ndock_enabled={}\nnotch_enabled={}\nnotch_hover_open={}\nwin_shadow={}\nmenubar={}\nclock_24h={}\nmenubar_glass={}\nhot_tl={}\nhot_tr={}\nhot_bl={}\nhot_br={}\nstage={}\nswitcher={}\nstage_right={}\nstage_size={}\nstage_gap={}\nstage_count={}\nstage_speed={}\nstage_desktop_click={}\nstage_media={}\nstage_icons={}\nstage_titles={}\nhide_desktop_icons={}\nmenubar_style={}\ndock_plates={}\nover_fullscreen={}\nclipboard_history={}\nicon_style={}\nicon_tint={}\naccent={}\nmac_shortcuts={}\ndownloads_stack={}\nrecent_apps={}\nicon_pack={}\nmenubar_material={}\nicon_variant={}\nmin_effect={}\nnotch_idle={}\ngreet_name={}\ngreet_text={}\nlyrics_compact={}\nlyrics_online={}\nnotch_downloads={}\nnotch_send={}\nui_scale={}\nnotch_island={}\nwidget_style={}\nbattery_pct={}\nrail={}\nnotch_scale={}\nisland_gap={}\n",
+            "# ABRA settings\ntakeover={}\ndock={}\nnotch={}\nblur={}\nstyle={}\ntransparency={}\ntheme={}\nlang={}\ndock_material={}\ndock_round={}\nnotch_material={}\nnotch_round={}\nautostart={}\ndock_size={}\ndock_gap={}\ndock_zoom={}\ndock_margin={}\nanim={}\nrefraction={}\ndock_enabled={}\nnotch_enabled={}\nnotch_hover_open={}\nwin_shadow={}\nmenubar={}\nclock_24h={}\nmenubar_glass={}\nhot_tl={}\nhot_tr={}\nhot_bl={}\nhot_br={}\nstage={}\nswitcher={}\nstage_right={}\nstage_size={}\nstage_gap={}\nstage_count={}\nstage_speed={}\nstage_desktop_click={}\nstage_media={}\nstage_icons={}\nstage_titles={}\nhide_desktop_icons={}\nmenubar_style={}\ndock_plates={}\nover_fullscreen={}\nclipboard_history={}\nicon_style={}\nicon_tint={}\naccent={}\nmac_shortcuts={}\ndownloads_stack={}\nrecent_apps={}\nicon_pack={}\nmenubar_material={}\nicon_variant={}\nmin_effect={}\nnotch_idle={}\ngreet_name={}\ngreet_text={}\nlyrics_compact={}\nlyrics_online={}\nnotch_downloads={}\nnotch_send={}\nui_scale={}\nnotch_island={}\nwidget_style={}\nbattery_pct={}\nrail={}\nnotch_scale={}\nisland_gap={}\nupdate_check={}\nnotch_glow={}\npill_devices={}\npill_notices={}\npill_reminders={}\ntodo_hotkey={}\n",
             self.takeover,
             self.dock.key(),
             self.notch.key(),
@@ -692,7 +710,13 @@ impl Settings {
             self.battery_pct,
             self.rail.key(),
             self.notch_scale,
-            self.island_gap
+            self.island_gap,
+            self.update_check,
+            self.notch_glow,
+            self.pill_devices,
+            self.pill_notices,
+            self.pill_reminders,
+            self.todo_hotkey
         )
     }
 }
@@ -980,5 +1004,9 @@ menubar_material=true
         assert_eq!((r.rail, r.notch_scale, r.island_gap), (Behavior::Smart, 120, 18));
         assert_eq!((Settings::parse("notch_scale=300").notch_scale, Settings::parse("island_gap=99").island_gap), (130, 40));
         assert_eq!((Settings::default().rail, Settings::default().notch_scale, Settings::default().island_gap), (Behavior::Fixed, 100, 7));
+        let d = Settings::default();
+        assert_eq!((d.update_check, d.notch_glow, d.pill_devices, d.pill_notices, d.pill_reminders, d.todo_hotkey), (true, true, true, false, true, true));
+        let f = Settings::parse(&Settings::parse("update_check=0\nnotch_glow=0\npill_devices=0\npill_notices=1\npill_reminders=0\ntodo_hotkey=0\n").serialize());
+        assert_eq!((f.update_check, f.notch_glow, f.pill_devices, f.pill_notices, f.pill_reminders, f.todo_hotkey), (false, false, false, true, false, false));
     }
 }
