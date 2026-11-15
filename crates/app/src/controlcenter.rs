@@ -156,6 +156,7 @@ struct Cc {
     intro_items: Vec<(ContainerVisual, Vector3, u32)>,
     closing: bool,
     pending_remove: Option<Kind>,
+    pick_up: Option<usize>,
 }
 
 const T_CLOSE: usize = 1;
@@ -206,6 +207,7 @@ pub fn init(comp: &Compositor) -> windows_core::Result<()> {
                 intro_items: Vec::new(),
                 closing: false,
                 pending_remove: None,
+                pick_up: None,
             })
         });
     }
@@ -233,12 +235,20 @@ pub fn close() {
 }
 
 pub fn test_open_picker() {
-    with(|c| {
-        let i = c.panel.as_ref().and_then(|p| p.mods.iter().position(|m| m.placed.kind == Kind::Wifi));
-        if let Some(i) = i {
-            c.open_picker(i);
+    let target = with(|c| {
+        let p = c.panel.as_ref()?;
+        let m = p.mods.iter().find(|m| m.placed.kind == Kind::Wifi)?;
+        let (x, y) = ((m.rect.0 + m.rect.2 * 0.8 + pad()) as i32, (m.rect.1 + m.rect.3 / 2.0 + pad()) as i32);
+        Some((p.popup.hwnd.0 as isize, ((y as u32) << 16 | (x as u32 & 0xFFFF)) as isize))
+    })
+    .flatten();
+    if let Some((h, lp)) = target {
+        unsafe {
+            let h = HWND(h as *mut _);
+            let _ = PostMessageW(Some(h), WM_LBUTTONDOWN, WPARAM(1), LPARAM(lp));
+            let _ = PostMessageW(Some(h), WM_LBUTTONUP, WPARAM(0), LPARAM(lp));
         }
-    });
+    }
 }
 
 pub fn test_enter_edit() {
@@ -1254,7 +1264,7 @@ impl Cc {
         };
         let small = m.placed.w == 1 && m.placed.h == 1;
         match kind {
-            Kind::Wifi | Kind::Bluetooth if !small && btn != Some(BTN_DISC) => self.open_picker(i),
+            Kind::Wifi | Kind::Bluetooth if !small && btn != Some(BTN_DISC) => self.pick_up = Some(i),
             Kind::Wifi => send(RadioCmd::Set(RK::Wifi, !(self.wifi == Some(true))), self),
             Kind::Bluetooth => send(RadioCmd::Set(RK::Bluetooth, !(self.bt == Some(true))), self),
             Kind::NowPlaying => {
@@ -1627,6 +1637,7 @@ unsafe extern "system" fn panel_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARA
         WM_LBUTTONDOWN => {
             let (x, y) = pxy(lp);
             with(|c| {
+                c.pick_up = None;
                 if c.closing {
                     return;
                 }
@@ -1745,6 +1756,11 @@ unsafe extern "system" fn panel_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARA
                 if c.panel.as_ref().is_some_and(|p| p.resize.is_some()) {
                     let _ = ReleaseCapture();
                     c.end_resize();
+                }
+                if let Some(i) = c.pick_up.take() {
+                    if !c.closing && c.panel.as_ref().and_then(|p| p.mods.get(i)).is_some_and(|m| hit(m.rect, x, y)) {
+                        c.open_picker(i);
+                    }
                 }
             });
             LRESULT(0)

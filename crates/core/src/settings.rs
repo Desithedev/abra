@@ -326,21 +326,21 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             takeover: true,
-            dock: Behavior::Fixed,
+            dock: Behavior::Smart,
             notch: Behavior::Fixed,
-            blur: 60,
+            blur: 100,
             style: BlurStyle::Clear,
             transparency: 50,
             theme: Theme::Auto,
             lang: Lang::Id,
             dock_material: Material::Glass,
-            dock_round: 50,
+            dock_round: 62,
             notch_material: Material::Black,
-            notch_round: 50,
+            notch_round: 60,
             autostart: false,
             dock_size: 48,
-            dock_gap: 14,
-            dock_zoom: 200,
+            dock_gap: 8,
+            dock_zoom: 184,
             dock_margin: 8,
             anim: true,
             refraction: true,
@@ -348,16 +348,16 @@ impl Default for Settings {
             notch_enabled: true,
             notch_hover_open: true,
             win_shadow: true,
-            menubar: false,
-            clock_24h: true,
+            menubar: true,
+            clock_24h: false,
             menubar_glass: false,
-            menubar_material: false,
-            menubar_style: BarStyle::Light,
+            menubar_material: true,
+            menubar_style: BarStyle::Dark,
             hot: [HotAction::None; 4],
             stage: false,
             switcher: true,
             stage_right: false,
-            stage_size: 170,
+            stage_size: 152,
             stage_gap: 20,
             stage_count: 6,
             stage_speed: 100,
@@ -372,7 +372,7 @@ impl Default for Settings {
             icon_style: IconStyle::Default,
             icon_tint: 0,
             accent: 0,
-            icon_variant: 0,
+            icon_variant: 1,
             min_effect: 0,
             notch_idle: 0,
             greet_name: ShortText::EMPTY,
@@ -388,7 +388,7 @@ impl Default for Settings {
             ui_scale: 100,
             notch_island: false,
             widget_style: 0,
-            battery_pct: 1,
+            battery_pct: 2,
         }
     }
 }
@@ -824,9 +824,10 @@ menubar_style=glass
     }
 
     #[test]
-    fn defaults_are_full_takeover() {
+    fn defaults_show_rail_visor_and_dock() {
         let d = Settings::default();
-        assert!(d.takeover && d.dock.reserves() && d.notch.reserves());
+        assert!(d.takeover && d.menubar && d.notch_enabled && d.dock_enabled && d.notch.reserves());
+        assert_eq!((d.dock, d.menubar_style, d.autostart), (Behavior::Smart, BarStyle::Dark, false));
     }
 
     #[test]
@@ -842,7 +843,7 @@ dock_margin=900");
         let s = Settings::parse("\u{feff}blur=999\ntransparency=-5\ndock=banana\nwat\ntheme=gelap\n#x=1");
         assert_eq!(s.blur, 100);
         assert_eq!(s.transparency, 0);
-        assert_eq!(s.dock, Behavior::Fixed);
+        assert_eq!(s.dock, Behavior::Smart);
         assert_eq!(s.theme, Theme::Dark);
     }
 
@@ -940,8 +941,8 @@ menubar_material=true
     fn look_responds_to_controls() {
         let mut s = Settings::default();
         let base = look(&s, true, Material::Glass);
-        s.blur = 100;
-        assert!(look(&s, true, Material::Glass).blur_sigma > base.blur_sigma);
+        s.blur = 20;
+        assert!(look(&s, true, Material::Glass).blur_sigma < base.blur_sigma);
         s = Settings::default();
         s.transparency = 100;
         assert!(look(&s, true, Material::Glass).tint[0] < base.tint[0]);
@@ -962,6 +963,6 @@ menubar_material=true
         assert_eq!(Settings::default().ui_scale, 100);
         assert_eq!(Settings::parse(&Settings::parse("battery_pct=2").serialize()).battery_pct, 2);
         assert_eq!(Settings::parse("battery_pct=9").battery_pct, 2);
-        assert_eq!(Settings::default().battery_pct, 1);
+        assert_eq!(Settings::default().battery_pct, 2);
     }
 }

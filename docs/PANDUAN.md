@@ -39,7 +39,7 @@ Administrator; ABRA dipasang untuk pengguna Anda saja.
 > Berkas ABRA belum ditandatangani secara digital, jadi Windows SmartScreen mungkin menampilkan "Windows protected your PC".
 > Pilih **More info → Run anyway** bila Anda memang mengunduhnya dari halaman resmi proyek.
 
-Begitu `abra.exe` dijalankan, taskbar bawaan Windows disembunyikan dan Deck muncul di bawah layar.
+Begitu `abra.exe` dijalankan, taskbar bawaan Windows disembunyikan lalu Rail, Visor, dan Deck muncul. Deck bersembunyi sampai kursor dibawa ke tepi bawah layar.
 
 - **Keluar:** klik kanan ikon di Deck atau ikon ABRA di area tray → **Keluar dari ABRA**. Taskbar dipulihkan otomatis.
 - **Bila ABRA mati mendadak:** `abra-guard.exe` otomatis memulihkan taskbar (dan jendela yang sedang diparkir Scene). Bila
@@ -160,7 +160,7 @@ Lirik tanpa cap waktu hanya tampil di kartu Lirik. Baris lirik di Visor tertutup
 
 ## 4. Rail
 
-Aktifkan di Pengaturan → Umum → **Aktifkan Rail**.
+Rail aktif secara bawaan. Matikan atau nyalakan di Pengaturan → Umum → **Aktifkan Rail**.
 
 **Sisi kiri**
 - **Logo bulat ABRA:** Tentang PC Ini, Pengaturan Sistem, Microsoft Store, Pengaturan ABRA, Aplikasi, Overview, Paksa Keluar
@@ -183,7 +183,7 @@ Anda bisa memasukkan sandinya.
 > menu tetap berfungsi dalam mode terbatas: status tersambung, tombol **Nyalakan Lokasi…**, dan **Jaringan Lain…** (daftar
 > jaringan Windows). ABRA tidak membaca atau menyimpan lokasi Anda.
 
-**Latar Rail** (Pengaturan → Rail): **Transparan** (bawaan, tanpa latar), **Terang** (putih rata), **Gelap** (hitam rata), atau **Material** (strip yang memakai material global, mis. Blur: kabut tebal; teksnya mengikuti tema).
+**Latar Rail** (Pengaturan → Rail): **Transparan** (tanpa latar), **Terang** (putih rata), **Gelap** (hitam rata), atau **Material** (bawaan; strip yang memakai material global, mis. Blur: kabut tebal; teksnya mengikuti tema).
 Warna teks menyesuaikan wallpaper atau warna latar. Tema terang/gelap tidak mengubah Rail.
 
 **Nama app di kiri** mengikuti jendela yang terakhir Anda klik dengan mouse (juga saat jendela itu tidak berpindah fokus), dan jendela

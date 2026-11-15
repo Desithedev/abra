@@ -1693,7 +1693,9 @@ impl Notch {
                 }
             }
             T_MINUTE => {
-                if self.look.view == View::Compact(state::Activity::Glance) {
+                if sys::battery() != self.battery {
+                    self.on_power();
+                } else if self.look.view == View::Compact(state::Activity::Glance) {
                     self.render();
                 }
                 timer(self.hwnd, T_MINUTE, nacre_platform::time::ms_to_next_minute());

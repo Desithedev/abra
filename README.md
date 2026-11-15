@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <img alt="Windows 11" src="https://img.shields.io/badge/Windows-11-0078D4?logo=windows11&logoColor=white">
+  <a href="https://github-release-stats.ghostbyte.dev/abdeealfarizi/abra"><img alt="Total downloads" src="https://img.shields.io/github/downloads/abdeealfarizi/abra/total?label=downloads&color=brightgreen"></a>  <img alt="Windows 11" src="https://img.shields.io/badge/Windows-11-0078D4?logo=windows11&logoColor=white">
   <img alt="Rust" src="https://img.shields.io/badge/Made%20with-Rust-orange?logo=rust">
   <img alt="License" src="https://img.shields.io/badge/License-PolyForm%20Noncommercial-blue">
   <img alt="Telemetry" src="https://img.shields.io/badge/data%20collected-none-success">
@@ -54,7 +54,14 @@ It is one small native program: no Electron, no web view, no background services
   <img src="assets/screenshots/desktop.png" alt="ABRA desktop: Deck, Rail, Visor and widgets" width="900">
 </p>
 
-### 🆕 New in 0.4.0
+### 🆕 New in 0.4.1
+
+- **New look out of the box**: a fresh install now starts with the Rail, Visor and Deck together, with an auto‑hiding
+  Deck. Settings you already changed are kept.
+- **Fixes**: the Visor battery percentage keeps updating instead of freezing after the first reading, and the Wi‑Fi and
+  Bluetooth controls in the Quick Panel open their menus again instead of closing straight away.
+
+### In 0.4.0
 
 - **Desktop widgets**: Clock, World Clock, Today, Month, Digital Clock, Battery and System Monitor, in the **Original** or
   **Crystal** material. Add them from a widget gallery; they snap to a tidy grid with a placeholder while you drag.
@@ -111,12 +118,12 @@ Download from the **[Releases](https://github.com/abdeealfarizi/abra/releases)**
 
 | File | Best for |
 |---|---|
-| `ABRA-Setup-0.4.0.exe` | Most people. Per‑user install, **no administrator rights**, optional Start menu shortcut and “launch at sign‑in”, clean uninstall from *Windows Settings → Apps*. |
-| `ABRA-0.4.0-win-x64.zip` | Portable. Extract anywhere and keep `abra.exe`, `abra-guard.exe` and the `fonts` folder **together**. |
+| `ABRA-Setup-0.4.1.exe` | Most people. Per‑user install, **no administrator rights**, optional Start menu shortcut and “launch at sign‑in”, clean uninstall from *Windows Settings → Apps*. |
+| `ABRA-0.4.1-win-x64.zip` | Portable. Extract anywhere and keep `abra.exe`, `abra-guard.exe` and the `fonts` folder **together**. |
 
 ### Installer
 
-1. Run `ABRA-Setup-0.4.0.exe`.
+1. Run `ABRA-Setup-0.4.1.exe`.
 2. Windows SmartScreen may warn about an unsigned app: choose **More info → Run anyway** (only for files from this repository).
 3. Pick the options you want (Start menu shortcut, launch at sign‑in) and finish. ABRA starts.
 
@@ -127,13 +134,14 @@ Download from the **[Releases](https://github.com/abdeealfarizi/abra/releases)**
 
 ### First run
 
-- The Windows taskbar hides and the Deck appears (turn this off in *Settings → General* if you prefer your taskbar).
+- The Windows taskbar hides and the Rail, Visor and Deck appear. The Deck hides itself until you move the pointer to the
+  bottom of the screen (turn the takeover off in *Settings → General* if you prefer your taskbar).
 - Open **Settings**: right‑click the Deck → **ABRA Settings…**, or click the logo in the Rail.
 - Language: *Settings → General → Language* (**English** or **Indonesia**).
 
-### Updating from 0.3.0
+### Updating from an older version
 
-Install 0.4.0 over the old version. Your settings, pinned apps and Quick Panel layout are kept.
+Install 0.4.1 over the old version. Your settings, pinned apps and Quick Panel layout are kept.
 
 ### Quit and uninstall
 
@@ -388,11 +396,11 @@ You get `abra.exe` and `abra-guard.exe` in `target\release\`.
 cargo test --workspace
 
 winget install JRSoftware.InnoSetup                            # once
-powershell -File installer\build-installer.ps1 -Version 0.4.0
+powershell -File installer\build-installer.ps1 -Version 0.4.1
 ```
 
 The release script rebuilds ABRA with local paths stripped, **refuses to continue** if a binary still contains your user
-name or a local path, and writes `dist\ABRA-Setup-0.4.0.exe` and `dist\ABRA-0.4.0-win-x64.zip`.
+name or a local path, and writes `dist\ABRA-Setup-0.4.1.exe` and `dist\ABRA-0.4.1-win-x64.zip`.
 
 ### 4. Safe experiments
 
