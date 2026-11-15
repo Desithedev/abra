@@ -1,4 +1,3 @@
-//! Waktu lokal dan bunyi sistem.
 use windows::Win32::System::Diagnostics::Debug::MessageBeep;
 use windows::Win32::System::SystemInformation::GetLocalTime;
 use windows::Win32::UI::WindowsAndMessaging::MB_ICONASTERISK;
@@ -25,13 +24,11 @@ pub fn local_now() -> Local {
     }
 }
 
-/// Milidetik sampai menit berikutnya (jam hanya bangun sekali per menit).
 pub fn ms_to_next_minute() -> u32 {
     let n = local_now();
     ((60 - n.second) * 1000).max(500)
 }
 
-/// Bunyi pemberitahuan sistem (dipakai saat timer selesai).
 pub fn chime() {
     unsafe {
         let _ = MessageBeep(MB_ICONASTERISK);

@@ -1,21 +1,15 @@
-//! Membaca menu klasik (HMENU) milik jendela app lain agar bisa ditampilkan di menu bar ABRA.
-//! Hanya app Win32 klasik yang punya HMENU; app modern (Chrome, Electron, UWP) mengembalikan `None`.
-
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 #[derive(Clone, Debug)]
 pub struct Entry {
-    /// Id perintah (WM_COMMAND). 0 untuk pemisah.
     pub id: u32,
     pub label: String,
     pub accel: String,
     pub enabled: bool,
     pub checked: bool,
     pub separator: bool,
-    /// Tingkat bersarang (0 = langsung di bawah judul); submenu diratakan dengan penjorokan.
     pub depth: u8,
-    /// Judul submenu (tidak bisa dipilih).
     pub header: bool,
 }
 
@@ -26,7 +20,6 @@ pub struct Top {
 }
 
 fn clean(s: &str) -> String {
-    // buang mnemonic '&' (tetapi "&&" tetap satu '&')
     let mut out = String::new();
     let mut it = s.chars().peekable();
     while let Some(c) = it.next() {
@@ -93,7 +86,6 @@ unsafe fn collect(m: HMENU, depth: u8, out: &mut Vec<Entry>) {
     }
 }
 
-/// Menu klasik jendela `hwnd`, atau `None` bila tidak punya.
 pub fn read(hwnd: isize) -> Option<Vec<Top>> {
     unsafe {
         let h = HWND(hwnd as *mut _);
@@ -125,7 +117,6 @@ pub fn read(hwnd: isize) -> Option<Vec<Top>> {
     }
 }
 
-/// Jalankan perintah menu pada jendela pemilik.
 pub fn invoke(hwnd: isize, id: u32) {
     unsafe {
         let _ = PostMessageW(Some(HWND(hwnd as *mut _)), WM_COMMAND, WPARAM(id as usize & 0xFFFF), LPARAM(0));

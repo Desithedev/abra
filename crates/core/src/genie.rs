@@ -1,8 +1,3 @@
-//! Geometri efek minimize "Genie" ala macOS: jendela dipotong menjadi irisan horizontal; tiap irisan menempuh jalur
-//! dari posisinya di jendela ke posisinya di ikon dock. Irisan bawah berangkat lebih dulu dan lebarnya menyempit lebih
-//! cepat daripada turunnya, sehingga sisi-sisi jendela membentuk corong berbentuk S yang mengalir ke ikon.
-//! Murni dan diuji; animasinya dijalankan compositor di `fx.rs`.
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rect {
     pub x: f32,
@@ -11,9 +6,7 @@ pub struct Rect {
     pub h: f32,
 }
 
-/// Seberapa jauh irisan atas tertinggal dari irisan bawah (0 = bersamaan).
 const LAG: f32 = 0.72;
-/// Lebar menyempit lebih cepat daripada irisan turun: leher corong terbentuk dulu, isi lalu mengalir masuk.
 const NECK: f32 = 1.55;
 
 fn smooth(x: f32) -> f32 {
@@ -30,44 +23,34 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
 
-/// Kemajuan irisan ke-`i` (dari `n`, 0 = paling atas) pada parameter genie `tau` (0 = jendela utuh, 1 = di ikon).
 pub fn progress(i: usize, n: usize, tau: f32) -> f32 {
     let v = (i as f32 + 0.5) / n.max(1) as f32;
     ((tau * (1.0 + LAG) - LAG * (1.0 - v)) / 1.0).clamp(0.0, 1.0)
 }
 
-/// Posisi kiri-atas dan skala (sx, sy) irisan ke-`i` relatif terhadap ukuran irisan asli (`win.w` × `win.h / n`).
 pub fn slice(i: usize, n: usize, tau: f32, win: Rect, icon: Rect) -> ((f32, f32), (f32, f32)) {
     let n = n.max(1);
     let sh = win.h / n as f32;
-    // posisi atas irisan j: turun lambat-cepat-lambat dari baris asalnya ke baris yang sama di dalam ikon
     let y_of = |j: usize| -> f32 {
         let down = smoother(progress(j, n, tau));
         lerp(win.y + j as f32 * sh, icon.y + j as f32 * icon.h / n as f32, down)
     };
     let s = progress(i, n, tau);
     let y = y_of(i);
-    // Tinggi irisan = sampai irisan berikutnya: irisan bawah bergerak lebih cepat, jadi isinya ikut meregang alih-alih
-    // meninggalkan celah (garis-garis) di antara irisan.
     let y_next = if i + 1 < n { y_of(i + 1) } else { y + lerp(sh, icon.h / n as f32, smoother(s)) };
     let row_h = (y_next - y).max(0.0);
-    // menyempit: lebih cepat, membentuk leher corong
     let k = smooth(s * NECK);
     let width = lerp(win.w, icon.w, k).max(1.0);
     let cx = lerp(win.x + win.w / 2.0, icon.x + icon.w / 2.0, k);
-    // +1,5 px tinggi agar sambungan antar irisan tidak pernah tampak
     ((cx - width / 2.0, y), (width / win.w.max(1.0), ((row_h + 1.5) / sh.max(0.001)).max(0.001)))
 }
 
-/// Parameter genie pada waktu `t` (0..1): minimize memakai lambat-cepat-lambat, restore dibalik dengan awal cepat
-/// lalu mengendap seperti macOS.
 pub fn tau_at(t: f32, restore: bool) -> f32 {
     let t = t.clamp(0.0, 1.0);
     if restore {
         let r = 1.0 - (1.0 - t).powi(3);
         1.0 - smoother(r)
     } else {
-        // awal cukup tegas (bukan datar) lalu mengendap saat masuk ikon
         smooth(t)
     }
 }
@@ -136,7 +119,6 @@ mod tests {
         assert!((tau_at(1.0, false) - 1.0).abs() < 1e-6);
         assert!((tau_at(0.0, true) - 1.0).abs() < 1e-6);
         assert!(tau_at(1.0, true).abs() < 1e-6);
-        // restore: separuh jalan sudah lewat jauh sebelum setengah waktu (awal cepat)
         assert!(tau_at(0.35, true) < 0.5);
     }
 }

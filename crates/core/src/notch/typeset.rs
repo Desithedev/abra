@@ -1,8 +1,3 @@
-//! Pembantu tata letak teks lirik: pemenggalan baris berdasarkan lebar terukur, dan blur kotak untuk baris lirik yang
-//! sedang tidak dinyanyikan (redup dan sedikit buram, sehingga baris aktif menonjol).
-
-/// Penggal `text` menjadi paling banyak `max_lines` baris yang lebarnya ≤ `max` menurut `measure`. Kata yang terlalu
-/// panjang dibiarkan utuh di barisnya sendiri; sisa kata setelah baris terakhir diberi "…".
 pub fn wrap(text: &str, max: f32, max_lines: usize, measure: impl Fn(&str) -> f32) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     let mut cur = String::new();
@@ -33,7 +28,6 @@ pub fn wrap(text: &str, max: f32, max_lines: usize, measure: impl Fn(&str) -> f3
     lines
 }
 
-/// Blur kotak dua lintasan (horizontal lalu vertikal) dengan radius `r` px pada BGRA ter-premultiply `w`×`h`.
 pub fn box_blur(bgra: &mut [u8], w: usize, h: usize, r: usize) {
     if r == 0 || w == 0 || h == 0 || bgra.len() < w * h * 4 {
         return;
@@ -45,7 +39,6 @@ pub fn box_blur(bgra: &mut [u8], w: usize, h: usize, r: usize) {
                 let at = |k: usize| src[(l * stride + k * step) * 4 + c] as u32;
                 let mut acc: u32 = 0;
                 let win = (2 * r + 1) as u32;
-                // jendela awal berpusat di 0 (tepi dianggap 0)
                 for k in 0..=r.min(len - 1) {
                     acc += at(k);
                 }

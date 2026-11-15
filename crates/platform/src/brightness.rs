@@ -1,13 +1,8 @@
-//! Kecerahan panel internal lewat WMI (`root\WMI`): baca/atur, plus langganan event agar perubahan dari
-//! tombol keras terlihat tanpa polling. Hanya ada pada perangkat dengan panel yang mendukung (laptop).
-//! Monitor eksternal (DDC/CI) belum didukung.
-
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use wmi::{COMLibrary, WMIConnection};
 
-/// −1 = tidak tersedia/belum dibaca, 0..100 = persen.
 static LEVEL: AtomicI32 = AtomicI32::new(-1);
 
 pub fn latest() -> Option<u8> {
@@ -102,7 +97,6 @@ pub fn spawn(notify: impl Fn() + Send + Sync + 'static) -> Brightness {
     let (tx, rx) = channel::<Cmd>();
     let notify: std::sync::Arc<dyn Fn() + Send + Sync> = std::sync::Arc::new(notify);
 
-    // Pekerja perintah + pembacaan awal.
     let n1 = notify.clone();
     std::thread::spawn(move || {
         let Ok(com) = COMLibrary::new() else { return };
@@ -138,7 +132,6 @@ pub fn spawn(notify: impl Fn() + Send + Sync + 'static) -> Brightness {
         }
     });
 
-    // Pendengar event (memblokir sampai ada kejadian): perubahan dari tombol keras/aplikasi lain.
     let n2 = notify;
     std::thread::spawn(move || {
         let Ok(com) = COMLibrary::new() else { return };

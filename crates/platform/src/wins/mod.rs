@@ -1,4 +1,4 @@
-﻿pub mod enumerate;
+pub mod enumerate;
 pub mod focus;
 pub mod identity;
 pub mod names;
@@ -7,5 +7,3 @@ pub mod park;
 pub mod snapshot;
 pub mod thumbnail;
 pub mod tracker;
-
-

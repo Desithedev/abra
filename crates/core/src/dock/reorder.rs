@@ -1,12 +1,7 @@
-﻿//! Urutan ulang pin lewat drag.
-
-/// Posisi sisip untuk kursor di `x`: banyaknya pusat slot yang berada di kirinya.
 pub fn target_index(centers: &[f32], x: f32) -> usize {
     centers.iter().filter(|c| **c < x).count()
 }
 
-/// Pindahkan elemen `from` sehingga berada pada indeks `to` (indeks tujuan dihitung sebelum pencabutan,
-/// seperti hasil `target_index`). Mengembalikan `true` bila urutan berubah.
 pub fn move_to<T>(v: &mut Vec<T>, from: usize, to: usize) -> bool {
     if from >= v.len() {
         return false;

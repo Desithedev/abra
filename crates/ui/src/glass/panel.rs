@@ -1,26 +1,26 @@
-use super::effect_graph::{backdrop_blur_brush, backdrop_refract_brush};
+use super::effect_graph::backdrop_blur_brush;
+use std::cell::Cell;
 use windows::UI::Color;
 use windows::UI::Composition::{
-    CompositionBrush, CompositionClip, CompositionColorBrush, CompositionRoundedRectangleGeometry, ContainerVisual, Compositor, ShapeVisual,
-    SpriteVisual,
+    CompositionBrush, CompositionClip, CompositionColorBrush, CompositionLinearGradientBrush, CompositionRoundedRectangleGeometry, CompositionSpriteShape,
+    ContainerVisual, Compositor, ShapeVisual, SpriteVisual,
 };
 use windows_core::{Interface, Result};
 use windows_numerics::{Vector2, Vector3};
 
-/// Kekuatan tepi kanan-bawah relatif terhadap kiri-atas: kilau tepi Tahoe terlihat di dua sisi.
 const RIM_BOTTOM: f32 = 0.8;
-/// Kekuatan tepi di pita tengah (sudut kanan-atas/kiri-bawah). Cukup tinggi agar garis tepi tetap menyambung di bentuk
-/// lebar-pendek (kapsul, slider), yang dengan pemetaan gradien relatif hampir seluruh tepinya jatuh di pita ini.
 const RIM_MID: f32 = 0.42;
 
-/// Tingkat material, dari paling mahal ke paling murah. Perpindahan hanya menukar kuas.
+const LQ_RING: f32 = 0.3;
+const LQ_BOTTOM: f32 = 0.45;
+const FRINGE_A: u8 = 70;
+const FRINGE_PX: f32 = 26.0;
+const FRINGE_INSET: f32 = 1.5;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tier {
-    /// Blur penuh + saturasi + sorotan.
     Full,
-    /// Blur kecil (lebih murah di GPU lemah).
     Light,
-    /// Tanpa blur: kuas translusen statis. Untuk transparansi dimatikan, Battery Saver, sesi jarak jauh.
     Solid,
 }
 
@@ -32,10 +32,9 @@ pub struct GlassParams {
     pub saturation: f32,
     pub tint: Color,
     pub rim: Color,
-    /// Dasar untuk Tier::Solid (tidak ada blur yang menutupi isi di belakang).
     pub solid: Color,
-    /// 0..1: kekuatan sorotan spekular (0 = permukaan rata, mis. notch hitam utuh).
     pub highlight: f32,
+    pub liquify: bool,
 }
 
 impl GlassParams {
@@ -49,6 +48,7 @@ impl GlassParams {
             rim: Color { A: 140, R: 255, G: 255, B: 255 },
             solid: Color { A: 215, R: 226, G: 228, B: 236 },
             highlight: 1.0,
+            liquify: false,
         }
     }
 
@@ -62,20 +62,19 @@ impl GlassParams {
     }
 }
 
-/// Panel kaca yang ukuran dan posisinya bisa diubah setiap saat.
-/// Lapisan: blur backdrop → tint → sorotan spekular (kiri-atas) → tepi 1 px bergradien,
-/// semuanya di-clip rounded-rect beranti-alias.
 pub struct GlassPanel {
     comp: Compositor,
-    p: GlassParams,
-    tier: Tier,
+    p: Cell<GlassParams>,
+    tier: Cell<Tier>,
     glass: SpriteVisual,
     tint: SpriteVisual,
     tint_brush: CompositionColorBrush,
-    rim_stops: windows::UI::Composition::CompositionColorGradientStopCollection,
-    /// Peta distorsi + geser maksimum (px) bila refraksi tepi aktif.
-    refr: Option<(CompositionBrush, f32)>,
-    refr_size: (u32, u32),
+    rim_brush: CompositionLinearGradientBrush,
+    rim_shape: CompositionSpriteShape,
+    rim_wh: Cell<(f32, f32)>,
+    fringe_brush: CompositionLinearGradientBrush,
+    fringe_geo: CompositionRoundedRectangleGeometry,
+    fringe_off: Cell<bool>,
     spec: SpriteVisual,
     rim: ShapeVisual,
     clip_geo: CompositionRoundedRectangleGeometry,
@@ -98,7 +97,6 @@ impl GlassPanel {
         tint.SetBrush(&tint_brush)?;
         tint.SetClip(&clip)?;
 
-        // Sorotan: putih lembut dari sudut kiri-atas yang memudar diagonal, meniru cahaya yang jatuh di kaca.
         let spec = comp.CreateSpriteVisual()?;
         let sg = comp.CreateLinearGradientBrush()?;
         sg.SetStartPoint(Vector2 { X: 0.0, Y: 0.0 })?;
@@ -109,25 +107,24 @@ impl GlassPanel {
         spec.SetBrush(&sg)?;
         spec.SetClip(&clip)?;
 
-        // Tepi: terang di atas, redup di bawah.
         let rim_geo = comp.CreateRoundedRectangleGeometry()?;
         rim_geo.SetOffset(Vector2 { X: 0.5, Y: 0.5 })?;
         rim_geo.SetCornerRadius(Vector2 { X: (p.radius - 0.5).max(0.0), Y: (p.radius - 0.5).max(0.0) })?;
         let rim_shape = comp.CreateSpriteShapeWithGeometry(&rim_geo)?;
-        let rg = comp.CreateLinearGradientBrush()?;
-        rg.SetStartPoint(Vector2 { X: 0.0, Y: 0.0 })?;
-        rg.SetEndPoint(Vector2 { X: 1.0, Y: 1.0 })?;
-        let rs = rg.ColorStops()?;
-        let rim_stops = rs.clone();
-        let top = p.rim;
-        let mid = Color { A: (p.rim.A as f32 * RIM_MID) as u8, ..p.rim };
-        let bottom = Color { A: (p.rim.A as f32 * RIM_BOTTOM) as u8, ..p.rim };
-        rs.Append(&comp.CreateColorGradientStopWithOffsetAndColor(0.0, top)?)?;
-        rs.Append(&comp.CreateColorGradientStopWithOffsetAndColor(0.5, mid)?)?;
-        rs.Append(&comp.CreateColorGradientStopWithOffsetAndColor(1.0, bottom)?)?;
-        rim_shape.SetStrokeBrush(&rg)?;
+        let rim_brush = comp.CreateLinearGradientBrush()?;
+        rim_shape.SetStrokeBrush(&rim_brush)?;
         rim_shape.SetStrokeThickness(1.5)?;
+        let fringe_geo = comp.CreateRoundedRectangleGeometry()?;
+        fringe_geo.SetOffset(Vector2 { X: FRINGE_INSET, Y: FRINGE_INSET })?;
+        fringe_geo.SetCornerRadius(Vector2 { X: (p.radius - FRINGE_INSET).max(0.0), Y: (p.radius - FRINGE_INSET).max(0.0) })?;
+        let fringe_shape = comp.CreateSpriteShapeWithGeometry(&fringe_geo)?;
+        let fringe_brush = comp.CreateLinearGradientBrush()?;
+        fringe_brush.SetStartPoint(Vector2 { X: 0.0, Y: 0.0 })?;
+        fringe_brush.SetEndPoint(Vector2 { X: 1.0, Y: 0.0 })?;
+        fringe_shape.SetStrokeBrush(&fringe_brush)?;
+        fringe_shape.SetStrokeThickness(2.0)?;
         let rim = comp.CreateShapeVisual()?;
+        rim.Shapes()?.Append(&fringe_shape)?;
         rim.Shapes()?.Append(&rim_shape)?;
 
         let kids = parent.Children()?;
@@ -136,90 +133,119 @@ impl GlassPanel {
         kids.InsertAtTop(&spec)?;
         kids.InsertAtTop(&rim)?;
 
-        let mut panel = GlassPanel { comp: comp.clone(), p, tier: Tier::Solid, glass, tint, tint_brush, rim_stops, refr: None, refr_size: (0, 0), spec, rim, clip_geo, rim_geo };
+        let panel = GlassPanel {
+            comp: comp.clone(),
+            p: Cell::new(p),
+            tier: Cell::new(Tier::Solid),
+            glass,
+            tint,
+            tint_brush,
+            rim_brush,
+            rim_shape,
+            rim_wh: Cell::new(p.size),
+            fringe_brush,
+            fringe_geo,
+            fringe_off: Cell::new(false),
+            spec,
+            rim,
+            clip_geo,
+            rim_geo,
+        };
+        panel.paint_rim(p.size.0, p.size.1)?;
         panel.set_tier(Tier::Full)?;
         panel.set_rect(0.0, 0.0, p.size.0, p.size.1)?;
         Ok(panel)
     }
 
     pub fn tier(&self) -> Tier {
-        self.tier
+        self.tier.get()
     }
 
-    /// Tukar material. Murah: hanya mengganti kuas dan opasitas lapisan.
-    pub fn set_tier(&mut self, tier: Tier) -> Result<()> {
-        if tier == self.tier && self.glass.Brush().is_ok() {
+    pub fn set_tier(&self, tier: Tier) -> Result<()> {
+        if tier == self.tier.get() && self.glass.Brush().is_ok() {
             return Ok(());
         }
         self.apply_tier(tier)
     }
 
-    /// Ganti parameter material (blur, saturasi, tint, tepi, dasar solid) saat jalan, mis. dari Pengaturan.
-    pub fn set_params(&mut self, p: GlassParams) -> Result<()> {
-        self.p.blur_sigma = p.blur_sigma;
-        self.p.saturation = p.saturation;
-        self.p.tint = p.tint;
-        self.p.rim = p.rim;
-        self.p.solid = p.solid;
-        self.p.highlight = p.highlight;
+    pub fn set_params(&self, p: GlassParams) -> Result<()> {
+        let mut cur = self.p.get();
+        cur.blur_sigma = p.blur_sigma;
+        cur.saturation = p.saturation;
+        cur.tint = p.tint;
+        cur.rim = p.rim;
+        cur.solid = p.solid;
+        cur.highlight = p.highlight;
+        cur.liquify = p.liquify;
+        self.p.set(cur);
         self.tint_brush.SetColor(p.tint)?;
-        self.rim_stops.GetAt(0)?.SetColor(p.rim)?;
-        self.rim_stops.GetAt(1)?.SetColor(Color { A: (p.rim.A as f32 * RIM_MID) as u8, ..p.rim })?;
-        self.rim_stops.GetAt(2)?.SetColor(Color { A: (p.rim.A as f32 * RIM_BOTTOM) as u8, ..p.rim })?;
-        let t = self.tier;
-        self.apply_tier(t)
+        let (w, h) = self.rim_wh.get();
+        self.paint_rim(w, h)?;
+        self.apply_tier(self.tier.get())
     }
 
-    /// Aktifkan refraksi tepi untuk panel berukuran `w`×`h` px (melewati bila ukuran hampir sama dengan peta saat ini).
-    /// `band`: tebal pita (px), `strength`: geser maksimum (px). `None` mematikannya.
-    pub fn set_refraction(&mut self, gfx: &crate::gfx::Gfx, size: Option<(u32, u32, f32, f32, f32)>) -> Result<()> {
-        let Some((w, h, radius, band, strength)) = size else {
-            if self.refr.take().is_some() {
-                self.refr_size = (0, 0);
-                let t = self.tier;
-                self.apply_tier(t)?;
-            }
-            return Ok(());
-        };
-        let (w, h) = (w.clamp(16, 4096), h.clamp(16, 1024));
-        if self.refr.is_some() && (w as i32 - self.refr_size.0 as i32).abs() < 3 && (h as i32 - self.refr_size.1 as i32).abs() < 3 {
-            return Ok(());
+    fn paint_rim(&self, w: f32, h: f32) -> Result<()> {
+        let p = self.p.get();
+        self.rim_wh.set((w, h));
+        self.paint_fringe(w)?;
+        let stops = self.rim_brush.ColorStops()?;
+        stops.Clear()?;
+        let with = |k: f32| Color { A: (p.rim.A as f32 * k).round().clamp(0.0, 255.0) as u8, ..p.rim };
+        if p.liquify {
+            let h = h.max(4.0);
+            let t = ((p.radius * 0.45 + 2.0) / h).clamp(0.02, 0.45);
+            let b = (2.5 / h).clamp(0.01, 0.3);
+            self.rim_brush.SetStartPoint(Vector2 { X: 0.0, Y: 0.0 })?;
+            self.rim_brush.SetEndPoint(Vector2 { X: 0.0, Y: 1.0 })?;
+            stops.Append(&self.comp.CreateColorGradientStopWithOffsetAndColor(0.0, p.rim)?)?;
+            stops.Append(&self.comp.CreateColorGradientStopWithOffsetAndColor(t, with(LQ_RING))?)?;
+            stops.Append(&self.comp.CreateColorGradientStopWithOffsetAndColor((1.0 - b).max(t), with(LQ_RING))?)?;
+            stops.Append(&self.comp.CreateColorGradientStopWithOffsetAndColor(1.0, with(LQ_BOTTOM))?)?;
+            self.rim_shape.SetStrokeThickness(1.0)?;
+        } else {
+            self.rim_brush.SetStartPoint(Vector2 { X: 0.0, Y: 0.0 })?;
+            self.rim_brush.SetEndPoint(Vector2 { X: 1.0, Y: 1.0 })?;
+            stops.Append(&self.comp.CreateColorGradientStopWithOffsetAndColor(0.0, p.rim)?)?;
+            stops.Append(&self.comp.CreateColorGradientStopWithOffsetAndColor(0.5, with(RIM_MID))?)?;
+            stops.Append(&self.comp.CreateColorGradientStopWithOffsetAndColor(1.0, with(RIM_BOTTOM))?)?;
+            self.rim_shape.SetStrokeThickness(1.5)?;
         }
-        let data = super::refract::displacement_map(w, h, radius, band);
-        let surface = gfx.surface_from_bgra(w, h, &data)?;
-        let brush = self.comp.CreateSurfaceBrushWithSurface(&surface)?;
-        brush.SetStretch(windows::UI::Composition::CompositionStretch::Fill)?;
-        // Tanpa interpolasi kasar: peta halus agar pita tidak bergerigi.
-        let _ = brush.SetBitmapInterpolationMode(windows::UI::Composition::CompositionBitmapInterpolationMode::Linear);
-        self.refr = Some((brush.cast()?, strength));
-        self.refr_size = (w, h);
-        let t = self.tier;
-        self.apply_tier(t)
-    }
-
-    fn apply_tier(&mut self, tier: Tier) -> Result<()> {
-        let effect = match tier {
-            Tier::Full => Some(match &self.refr {
-                Some((map, k)) => backdrop_refract_brush(&self.comp, self.p.blur_sigma, self.p.saturation, map, *k),
-                None => backdrop_blur_brush(&self.comp, self.p.blur_sigma, self.p.saturation),
-            }),
-            Tier::Light => Some(backdrop_blur_brush(&self.comp, self.p.blur_sigma * 0.4, self.p.saturation * 0.8)),
-            Tier::Solid => None,
-        };
-        // Bila efek blur gagal dibuat, jangan menjatuhkan seluruh dock/notch: pakai kuas solid.
-        let (brush, tier): (CompositionBrush, Tier) = match effect {
-            Some(Ok(b)) => (b.cast()?, tier),
-            _ => (self.comp.CreateColorBrushWithColor(self.p.solid)?.cast()?, Tier::Solid),
-        };
-        self.glass.SetBrush(&brush)?;
-        // Tanpa blur tint sudah menyatu dengan dasar; jangan menumpuk dua kali.
-        self.tint.SetOpacity(if tier == Tier::Solid { 0.0 } else { 1.0 })?;
-        self.spec.SetOpacity(self.p.highlight * if tier == Tier::Solid { 0.5 } else { 1.0 })?;
-        self.tier = tier;
         Ok(())
     }
 
-    /// Pindahkan/ubah ukuran/radius dengan spring di compositor (nol CPU di proses kita selama animasi).
+    fn paint_fringe(&self, w: f32) -> Result<()> {
+        let stops = self.fringe_brush.ColorStops()?;
+        stops.Clear()?;
+        if !self.p.get().liquify || self.fringe_off.get() {
+            return Ok(());
+        }
+        let f = (FRINGE_PX / w.max(1.0)).clamp(0.02, 0.45);
+        let red = Color { A: FRINGE_A, R: 255, G: 64, B: 96 };
+        let blue = Color { A: FRINGE_A, R: 64, G: 150, B: 255 };
+        for (o, c) in [(0.0, red), (f, Color { A: 0, ..red }), (1.0 - f, Color { A: 0, ..blue }), (1.0, blue)] {
+            stops.Append(&self.comp.CreateColorGradientStopWithOffsetAndColor(o, c)?)?;
+        }
+        Ok(())
+    }
+
+    fn apply_tier(&self, tier: Tier) -> Result<()> {
+        let p = self.p.get();
+        let effect = match tier {
+            Tier::Full => Some(backdrop_blur_brush(&self.comp, p.blur_sigma, p.saturation)),
+            Tier::Light => Some(backdrop_blur_brush(&self.comp, p.blur_sigma * 0.4, p.saturation * 0.8)),
+            Tier::Solid => None,
+        };
+        let (brush, tier): (CompositionBrush, Tier) = match effect {
+            Some(Ok(b)) => (b.cast()?, tier),
+            _ => (self.comp.CreateColorBrushWithColor(p.solid)?.cast()?, Tier::Solid),
+        };
+        self.glass.SetBrush(&brush)?;
+        self.tint.SetOpacity(if tier == Tier::Solid { 0.0 } else { 1.0 })?;
+        self.spec.SetOpacity(p.highlight * if tier == Tier::Solid { 0.5 } else { 1.0 })?;
+        self.tier.set(tier);
+        Ok(())
+    }
+
     pub fn animate_rect(&self, x: f32, y: f32, w: f32, h: f32, radius: f32, ratio: f32, period_ms: u32) -> Result<()> {
         use windows::Foundation::{PropertyValue, TimeSpan};
         use windows::UI::Composition::CompositionObject;
@@ -254,12 +280,17 @@ impl GlassPanel {
         go(&r, "Size.Y", h - 1.0)?;
         go(&r, "CornerRadius.X", (radius - 0.5).max(0.0))?;
         go(&r, "CornerRadius.Y", (radius - 0.5).max(0.0))?;
-        Ok(())
+        let f: CompositionObject = self.fringe_geo.cast()?;
+        go(&f, "Size.X", w - 2.0 * FRINGE_INSET)?;
+        go(&f, "Size.Y", h - 2.0 * FRINGE_INSET)?;
+        go(&f, "CornerRadius.X", (radius - FRINGE_INSET).max(0.0))?;
+        go(&f, "CornerRadius.Y", (radius - FRINGE_INSET).max(0.0))?;
+        let mut p = self.p.get();
+        p.radius = radius;
+        self.p.set(p);
+        self.paint_rim(w, h)
     }
 
-    /// Ikat posisi-x dan lebar panel ke ekspresi compositor (mis. mengikuti lebar dock yang berubah saat
-    /// magnifikasi) sehingga tidak perlu pembaruan per-gerakan dari proses kita. `make` membuat animasi ekspresi
-    /// lengkap dengan parameter acuannya.
     pub fn bind_x_width(
         &self,
         make: &dyn Fn(&str) -> Result<windows::UI::Composition::ExpressionAnimation>,
@@ -270,6 +301,7 @@ impl GlassPanel {
         use windows_core::HSTRING;
         let (x, w) = (make(x_expr)?, make(w_expr)?);
         let rim_w = make(&format!("({w_expr}) - 1"))?;
+        let fringe_w = make(&format!("({w_expr}) - {}", 2.0 * FRINGE_INSET))?;
         for v in [&self.glass, &self.tint, &self.spec] {
             let o: CompositionObject = v.cast()?;
             o.StartAnimation(&HSTRING::from("Offset.X"), &x)?;
@@ -282,12 +314,28 @@ impl GlassPanel {
         g.StartAnimation(&HSTRING::from("Size.X"), &w)?;
         let r: CompositionObject = self.rim_geo.cast()?;
         r.StartAnimation(&HSTRING::from("Size.X"), &rim_w)?;
+        let f: CompositionObject = self.fringe_geo.cast()?;
+        f.StartAnimation(&HSTRING::from("Size.X"), &fringe_w)?;
         Ok(())
+    }
+
+    pub fn set_fringe(&self, on: bool) -> Result<()> {
+        self.fringe_off.set(!on);
+        let (w, _) = self.rim_wh.get();
+        self.paint_fringe(w)
     }
 
     pub fn set_radius(&self, r: f32) -> Result<()> {
         self.clip_geo.SetCornerRadius(Vector2 { X: r, Y: r })?;
         self.rim_geo.SetCornerRadius(Vector2 { X: (r - 0.5).max(0.0), Y: (r - 0.5).max(0.0) })?;
+        self.fringe_geo.SetCornerRadius(Vector2 { X: (r - FRINGE_INSET).max(0.0), Y: (r - FRINGE_INSET).max(0.0) })?;
+        let mut p = self.p.get();
+        if (p.radius - r).abs() > 0.5 {
+            p.radius = r;
+            self.p.set(p);
+            let (w, h) = self.rim_wh.get();
+            self.paint_rim(w, h)?;
+        }
         Ok(())
     }
 
@@ -302,14 +350,16 @@ impl GlassPanel {
         self.rim.SetOffset(at)?;
         self.clip_geo.SetSize(size)?;
         self.rim_geo.SetSize(Vector2 { X: (w - 1.0).max(0.0), Y: (h - 1.0).max(0.0) })?;
+        self.fringe_geo.SetSize(Vector2 { X: (w - 2.0 * FRINGE_INSET).max(0.0), Y: (h - 2.0 * FRINGE_INSET).max(0.0) })?;
+        let (ow, oh) = self.rim_wh.get();
+        if self.p.get().liquify && ((h - oh).abs() > 0.5 || (w - ow).abs() > 0.5) {
+            self.paint_rim(w, h)?;
+        }
         Ok(())
     }
 }
 
-/// Pembungkus ringkas untuk panel tetap.
 pub fn add_panel(comp: &Compositor, parent: &ContainerVisual, p: GlassParams) -> Result<()> {
     GlassPanel::new(comp, parent, p)?;
     Ok(())
 }
-
-

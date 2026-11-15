@@ -1,6 +1,3 @@
-//! Acara kalender Windows (akun yang tersinkron ke Kalender/Outlook Windows) untuk kartu kalender di notch.
-//! Hanya membaca judul dan jam mulai acara pada satu tanggal saat kartu itu terlihat; tidak ada yang disimpan atau dikirim.
-
 use std::sync::mpsc::{channel, Receiver, Sender};
 use windows::ApplicationModel::Appointments::{AppointmentManager, AppointmentProperties, AppointmentStore, AppointmentStoreAccessType, FindAppointmentsOptions};
 use windows::Foundation::{DateTime, TimeSpan};
@@ -13,17 +10,14 @@ pub type Date = (i32, u32, u32);
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Event {
     pub title: String,
-    /// Menit sejak tengah malam (waktu lokal); `None` = sepanjang hari.
     pub minute: Option<u32>,
 }
 
 pub struct Agenda {
     pub requests: Sender<Date>,
-    /// (tanggal, acara); `None` = kalender Windows tidak bisa dibaca.
     pub answers: Receiver<(Date, Option<Vec<Event>>)>,
 }
 
-/// Tengah malam lokal tanggal `d` sebagai DateTime WinRT (UTC, satuan 100 ns sejak 1601).
 fn local_midnight(d: Date) -> Option<DateTime> {
     unsafe {
         let local = SYSTEMTIME { wYear: d.0 as u16, wMonth: d.1 as u16, wDay: d.2 as u16, ..Default::default() };
@@ -35,7 +29,6 @@ fn local_midnight(d: Date) -> Option<DateTime> {
     }
 }
 
-/// DateTime WinRT → (tanggal lokal, menit sejak tengah malam).
 fn to_local(t: DateTime) -> Option<(Date, u32)> {
     unsafe {
         let v = t.UniversalTime as u64;
@@ -63,7 +56,6 @@ fn read(store: &AppointmentStore, d: Date) -> Option<Vec<Event>> {
     for a in list {
         let title = a.Subject().map(|s| s.to_string()).unwrap_or_default();
         let all_day = a.AllDay().unwrap_or(false);
-        // acara yang mulai sebelum hari ini (berlangsung beberapa hari) dihitung sepanjang hari
         let minute = match a.StartTime().ok().and_then(to_local) {
             Some((date, m)) if date == d && !all_day => Some(m),
             _ => None,
@@ -74,7 +66,6 @@ fn read(store: &AppointmentStore, d: Date) -> Option<Vec<Event>> {
     Some(out)
 }
 
-/// Acara palsu untuk uji tampilan (`NACRE_FAKE_CAL=1`): satu acara hari ini, kosong di hari lain.
 fn fake(d: Date, today: Date) -> Option<Vec<Event>> {
     Some(if d == today { vec![Event { title: "Rapat Uji".into(), minute: Some(14 * 60 + 30) }, Event { title: "Olahraga Uji".into(), minute: Some(18 * 60) }] } else { vec![] })
 }
@@ -92,7 +83,6 @@ pub fn spawn(notify: impl Fn() + Send + 'static) -> Agenda {
             crate::log::line("kalender", if store.is_some() { "kalender Windows terbaca" } else { "kalender Windows tidak tersedia" });
         }
         while let Ok(mut d) = req_rx.recv() {
-            // permintaan yang menumpuk (klik beruntun): jawab yang terakhir saja
             while let Ok(n) = req_rx.try_recv() {
                 d = n;
             }

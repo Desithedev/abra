@@ -1,5 +1,3 @@
-//! Logika murni Nacre: tanpa Win32, bisa diuji di mana saja.
-
 pub mod appcat;
 pub mod controls;
 pub mod dock;
@@ -23,5 +21,4 @@ pub mod stage;
 pub mod symbols;
 pub mod trash;
 pub mod visibility;
-
-
+pub mod widgets;

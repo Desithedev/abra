@@ -1,5 +1,3 @@
-//! Kategori aplikasi untuk jendela "Aplikasi" (pengganti Launchpad): tebakan dari nama/jalur, murni dan diuji.
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cat {
     Productivity,
@@ -12,7 +10,6 @@ pub enum Cat {
 pub const ALL: [Cat; 5] = [Cat::Productivity, Cat::Creative, Cat::Entertainment, Cat::Utility, Cat::System];
 
 impl Cat {
-    /// Judul (kunci terjemahan Indonesia).
     pub fn title(self) -> &'static str {
         match self {
             Cat::Productivity => "Produktivitas",
@@ -45,7 +42,6 @@ fn has(name: &str, list: &[&str]) -> bool {
     list.iter().any(|k| name.contains(k))
 }
 
-/// Tebak kategori dari nama dan jalur (huruf kecil dibandingkan). Urutan: sistem, kreatif, hiburan, produktivitas; sisanya utilitas.
 pub fn guess(name: &str, path: &str) -> Cat {
     let n = name.to_lowercase();
     let p = path.to_lowercase().replace(char::from(92u8), "/");

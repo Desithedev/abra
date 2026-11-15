@@ -1,10 +1,5 @@
-﻿//! "Telinga" cekung yang menyatukan notch dengan tepi atas layar (seperti notch).
-//! Dibuat sebagai bitmap kecil beranti-alias (supersampling), bukan geometri path, agar tidak butuh Win2D.
-
 use nacre_platform::icons::Bitmap;
 
-/// Persegi `e`Ã—`e` berisi warna `rgb` (alfa `alpha`) di luar seperempat lingkaran berjari-jari `e`.
-/// `left`: telinga di kiri panel (pusat lingkaran di kiri-bawah persegi); kalau tidak, cermin.
 pub fn bitmap(e: u32, rgb: (u8, u8, u8), alpha: u8, left: bool) -> Bitmap {
     let n = e as usize;
     let mut bgra = vec![0u8; n * n * 4];
@@ -28,7 +23,6 @@ pub fn bitmap(e: u32, rgb: (u8, u8, u8), alpha: u8, left: bool) -> Bitmap {
             let cov = hit as f32 / (SS * SS) as f32;
             let a = alpha as f32 / 255.0 * cov;
             let o = (y * n + x) * 4;
-            // ter-premultiply
             bgra[o] = (rgb.2 as f32 * a).round() as u8;
             bgra[o + 1] = (rgb.1 as f32 * a).round() as u8;
             bgra[o + 2] = (rgb.0 as f32 * a).round() as u8;
@@ -76,4 +70,3 @@ mod tests {
         }
     }
 }
-

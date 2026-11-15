@@ -1,8 +1,3 @@
-//! Server HTTP lokal sementara untuk "Kirim ke HP": HP memindai QR lalu mengunduh berkas lewat browser.
-//! - Hanya mendengarkan di alamat IPv4 privat milik laptop (Wi-Fi/LAN), port acak, path rahasia `/<token>/`.
-//! - Hanya melayani berkas yang ditaruh pengguna; selain itu 404. Tanpa internet, tanpa server luar.
-//! - Berhenti saat `Server` di-drop (Selesai, batas waktu, atau ABRA ditutup).
-
 use nacre_core::notch::send::{ascii_name, is_private, page, pct, token, url};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
@@ -13,12 +8,9 @@ use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Progress {
-    /// Byte unik terkirim (bagian terjauh tiap berkas) dan total semua berkas.
     pub sent: u64,
     pub total: u64,
-    /// Berkas yang sudah terkirim utuh.
     pub files_done: usize,
-    /// Ada transfer yang sedang berjalan.
     pub active: bool,
 }
 
@@ -32,12 +24,10 @@ pub struct Server {
 impl Drop for Server {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        // bangunkan accept() yang sedang menunggu
         let _ = TcpStream::connect_timeout(&self.addr, Duration::from_millis(300));
     }
 }
 
-/// Alamat IPv4 laptop di jaringan lokal: rute ke luar dipilih lewat `connect` UDP (tidak ada paket yang dikirim).
 fn lan_ip() -> Option<Ipv4Addr> {
     let s = UdpSocket::bind("0.0.0.0:0").ok()?;
     s.connect("8.8.8.8:80").ok()?;
@@ -56,7 +46,7 @@ fn random10() -> [u8; 10] {
 }
 
 struct Shared {
-    files: Vec<(String, String, u64)>, // (path, nama, ukuran)
+    files: Vec<(String, String, u64)>,
     reached: Mutex<Vec<u64>>,
     active: Mutex<usize>,
     tx: Mutex<Sender<Progress>>,
@@ -99,7 +89,6 @@ fn serve(mut s: TcpStream, tok: &str, sh: &Shared, en: bool) {
     if r.read_line(&mut line).is_err() {
         return;
     }
-    // lewati header
     loop {
         let mut h = String::new();
         match r.read_line(&mut h) {
@@ -160,7 +149,6 @@ fn serve(mut s: TcpStream, tok: &str, sh: &Shared, en: bool) {
     sh.report(true);
 }
 
-/// Mulai sesi untuk `paths`. Gagal bila laptop tidak di jaringan lokal (teks alasannya untuk log).
 pub fn start(paths: &[String], en: bool, notify: impl Fn() + Send + Sync + 'static) -> Result<Server, String> {
     let files: Vec<(String, String, u64)> = paths
         .iter()
@@ -173,7 +161,6 @@ pub fn start(paths: &[String], en: bool, notify: impl Fn() + Send + Sync + 'stat
     if files.is_empty() {
         return Err("tidak ada berkas (folder belum didukung)".into());
     }
-    // khusus uji otomatis: hanya 127.0.0.1 (tanpa dialog Windows Firewall, tak terjangkau perangkat lain)
     let ip = if std::env::var_os("NACRE_SEND_LOOPBACK").is_some() { Ipv4Addr::LOCALHOST } else { lan_ip().ok_or("tidak tersambung ke jaringan lokal")? };
     let listener = TcpListener::bind((ip, 0)).map_err(|e| e.to_string())?;
     let addr = listener.local_addr().map_err(|e| e.to_string())?;
@@ -190,7 +177,6 @@ pub fn start(paths: &[String], en: bool, notify: impl Fn() + Send + Sync + 'stat
                 break;
             }
             let Ok(c) = conn else { continue };
-            // hanya perangkat di jaringan lokal
             let ok = matches!(c.peer_addr(), Ok(SocketAddr::V4(a)) if is_private(a.ip().octets()) || a.ip().is_loopback());
             if !ok {
                 continue;

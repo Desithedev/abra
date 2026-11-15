@@ -1,6 +1,3 @@
-//! Notch diam "sapaan & info": isi pil berganti pelan antara sapaan, jam, tanggal, dan baterai. Tiap item = ikon di kiri
-//! dan nilainya di kanan. Murni: jam dan bahasa dioper dari luar.
-
 use crate::i18n::Lang;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -11,10 +8,8 @@ pub enum Item {
     Battery,
 }
 
-/// Selang pergantian item (ms).
 pub const ROTATE_MS: u32 = 9000;
 
-/// Item yang ditampilkan, berurutan. Baterai hanya bila perangkat punya baterai.
 pub fn items(has_battery: bool) -> Vec<Item> {
     let mut v = vec![Item::Greeting, Item::Clock, Item::Date];
     if has_battery {
@@ -23,7 +18,6 @@ pub fn items(has_battery: bool) -> Vec<Item> {
     v
 }
 
-/// Indeks berikutnya (melingkar).
 pub fn next(i: usize, n: usize) -> usize {
     if n == 0 {
         0
@@ -40,7 +34,6 @@ pub enum Daypart {
     Night,
 }
 
-/// Bagian hari dari jam lokal: pagi 04–10, siang 11–14, sore 15–17, malam 18–03.
 pub fn daypart(hour: u32) -> Daypart {
     match hour % 24 {
         4..=10 => Daypart::Morning,
@@ -62,7 +55,6 @@ pub fn greeting(hour: u32, lang: Lang) -> &'static str {
     }
 }
 
-/// Teks sapaan: teks kustom dipakai apa adanya; kosong → sapaan menurut jam + nama (nama kosong → sapaan saja).
 pub fn greeting_text(custom: &str, name: &str, hour: u32, lang: Lang) -> String {
     let custom = custom.trim();
     if !custom.is_empty() {
@@ -77,7 +69,6 @@ pub fn greeting_text(custom: &str, name: &str, hour: u32, lang: Lang) -> String 
     }
 }
 
-/// Jam "22.41" (Indonesia, 24 jam), "22:41" (Inggris 24 jam), atau "10:41 PM" (12 jam).
 pub fn clock(hour: u32, minute: u32, h24: bool, lang: Lang) -> String {
     if h24 {
         let sep = if lang == Lang::Id { '.' } else { ':' };

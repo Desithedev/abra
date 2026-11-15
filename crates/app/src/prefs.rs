@@ -1,6 +1,3 @@
-//! Hub pengaturan ABRA: satu salinan `Settings` untuk seluruh proses, disimpan ke `settings.cfg`,
-//! dan setiap perubahan disiarkan (`WM_PREFS`) ke window yang mendaftar (dock, island, HUD, Settings).
-
 use crate::paths;
 use nacre_core::settings::{self, Look, Settings};
 use nacre_platform::{log, sys};
@@ -39,12 +36,10 @@ pub fn unlisten(h: HWND) {
     LISTENERS.lock().unwrap().retain(|x| *x != h.0 as isize);
 }
 
-/// Ubah pengaturan, simpan, lalu siarkan. Tidak melakukan apa pun bila tidak ada perubahan.
 pub fn update(f: impl FnOnce(&mut Settings)) {
     update_with(true, f);
 }
 
-/// Seperti `update`, tetapi `save=false` hanya menyiarkan (untuk drag slider; simpan saat dilepas).
 pub fn update_with(save: bool, f: impl FnOnce(&mut Settings)) {
     let before = get();
     let mut s = before;
@@ -74,17 +69,12 @@ pub fn broadcast() {
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Role {
-    /// Bar dock: material dan tema pilihan pengguna.
     Dock,
-    /// Notch/island: material pilihan (bawaan hitam).
     Notch,
-    /// Jendela Settings: kaca mengikuti tema.
     Themed,
-    /// Popup, HUD: kaca gelap (teksnya putih) tetapi blur/transparansi/gaya mengikuti pengaturan.
     Dark,
 }
 
-/// Tampilan latar menu bar (kaca/terang/gelap sesuai pengaturan).
 pub fn bar_look() -> Look {
     settings::bar_look(&get(), sys::apps_dark())
 }
@@ -95,7 +85,6 @@ pub fn look(role: Role) -> Look {
     match role {
         Role::Dock => settings::look(&s, dark_sys, s.dock_material),
         Role::Notch => {
-            // Teks island putih: notch selalu varian gelap; materialnya (Liquid Glass atau Hitam buram) dipilih sendiri di Tampilan.
             s.theme = settings::Theme::Dark;
             settings::look(&s, dark_sys, s.notch_material)
         }
@@ -111,12 +100,14 @@ fn c(a: [u8; 4]) -> Color {
     Color { A: a[0], R: a[1], G: a[2], B: a[3] }
 }
 
-/// Terapkan `Look` ke parameter kaca (ukuran dan radius dipertahankan dari `base`).
 pub fn apply(base: GlassParams, l: &Look) -> GlassParams {
-    GlassParams { blur_sigma: l.blur_sigma, saturation: l.saturation, tint: c(l.tint), rim: c(l.rim), solid: c(l.solid), highlight: l.highlight, ..base }
+    GlassParams { blur_sigma: l.blur_sigma, saturation: l.saturation, tint: c(l.tint), rim: c(l.rim), solid: c(l.solid), highlight: l.highlight, liquify: l.liquify, ..base }
 }
 
-/// Faktor skala radius sudut untuk permukaan (dock/notch) dari pengaturan.
+pub fn ui_scale() -> f32 {
+    get().ui_scale.clamp(75, 200) as f32 / 100.0
+}
+
 pub fn round(role: Role) -> f32 {
     let s = get();
     settings::round_factor(if role == Role::Notch { s.notch_round } else { s.dock_round })
@@ -126,7 +117,6 @@ pub fn glass(size: (f32, f32), radius: f32, role: Role) -> GlassParams {
     apply(GlassParams::dark(size, radius), &look(role))
 }
 
-/// Terjemahkan teks sumber (Indonesia) ke bahasa pilihan.
 pub fn tr(src: &'static str) -> &'static str {
     let lang = get().lang;
     if lang == nacre_core::i18n::Lang::En && !nacre_core::i18n::is_known(src) {
@@ -135,7 +125,6 @@ pub fn tr(src: &'static str) -> &'static str {
     nacre_core::i18n::tr(lang, src)
 }
 
-/// Catat sekali ke log teks yang belum punya terjemahan Inggris (agar tidak ada teks Indonesia yang bocor).
 fn note_missing(src: &'static str) {
     static SEEN: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
     let mut g = SEEN.lock().unwrap_or_else(|e| e.into_inner());
@@ -145,7 +134,6 @@ fn note_missing(src: &'static str) {
     }
 }
 
-/// Warna aksen sistem terpilih (RGB).
 pub fn accent() -> [u8; 3] {
     let a = get().accent;
     if a == settings::ACCENT_MULTI {
@@ -154,7 +142,6 @@ pub fn accent() -> [u8; 3] {
     settings::ACCENTS[(a as usize).min(settings::ACCENTS.len() - 1)]
 }
 
-/// Apakah gaya ikon memakai varian gelap: Terang/Gelap dipaksa, Otomatis mengikuti tema.
 pub fn icon_dark() -> bool {
     match get().icon_variant {
         1 => false,
@@ -163,7 +150,6 @@ pub fn icon_dark() -> bool {
     }
 }
 
-/// Warna aksen dengan alfa `a`.
 pub fn accent_c(a: u8) -> Color {
     let c = accent();
     Color { A: a, R: c[0], G: c[1], B: c[2] }

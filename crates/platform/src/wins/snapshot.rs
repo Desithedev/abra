@@ -1,6 +1,3 @@
-//! Efek jendela: menonaktifkan transisi DWM bawaan satu jendela (agar kita yang menganimasikan) dan
-//! menangkap isinya (PrintWindow, termasuk konten GPU) sebagai bitmap BGRA ter-premultiply.
-
 use crate::icons::Bitmap;
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DwmSetWindowAttribute, DWMWINDOWATTRIBUTE};
@@ -15,8 +12,6 @@ use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, IsIconic, IsWindowV
 const DWMWA_TRANSITIONS_FORCEDISABLED: i32 = 3;
 const DWMWA_EXTENDED_FRAME_BOUNDS: i32 = 9;
 
-/// Matikan/nyalakan lagi transisi DWM (animasi minimize/restore/close bawaan) untuk satu jendela.
-/// Berhasil lintas proses (diuji); gagal diam-diam bila jendela lebih tinggi hak aksesnya.
 pub fn set_transitions_disabled(hwnd: isize, disabled: bool) -> bool {
     let v: i32 = disabled as i32;
     unsafe {
@@ -25,12 +20,10 @@ pub fn set_transitions_disabled(hwnd: isize, disabled: bool) -> bool {
 }
 
 pub struct Shot {
-    /// Persegi bingkai terlihat di layar (tanpa bayangan tak terlihat), piksel layar.
     pub rect: (i32, i32, i32, i32),
     pub bmp: Bitmap,
 }
 
-/// Rect bingkai terlihat jendela (px layar), atau rect biasa bila DWM tak menjawab.
 pub fn frame_rect(hwnd: isize) -> Option<(i32, i32, i32, i32)> {
     unsafe {
         let h = HWND(hwnd as *mut _);
@@ -42,8 +35,6 @@ pub fn frame_rect(hwnd: isize) -> Option<(i32, i32, i32, i32)> {
     }
 }
 
-/// Tangkap isi jendela. `shrink`: pembagi skala (1 = penuh, 2 = setengah) untuk menghemat memori.
-/// `None` bila jendela tersembunyi/diminimalkan atau tangkapan gagal.
 pub fn capture(hwnd: isize, shrink: u32) -> Option<Shot> {
     unsafe {
         let h = HWND(hwnd as *mut _);
@@ -57,7 +48,6 @@ pub fn capture(hwnd: isize, shrink: u32) -> Option<Shot> {
             return None;
         }
         let (fx, fy, fw, fh) = frame_rect(hwnd)?;
-        // Bingkai terlihat relatif terhadap window rect; jepit agar aman.
         let (cx, cy) = ((fx - wr.left).clamp(0, ww - 1), (fy - wr.top).clamp(0, wh - 1));
         let (cw, ch) = (fw.min(ww - cx), fh.min(wh - cy));
         if cw < 40 || ch < 40 {
@@ -91,11 +81,9 @@ pub fn capture(hwnd: isize, shrink: u32) -> Option<Shot> {
             return None;
         }
         let old = SelectObject(dc, HGDIOBJ(dib.0));
-        let ok = PrintWindow(h, dc, PRINT_WINDOW_FLAGS(2)).as_bool(); // PW_RENDERFULLCONTENT
+        let ok = PrintWindow(h, dc, PRINT_WINDOW_FLAGS(2)).as_bool();
         let src = std::slice::from_raw_parts(bits as *const u8, (ww * wh * 4) as usize);
 
-        // Jendela yang tidak sadar-DPI digambar PrintWindow pada ukuran logisnya (pojok kiri-atas bitmap):
-        // petakan koordinat sumber dengan rasio DPI jendela terhadap DPI sistem.
         let wdpi = GetDpiForWindow(h).max(48) as f32;
         let sdpi = GetDpiForSystem().max(48) as f32;
         let ratio = (wdpi / sdpi).clamp(0.25, 1.0);
@@ -105,7 +93,6 @@ pub fn capture(hwnd: isize, shrink: u32) -> Option<Shot> {
         let radius = (9.0 / s as f32).max(2.0);
         for y in 0..oh {
             for x in 0..ow {
-                // rata-rata blok s×s (kotak sederhana)
                 let (mut b, mut g, mut r) = (0u32, 0u32, 0u32);
                 let mut n = 0u32;
                 for dy in 0..s {
@@ -123,7 +110,6 @@ pub fn capture(hwnd: isize, shrink: u32) -> Option<Shot> {
                 let n = n.max(1);
                 let a = corner_alpha(x as f32 + 0.5, y as f32 + 0.5, ow as f32, oh as f32, radius);
                 let o = ((y * ow + x) * 4) as usize;
-                // ter-premultiply
                 out[o] = (b / n * a as u32 / 255) as u8;
                 out[o + 1] = (g / n * a as u32 / 255) as u8;
                 out[o + 2] = (r / n * a as u32 / 255) as u8;
@@ -140,7 +126,6 @@ pub fn capture(hwnd: isize, shrink: u32) -> Option<Shot> {
     }
 }
 
-/// Alfa 0..255 untuk sudut membulat (anti-alias 1 px). Di luar sudut = 255.
 fn corner_alpha(x: f32, y: f32, w: f32, h: f32, r: f32) -> u8 {
     let dx = if x < r { r - x } else if x > w - r { x - (w - r) } else { 0.0 };
     let dy = if y < r { r - y } else if y > h - r { y - (h - r) } else { 0.0 };

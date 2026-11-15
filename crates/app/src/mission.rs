@@ -1,7 +1,3 @@
-//! Mission Control: semua jendela terbuka ditata dalam grid di atas latar kaca beburam; thumbnail hidup (DWM)
-//! bergerak dari posisi asli jendela ke grid (±240 ms). Klik thumbnail untuk mengaktifkan jendela, Esc atau klik
-//! kosong untuk keluar. Hot key Ctrl+Panah-atas. Dibuat saat dibuka dan dihancurkan saat ditutup.
-
 use crate::popup::Popup;
 use crate::prefs;
 use nacre_core::mission::{grid, Rect};
@@ -136,6 +132,7 @@ pub fn close() {
         unsafe {
             let _ = DestroyWindow(h);
         }
+        nacre_platform::sys::trim_later(5000);
     }
 }
 
@@ -151,7 +148,6 @@ fn create(comp: &Compositor) -> windows_core::Result<Option<Box<Mc>>> {
     popup.panel.set_radius(0.0)?;
     let dst = popup.hwnd.0 as isize;
 
-    // jendela yang terlihat (bukan yang diminimalkan: tidak punya thumbnail hidup)
     let wins: Vec<_> = enumerate::list(std::process::id()).into_iter().filter(|w| !focus::is_minimized(w.hwnd)).collect();
     let mut tiles = Vec::new();
     let mut sizes = Vec::new();
@@ -177,7 +173,7 @@ fn create(comp: &Compositor) -> windows_core::Result<Option<Box<Mc>>> {
     let highlight = comp.CreateSpriteVisual()?;
     highlight.SetOpacity(0.0)?;
     popup.content.Children()?.InsertAtTop(&highlight)?;
-    let gfx = Gfx::new(comp)?;
+    let gfx = Gfx::shared(comp)?;
     Ok(Some(Box::new(Mc { popup, gfx, comp: comp.clone(), dpi, tiles, t0: Instant::now(), done: false, hover: None, highlight, label: None, desks: vec![], plus: None, cur_desk: 0, text_cache: HashMap::new() })))
 }
 
@@ -188,7 +184,7 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
 impl Mc {
     fn step(&mut self) {
         let t = (self.t0.elapsed().as_millis() as f32 / ANIM_MS).clamp(0.0, 1.0);
-        let e = 1.0 - (1.0 - t).powi(3); // ease-out
+        let e = 1.0 - (1.0 - t).powi(3);
         for tile in &self.tiles {
             let (f, to) = (tile.from, tile.to);
             let r = (
@@ -255,7 +251,6 @@ impl Mc {
         let _ = go();
     }
 
-    /// Bar desktop virtual di atas (nama + desktop aktif bergaris biru + tombol "+"), seperti Mission Control Tahoe.
     fn draw_desktops(&mut self) {
         let d = self.dpi;
         let (names, cur) = nacre_platform::vdesk::list();

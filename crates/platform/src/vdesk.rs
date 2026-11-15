@@ -1,5 +1,3 @@
-//! Daftar Virtual Desktop Windows dari registri (nama dan desktop aktif). Hanya baca; berpindah memakai Win+Ctrl+panah.
-
 use windows::core::{w, HSTRING, PCWSTR};
 use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_BINARY, RRF_RT_REG_SZ};
 
@@ -20,7 +18,6 @@ fn binary(subkey: &str, value: PCWSTR) -> Option<Vec<u8>> {
 }
 
 fn guid_text(b: &[u8]) -> String {
-    // GUID mixed-endian: Data1(4 LE) Data2(2 LE) Data3(2 LE) Data4(8)
     format!(
         "{{{:02X}{:02X}{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}}}",
         b[3], b[2], b[1], b[0], b[5], b[4], b[7], b[6], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]
@@ -41,7 +38,6 @@ fn name_of(guid: &str) -> Option<String> {
     }
 }
 
-/// (nama tiap desktop, indeks desktop aktif). Selalu minimal satu desktop.
 pub fn list() -> (Vec<String>, usize) {
     let ids = binary("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\VirtualDesktops", w!("VirtualDesktopIDs")).unwrap_or_default();
     let cur = binary("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\VirtualDesktops", w!("CurrentVirtualDesktop"));

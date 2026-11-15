@@ -1,5 +1,3 @@
-﻿//! Host Composition: DispatcherQueue + Compositor, dibagi semua window.
-
 use windows::System::DispatcherQueueController;
 use windows::UI::Composition::Desktop::DesktopWindowTarget;
 use windows::UI::Composition::{Compositor, ContainerVisual};
@@ -16,14 +14,12 @@ pub struct Host {
     _queue: DispatcherQueueController,
 }
 
-/// Satu window yang dihubungkan ke compositor. Window harus `WS_EX_NOREDIRECTIONBITMAP`.
 pub struct Surface {
     pub target: DesktopWindowTarget,
     pub root: ContainerVisual,
 }
 
 impl Host {
-    /// Harus dipanggil di thread UI sebelum membuat window ber-Composition.
     pub fn new() -> Result<Host> {
         let queue = unsafe {
             CreateDispatcherQueueController(DispatcherQueueOptions {
@@ -40,8 +36,6 @@ impl Host {
     }
 }
 
-/// Hubungkan `hwnd` (harus `WS_EX_NOREDIRECTIONBITMAP`) ke compositor. Bisa dipanggil kapan saja
-/// dengan `Compositor` yang sudah ada, mis. untuk popup yang dibuat belakangan.
 pub fn attach(compositor: &Compositor, hwnd: HWND, size: (f32, f32)) -> Result<Surface> {
     let interop: ICompositorDesktopInterop = compositor.cast()?;
     let target = unsafe { interop.CreateDesktopWindowTarget(hwnd, true)? };
@@ -50,4 +44,3 @@ pub fn attach(compositor: &Compositor, hwnd: HWND, size: (f32, f32)) -> Result<S
     target.SetRoot(&root)?;
     Ok(Surface { target, root })
 }
-

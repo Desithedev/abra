@@ -1,6 +1,3 @@
-//! AppBar: mencadangkan strip layar agar window maksimum tidak menutupi dock (bawah) atau notch (atas).
-//! Windows melepas AppBar otomatis saat window/proses hilang, tetapi kita tetap melepasnya eksplisit.
-
 use std::sync::atomic::{AtomicIsize, Ordering};
 use windows::core::w;
 use windows::Win32::Foundation::{HWND, RECT};
@@ -36,7 +33,6 @@ fn reserve(slot: &AtomicIsize, hwnd: HWND, top_edge: bool, screen_w: i32, screen
             abd.uEdge = ABE_BOTTOM;
             abd.rc = RECT { left: 0, top: screen_h - strip_h, right: screen_w, bottom: screen_h };
             SHAppBarMessage(ABM_QUERYPOS, &mut abd);
-            // Shell boleh mengoreksi sisi lain; tinggi strip tetap milik kita.
             abd.rc.top = abd.rc.bottom - strip_h;
             SHAppBarMessage(ABM_SETPOS, &mut abd);
             Some(abd.rc.top)
@@ -44,13 +40,10 @@ fn reserve(slot: &AtomicIsize, hwnd: HWND, top_edge: bool, screen_w: i32, screen
     }
 }
 
-/// Cadangkan strip setinggi `strip_h` px di dasar monitor `(0,0,w,h)`.
-/// Mengembalikan `top` strip yang disetujui shell, atau `None` bila gagal.
 pub fn reserve_bottom(hwnd: HWND, screen_w: i32, screen_h: i32, strip_h: i32) -> Option<i32> {
     reserve(&BOTTOM, hwnd, false, screen_w, screen_h, strip_h)
 }
 
-/// Cadangkan strip setinggi `strip_h` px di atas monitor (untuk notch tetap). Mengembalikan `bottom` strip.
 pub fn reserve_top(hwnd: HWND, screen_w: i32, strip_h: i32) -> Option<i32> {
     reserve(&TOP, hwnd, true, screen_w, 0, strip_h)
 }
@@ -73,7 +66,6 @@ pub fn release_bottom() {
     remove(&BOTTOM);
 }
 
-/// Lepas semua cadangan (jalur keluar).
 pub fn release() {
     remove(&BOTTOM);
     remove(&TOP);

@@ -1,7 +1,3 @@
-//! Jendela Pengaturan "ABRA": kartu kaca yang dibuka dari klik kanan area kosong dock.
-//! Dibuat saat dibuka dan dihancurkan saat ditutup (tidak memakan RAM saat tidak dipakai).
-//! Seluruh kontrol (toggle, segmented, slider) digambar dengan visual Composition dan hit-test region sendiri.
-
 use crate::popup::Popup;
 use crate::prefs::{self, Role, WM_PREFS};
 use nacre_core::hud::slider;
@@ -18,8 +14,9 @@ use windows::UI::Color;
 use windows::UI::Composition::{CompositionDrawingSurface, CompositionStretch, Compositor, ContainerVisual};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
-use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, SetFocus};
+use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
 use windows::Win32::UI::WindowsAndMessaging::*;
+const WM_MOUSELEAVE: u32 = 0x02A3;
 use windows_core::Interface;
 use windows_numerics::{Vector2, Vector3};
 
@@ -30,12 +27,57 @@ const SIDEBAR_W: f32 = 214.0;
 const CONTENT_X: f32 = SIDEBAR_W + 24.0;
 const CONTENT_W: f32 = W - SIDEBAR_W - 48.0;
 const VIEW_TOP: f32 = 56.0;
+const SIDE_INSET: f32 = 8.0;
+const SIDE_RADIUS: f32 = 18.0;
+
+fn side_glass(mut g: nacre_ui::glass::GlassParams) -> nacre_ui::glass::GlassParams {
+    g.blur_sigma = g.blur_sigma.max(16.0);
+    g
+}
+
+fn round_sdf(px: f32, py: f32, r: (f32, f32, f32, f32), rad: f32) -> f32 {
+    let (cx, cy) = (r.0 + r.2 / 2.0, r.1 + r.3 / 2.0);
+    let rad = rad.min(r.2 / 2.0).min(r.3 / 2.0);
+    let qx = (px - cx).abs() - (r.2 / 2.0 - rad);
+    let qy = (py - cy).abs() - (r.3 / 2.0 - rad);
+    (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt() + qx.max(qy).min(0.0) - rad
+}
+
+fn frame_pixels(w: i32, h: i32, radius: f32, hole: (f32, f32, f32, f32), hole_radius: f32, dark: bool) -> Vec<u8> {
+    let base: [f32; 3] = if dark { [16.0, 16.0, 18.0] } else { [255.0, 255.0, 255.0] };
+    let (edge, edge_a): ([f32; 3], f32) = if dark { ([255.0, 255.0, 255.0], 0.16) } else { ([0.0, 0.0, 0.0], 0.12) };
+    let outer = (0.0, 0.0, w as f32, h as f32);
+    let blur = hole_radius * 1.1;
+    let shade_dy = hole_radius * 0.12;
+    let (tone, peak, inner): ([f32; 3], f32, f32) = if dark { ([255.0, 255.0, 255.0], 0.0, 0.07) } else { ([0.0, 0.0, 0.0], 0.10, 0.05) };
+    let mut out = vec![0u8; (w * h * 4) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+            let d = round_sdf(px, py, outer, radius);
+            let cov = (0.5 - d).clamp(0.0, 1.0);
+            if cov <= 0.0 {
+                continue;
+            }
+            let a = cov;
+            let sd = round_sdf(px, py - shade_dy, hole, hole_radius);
+            let shade = if sd <= 0.0 { inner } else { peak * (1.0 - (sd / blur).clamp(0.0, 1.0)).powi(3) };
+            let ring = (cov - (0.5 - (d + 1.0)).clamp(0.0, 1.0)).clamp(0.0, 1.0) * edge_a;
+            let i = ((y * w + x) * 4) as usize;
+            for c in 0..3 {
+                let shaded = base[c] * (1.0 - shade) + tone[c] * shade;
+                let v = shaded * (1.0 - ring) + edge[c] * ring;
+                out[i + 2 - c] = (v * a).round() as u8;
+            }
+            out[i + 3] = (a * 255.0).round() as u8;
+        }
+    }
+    out
+}
 
 #[derive(Clone, Copy, Debug)]
 enum Action {
-    /// Mulai mengetik di kolom teks (0 nama panggilan, 1 teks sapaan).
     EditText(u8),
-    /// Notch saat diam: 0 sapaan & info, 1 kosong.
     NotchIdle(u8),
     LyricsCompact,
     NotchDownloads,
@@ -60,7 +102,6 @@ enum Action {
     HotCycle(usize),
     StageOn,
     SwitcherOn,
-    /// 1 klik wallpaper, 2 jeda media, 3 judul hover.
     StageFlag(u8),
     StageRight(bool),
     StageIcons(u8),
@@ -84,8 +125,14 @@ enum Action {
     HoverOpen,
     WinShadow,
     Material(bool, Material),
-    /// 0 blur, 1 transparansi; awal x dan lebar lintasan.
     Slider(u8, f32, f32),
+    MenuLogoPick,
+    MenuLogoReset,
+    UiScale(u8),
+    NotchShape(bool),
+    WidgetStyle(u8),
+    WidgetGallery,
+    BatteryPct(u8),
 }
 
 struct Region {
@@ -94,37 +141,26 @@ struct Region {
     w: f32,
     h: f32,
     a: Action,
-    /// Ikut tergulir bersama isi halaman.
     scroll: bool,
 }
 
-/// Satu baris pengaturan dalam kartu grup.
 enum RowDef {
     Toggle(&'static str, bool, Action),
-    /// Label, pilihan (teks, aksi), indeks terpilih.
     Seg(&'static str, Vec<(&'static str, Action)>, usize),
     Slider(&'static str, u8, u8),
-    /// Tombol bernilai (mis. hot corner): label, nilai, aksi.
     Pick(&'static str, String, Action),
-    /// Deretan warna aksen (Multiwarna + 8 warna): label, indeks terpilih (0 = Multiwarna).
     Swatches(&'static str, usize),
-    /// Kartu pratinjau bergambar seperti Pengaturan Tampilan macOS: label, (nama, gambar, aksi), terpilih.
     Thumbs(&'static str, Vec<(&'static str, Thumb, Action)>, usize),
-    /// Radio rata kanan tanpa label (lanjutan baris di atasnya): (nama, aksi), terpilih.
     Radios(Vec<(&'static str, Action)>, usize),
-    /// Kolom teks yang bisa diketik: label, nilai sekarang, teks contoh saat kosong, nomor kolom.
     Text(&'static str, String, String, u8),
 }
 
-/// Gambar kartu pratinjau.
 #[derive(Clone, Copy)]
 enum Thumb {
-    /// 0 Auto, 1 Terang, 2 Gelap.
     Appear(u8),
     Icon(nacre_core::settings::IconStyle),
 }
 
-/// Nama warna aksen (indeks 0 = Multiwarna, lalu urutan `ACCENTS`).
 const ACCENT_NAMES: [&str; 9] = ["Multiwarna", "Biru", "Ungu", "Merah Muda", "Merah", "Oranye", "Kuning", "Hijau", "Grafit"];
 
 fn row_label(r: &RowDef) -> &'static str {
@@ -134,7 +170,6 @@ fn row_label(r: &RowDef) -> &'static str {
     }
 }
 
-/// Halaman donasi (Saweria) pembuat ABRA.
 const DONATE_URL: &str = "https://saweria.co/kreativadev";
 
 fn user_name() -> String {
@@ -150,28 +185,31 @@ struct Win {
     regions: Vec<Region>,
     cache: HashMap<String, (CompositionDrawingSurface, i32, i32)>,
     dragging: Option<(u8, f32, f32)>,
-    /// Titik klik yang sedang ditekan (toggle): pegangan berubah jadi kaca bening selama ditekan.
+    side: Vec<(u8, (f32, f32, f32, f32), ContainerVisual)>,
+    side_hover: Option<u8>,
+    side_scroll: f32,
+    side_view: (f32, f32),
+    side_bar: Option<((f32, f32, f32, f32), f32)>,
+    side_drag: Option<f32>,
     press: Option<(f32, f32)>,
     tab: u8,
     scroll: f32,
     content_h: f32,
-    /// Riwayat halaman untuk tombol ◀ ▶ di bilah judul.
     history: Vec<u8>,
     hpos: usize,
-    /// Kolom cari di sidebar.
     search: String,
     search_focus: bool,
     thumbs: HashMap<String, CompositionDrawingSurface>,
-    /// Kolom teks yang sedang diketik dan isinya (belum disimpan).
     edit: Option<u8>,
     edit_buf: String,
+    frame: Option<windows::UI::Composition::SpriteVisual>,
+    frame_key: (i32, i32, bool),
 }
 
 thread_local! {
     static WIN: RefCell<Option<Box<Win>>> = const { RefCell::new(None) };
 }
 
-/// Buka (atau tampilkan lagi) jendela Pengaturan.
 pub fn open(comp: &Compositor) {
     let existing = WIN.with(|w| w.borrow().as_ref().map(|b| b.popup.hwnd));
     if let Some(h) = existing {
@@ -187,24 +225,24 @@ pub fn open(comp: &Compositor) {
 }
 
 fn create(comp: &Compositor) -> windows_core::Result<()> {
-    let glass = prefs::glass((10.0, 10.0), 24.0, Role::Themed);
+    let glass = side_glass(prefs::glass((10.0, 10.0), SIDE_RADIUS, Role::Themed));
     let mut popup = Popup::new(comp, w!("AbraSettings"), Some(proc), WINDOW_EX_STYLE(0), glass)?;
     let dpi = unsafe { GetDpiForWindow(popup.hwnd) }.max(96) as f32 / 96.0;
-    let gfx = Gfx::new(comp)?;
+    let gfx = Gfx::shared(comp)?;
     let tier = {
         let c = sys::conditions();
         if !c.transparency || c.battery_saver || c.remote_session { nacre_ui::glass::Tier::Solid } else { nacre_ui::glass::Tier::Full }
     };
     let _ = popup.panel.set_tier(tier);
     let _ = popup.panel.set_radius(24.0 * dpi);
-    let mut win = Box::new(Win { popup, gfx, comp: comp.clone(), dpi, size: (0.0, 0.0), regions: vec![], cache: HashMap::new(), dragging: None, press: None, tab: 0, scroll: 0.0, content_h: 0.0, history: vec![0], hpos: 0, search: String::new(), search_focus: false, thumbs: HashMap::new(), edit: None, edit_buf: String::new() });
+    let mut win = Box::new(Win { popup, gfx, comp: comp.clone(), dpi, size: (0.0, 0.0), regions: vec![], cache: HashMap::new(), dragging: None, side: vec![], side_hover: None, side_scroll: 0.0, side_view: (0.0, 0.0), side_bar: None, side_drag: None, press: None, tab: 0, scroll: 0.0, content_h: 0.0, history: vec![0], hpos: 0, search: String::new(), search_focus: false, thumbs: HashMap::new(), edit: None, edit_buf: String::new(), frame: None, frame_key: (0, 0, false) });
     win.render();
     let (sw, sh) = sys::screen_size();
     let (w, h) = (win.size.0 as i32, win.size.1 as i32);
     let top = ((sh - h) / 2).clamp(12, (sh - h - 12).max(12));
     log::line("settings", &format!("layar={sw}x{sh} jendela={w}x{h} atas={top}"));
     win.popup.set_rect((sw - w) / 2, top, w, h)?;
-    let _ = win.popup.panel.set_radius(24.0 * dpi);
+    win.frame();
     win.popup.show();
     prefs::listen(win.popup.hwnd);
     WIN.with(|s| *s.borrow_mut() = Some(win));
@@ -246,7 +284,6 @@ impl Win {
         Some(v)
     }
 
-    /// Teks di (x, y atas); `anchor`: 0 kiri, 1 tengah, 2 kanan. Mengembalikan lebar.
     #[allow(clippy::too_many_arguments)]
     fn text(&mut self, parent: &ContainerVisual, s: &str, x: f32, y: f32, size: f32, weight: i32, rgb: [u8; 3], alpha: f32, anchor: u8) -> f32 {
         let px = (size * self.dpi).round() as i32;
@@ -289,7 +326,6 @@ impl Win {
         let _ = make();
     }
 
-    /// Pegangan kaca bening (slider/toggle saat ditekan): isi putih tembus pandang, tepi 1 px terang, bayangan lembut.
     fn glass_knob(&self, parent: &ContainerVisual, x: f32, y: f32, w: f32, h: f32) {
         let d = self.dpi;
         self.rect(parent, x - 1.0 * d, y + 1.0 * d, w + 2.0 * d, h + 2.0 * d, h / 2.0 + d, Color { A: 46, R: 0, G: 0, B: 0 });
@@ -311,7 +347,6 @@ impl Win {
         let _ = make();
     }
 
-    /// Glyph font ikon (Segoe Fluent) berpusat di (cx, cy).
     fn glyph_icon(&mut self, parent: &ContainerVisual, g: &str, cx: f32, cy: f32, size: f32, rgb: [u8; 3]) {
         let px = (size * self.dpi).round() as i32;
         let b = (size * 1.8 * self.dpi).round() as i32;
@@ -340,7 +375,6 @@ impl Win {
         let _ = make();
     }
 
-    /// Gambar permukaan `s` apa adanya di (x, y) ukuran w×h.
     fn sprite(&self, parent: &ContainerVisual, s: &CompositionDrawingSurface, x: f32, y: f32, w: f32, h: f32) {
         let make = || -> windows_core::Result<()> {
             let b = self.comp.CreateSurfaceBrushWithSurface(s)?;
@@ -354,7 +388,6 @@ impl Win {
         let _ = make();
     }
 
-    /// Permukaan pratinjau dari cache (dibuat sekali per kunci).
     fn thumb_surface(&mut self, key: String, w: u32, h: u32, make: impl FnOnce() -> Vec<u8>) -> Option<CompositionDrawingSurface> {
         if let Some(s) = self.thumbs.get(&key) {
             return Some(s.clone());
@@ -367,7 +400,6 @@ impl Win {
         Some(s)
     }
 
-    /// Pindah ke halaman `t`; `push` mencatatnya di riwayat ◀ ▶.
     fn go(&mut self, t: u8, push: bool) {
         if push && t != self.tab {
             self.history.truncate(self.hpos + 1);
@@ -379,7 +411,6 @@ impl Win {
         self.render();
     }
 
-    /// Halaman cocok dengan kolom cari (judul atau label salah satu barisnya).
     fn page_matches(&self, idx: u8, name: &str) -> bool {
         let q = self.search.trim().to_lowercase();
         if q.is_empty() || name.to_lowercase().contains(&q) {
@@ -392,12 +423,22 @@ impl Win {
         self.regions.push(Region { x, y, w, h, a, scroll: true });
     }
 
-    /// Wilayah tetap (sidebar, tombol tutup): tidak ikut tergulir.
+    fn hover_side(&mut self, hit: Option<u8>) {
+        if hit == self.side_hover {
+            return;
+        }
+        for (page, on) in [(self.side_hover, false), (hit, true)] {
+            let Some((_, r, ic)) = self.side.iter().find(|e| Some(e.0) == page) else { continue };
+            let to = if on { crate::motion::HOVER_ROW } else { 1.0 };
+            let _ = crate::motion::hover_pop(&self.comp, ic, Vector3 { X: r.0 + r.2 / 2.0, Y: r.1 + r.3 / 2.0, Z: 0.0 }, to);
+        }
+        self.side_hover = hit;
+    }
+
     fn region_fixed(&mut self, x: f32, y: f32, w: f32, h: f32, a: Action) {
         self.regions.push(Region { x, y, w, h, a, scroll: false });
     }
 
-    /// (min, maks, satuan) tiap slider.
     fn spec(id: u8) -> (f32, f32, &'static str) {
         match id {
             4 => (32.0, 72.0, " dp"),
@@ -412,7 +453,6 @@ impl Win {
         }
     }
 
-    /// Simpan kolom teks yang sedang diketik ke pengaturan.
     fn commit_edit(&mut self) {
         let Some(f) = self.edit.take() else { return };
         let t = nacre_core::settings::ShortText::new(&self.edit_buf);
@@ -436,7 +476,6 @@ impl Win {
         }
     }
 
-    /// Gambar satu kartu grup (sudut 12, pemisah halus) berisi `rows`; mengembalikan tinggi yang terpakai.
     fn card(&mut self, c: &ContainerVisual, y0: f32, rows: &[RowDef], look: &nacre_core::settings::Look) -> f32 {
         let d = self.dpi;
         let (x0, cw) = (CONTENT_X * d, CONTENT_W * d);
@@ -453,7 +492,6 @@ impl Win {
             match r {
                 RowDef::Toggle(label, on, act) => {
                     self.text(c, label, lx, y + (rh - 17.0 * d) / 2.0, 13.5, 400, look.fg, 0.95, 0);
-                    // Tahoe: jalur sakelar lebih panjang dan ramping (±2:1) dengan kenop berbentuk pil
                     let (tw, th) = (46.0 * d, 22.0 * d);
                     let (tx, ty) = (rx - tw, y + (rh - th) / 2.0);
                     self.rect(c, tx, ty, tw, th, th / 2.0, if *on { col(accent, 255) } else { col(look.fg, 60) });
@@ -470,8 +508,6 @@ impl Win {
                 }
                 RowDef::Seg(label, opts, sel) => {
                     self.text(c, label, lx, y + (rh - 17.0 * d) / 2.0, 13.5, 400, look.fg, 0.95, 0);
-                    // Tahoe: kapsul ramping dengan segmen yang lebih panjang
-                    // padding dikurangi bila segmen terlalu lebar untuk ruang di kanan label
                     let texts: Vec<f32> = opts.iter().map(|(t, _)| measure(t, &Style { px: (12.5 * d).round() as i32, weight: 500 }).0 as f32).collect();
                     let avail = (rx - lx) - measure(label, &Style { px: (13.5 * d).round() as i32, weight: 400 }).0 as f32 - 28.0 * d;
                     let need = |pad: f32, min: f32| texts.iter().map(|w| (w + pad).max(min)).sum::<f32>() + 6.0 * d;
@@ -517,7 +553,6 @@ impl Win {
                     self.region(tx - 8.0 * d, y + 4.0 * d, tw + 16.0 * d, rh - 8.0 * d, Action::Slider(*id, tx, tw));
                 }
                 RowDef::Swatches(label, sel) => {
-                    // Multiwarna + 8 warna; nama warna terpilih tampil kecil di bawahnya (seperti macOS)
                     self.text(c, label, lx, y + 13.0 * d, 13.5, 400, look.fg, 0.95, 0);
                     let (dia, gap) = (19.0 * d, 10.0 * d);
                     let n = nacre_core::settings::ACCENTS.len() + 1;
@@ -557,7 +592,6 @@ impl Win {
                         let on = i == *sel;
                         let r = if icon_kind { tw * 0.22 } else { th * 0.14 };
                         if on {
-                            // cincin pilihan warna aksen
                             self.rect(c, x - 3.0 * d, ty - 3.0 * d, tw + 6.0 * d, th + 6.0 * d, r + 3.0 * d, col(accent, 255));
                             self.rect(c, x - 1.0 * d, ty - 1.0 * d, tw + 2.0 * d, th + 2.0 * d, r + 1.0 * d, col(if look.dark { [30, 30, 34] } else { [246, 246, 248] }, 255));
                         }
@@ -578,7 +612,6 @@ impl Win {
                     }
                 }
                 RowDef::Radios(opts, sel) => {
-                    // rata kanan: lingkaran + nama, seperti radio Light · Dark · Auto di macOS
                     let rpx = (12.5 * d).round() as i32;
                     let dia = 14.0 * d;
                     let widths: Vec<f32> = opts.iter().map(|(t, _)| dia + 6.0 * d + measure(t, &Style { px: rpx, weight: 400 }).0 as f32 + 16.0 * d).collect();
@@ -633,11 +666,10 @@ impl Win {
         total
     }
 
-    /// Isi halaman `page`: daftar (judul grup, baris).
     fn page(&self, page: u8) -> Vec<(Option<&'static str>, Vec<RowDef>)> {
         let s = prefs::get();
         let behaviors = |dock: bool| -> Vec<(&'static str, Action)> {
-            [(prefs::tr("Tetap"), Behavior::Fixed), (prefs::tr("Menimpa"), Behavior::Overlay), (prefs::tr("Sembunyi otomatis"), Behavior::AutoHide), (prefs::tr("Saat tertimpa"), Behavior::Peek)]
+            [(prefs::tr("Tetap"), Behavior::Fixed), (prefs::tr("Menimpa"), Behavior::Overlay), (prefs::tr("Pintar"), Behavior::Smart)]
                 .into_iter()
                 .map(|(t, b)| (t, if dock { Action::Dock(b) } else { Action::Notch(b) }))
                 .collect()
@@ -645,8 +677,7 @@ impl Win {
         let beh_idx = |b: Behavior| match b {
             Behavior::Fixed => 0,
             Behavior::Overlay => 1,
-            Behavior::AutoHide => 2,
-            Behavior::Peek => 3,
+            Behavior::Smart => 2,
         };
         match page {
             0 => vec![
@@ -658,7 +689,7 @@ impl Win {
                         RowDef::Toggle(prefs::tr("Sembunyikan taskbar Windows"), s.takeover, Action::Takeover),
                         RowDef::Toggle(prefs::tr("Sembunyikan ikon desktop saat ABRA berjalan"), s.hide_desktop_icons, Action::HideIcons),
                         RowDef::Toggle(prefs::tr("Selalu di atas jendela layar penuh"), s.above_fullscreen, Action::AboveFull),
-                        RowDef::Toggle(prefs::tr("Pintasan ala Mac (Alt+` ganti jendela app)"), s.mac_shortcuts, Action::MacKeys),
+                        RowDef::Toggle(prefs::tr("Pintasan cepat (Alt+` ganti jendela app)"), s.mac_shortcuts, Action::MacKeys),
                     ],
                 ),
                 (
@@ -677,10 +708,10 @@ impl Win {
                 (
                     None,
                     vec![
-                        RowDef::Toggle(prefs::tr("Aktifkan dock"), s.dock_enabled, Action::DockOn),
+                        RowDef::Toggle(prefs::tr("Aktifkan Deck"), s.dock_enabled, Action::DockOn),
                         RowDef::Seg(prefs::tr("Perilaku"), behaviors(true), beh_idx(s.dock)),
-                        RowDef::Seg(prefs::tr("Efek minimize"), vec![(prefs::tr("Genie"), Action::MinEffect(0)), (prefs::tr("Skala"), Action::MinEffect(1))], s.min_effect as usize),
-                        RowDef::Toggle(prefs::tr("Ikon seragam ala macOS (squircle)"), s.dock_plates, Action::DockPlates),
+                        RowDef::Seg(prefs::tr("Efek minimize"), vec![(prefs::tr("Funnel"), Action::MinEffect(0)), (prefs::tr("Skala"), Action::MinEffect(1))], s.min_effect as usize),
+                        RowDef::Toggle(prefs::tr("Ikon seragam (squircle)"), s.dock_plates, Action::DockPlates),
                         RowDef::Toggle(prefs::tr("Tumpukan Unduhan"), s.downloads_stack, Action::DownloadsStack),
                         RowDef::Toggle(prefs::tr("App terakhir dipakai"), s.recent_apps, Action::RecentApps),
                     ],
@@ -699,13 +730,14 @@ impl Win {
             2 => vec![(
                 None,
                 vec![
-                    RowDef::Toggle(prefs::tr("Aktifkan notch"), s.notch_enabled, Action::NotchOn),
+                    RowDef::Toggle(prefs::tr("Aktifkan Visor"), s.notch_enabled, Action::NotchOn),
+                    RowDef::Seg(prefs::tr("Bentuk"), vec![(prefs::tr("Visor"), Action::NotchShape(false)), (prefs::tr("Capsule"), Action::NotchShape(true))], if s.notch_island { 1 } else { 0 }),
                     RowDef::Seg(prefs::tr("Perilaku"), behaviors(false), beh_idx(s.notch)),
                     RowDef::Slider(prefs::tr("Kebulatan sudut"), s.notch_round, 3),
-                    RowDef::Toggle(prefs::tr("Buka otomatis saat kursor di notch"), s.notch_hover_open, Action::HoverOpen),
+                    RowDef::Toggle(prefs::tr("Buka otomatis saat kursor di Visor"), s.notch_hover_open, Action::HoverOpen),
                 ],
             ), (
-                Some(prefs::tr("Saat notch diam")),
+                Some(prefs::tr("Saat Visor diam")),
                 {
                     let name = if s.greet_name.is_empty() { user_name() } else { s.greet_name.as_str().to_string() };
                     let hour = nacre_platform::time::local_now().hour;
@@ -727,7 +759,7 @@ impl Win {
             ), (
                 Some(prefs::tr("Lirik")),
                 vec![
-                    RowDef::Toggle(prefs::tr("Tampilkan lirik di notch"), s.lyrics_compact, Action::LyricsCompact),
+                    RowDef::Toggle(prefs::tr("Tampilkan lirik di Visor"), s.lyrics_compact, Action::LyricsCompact),
                     RowDef::Toggle(prefs::tr("Cari lirik online (LRCLIB)"), s.lyrics_online, Action::LyricsOnline),
                     RowDef::Pick(prefs::tr("Folder lirik (.lrc)"), prefs::tr("Buka").to_string(), Action::LyricsDir),
                 ],
@@ -752,14 +784,37 @@ impl Win {
                 vec![(
                     None,
                     vec![
-                        RowDef::Toggle(prefs::tr("Aktifkan menu bar"), s.menubar, Action::MenuBarOn),
+                        RowDef::Toggle(prefs::tr("Aktifkan Rail"), s.menubar, Action::MenuBarOn),
                         RowDef::Seg(
-                            prefs::tr("Latar menu bar"),
+                            prefs::tr("Latar Rail"),
                             vec![(prefs::tr("Transparan"), Action::BarStyle(0)), (prefs::tr("Terang"), Action::BarStyle(1)), (prefs::tr("Gelap"), Action::BarStyle(2)), (prefs::tr("Material"), Action::BarStyle(3))],
                             cur,
                         ),
                         RowDef::Toggle(prefs::tr("Jam 24 jam"), s.clock_24h, Action::Clock24),
+                        RowDef::Seg(
+                            prefs::tr("Persentase baterai"),
+                            vec![(prefs::tr("Di dalam"), Action::BatteryPct(1)), (prefs::tr("Di luar"), Action::BatteryPct(2)), (prefs::tr("Sembunyi"), Action::BatteryPct(0))],
+                            match s.battery_pct {
+                                1 => 0,
+                                2 => 1,
+                                _ => 2,
+                            },
+                        ),
                     ],
+                ), (
+                    Some(prefs::tr("Logo Rail")),
+                    {
+                        let custom = crate::menulogo::path().is_some();
+                        let mut rows = vec![RowDef::Pick(
+                            prefs::tr("Logo Rail"),
+                            prefs::tr(if custom { "Gambar sendiri" } else { "Lingkaran bawaan" }).to_string(),
+                            Action::MenuLogoPick,
+                        )];
+                        if custom {
+                            rows.push(RowDef::Pick(prefs::tr("Logo kustom"), prefs::tr("Kembalikan bawaan").to_string(), Action::MenuLogoReset));
+                        }
+                        rows
+                    },
                 )]
             }
             4 => {
@@ -770,7 +825,7 @@ impl Win {
                     Theme::Dark => 2,
                 };
                 let mat_idx = |m: Material| Material::ALL.iter().position(|x| *x == m).unwrap_or(0);
-                let mat_opts = |dock: bool| vec![(prefs::tr("Blur"), Action::Material(dock, Material::Blur)), (prefs::tr("Liquid Glass"), Action::Material(dock, Material::Glass)), (prefs::tr("Hitam buram"), Action::Material(dock, Material::Black))];
+                let mat_opts = |dock: bool| vec![(prefs::tr("Blur"), Action::Material(dock, Material::Blur)), (prefs::tr("Crystal"), Action::Material(dock, Material::Glass)), (prefs::tr("Hitam buram"), Action::Material(dock, Material::Black))];
                 let ist = match s.icon_style {
                     IconStyle::Default => 0,
                     IconStyle::Dark => 1,
@@ -778,7 +833,6 @@ impl Win {
                     IconStyle::Tinted => 3,
                 };
                 let accent_idx = if s.accent == nacre_core::settings::ACCENT_MULTI { 0 } else { s.accent as usize + 1 };
-                // Tema: warna aksen, gaya ikon & widget (+ Terang/Gelap/Otomatis), warna tint
                 let mut theme = vec![
                     RowDef::Swatches(prefs::tr("Warna"), accent_idx),
                     RowDef::Thumbs(
@@ -808,7 +862,20 @@ impl Win {
                     ));
                 }
                 theme.push(RowDef::Toggle(prefs::tr("Paket ikon (folder iconpack)"), s.icon_pack, Action::IconPack));
+                let scale_idx = match s.ui_scale {
+                    0..=112 => 0,
+                    113..=137 => 1,
+                    _ => 2,
+                };
                 vec![
+                    (
+                        None,
+                        vec![RowDef::Seg(
+                            prefs::tr("Skala Deck, Visor, Rail & Quick Panel"),
+                            vec![("100%", Action::UiScale(100)), ("125%", Action::UiScale(125)), ("150%", Action::UiScale(150))],
+                            scale_idx,
+                        )],
+                    ),
                     (
                         None,
                         vec![RowDef::Thumbs(
@@ -826,10 +893,10 @@ impl Win {
                         Some(prefs::tr("Kaca")),
                         vec![
                             RowDef::Seg(prefs::tr("Material"), mat_opts(true), mat_idx(s.dock_material)),
-                            RowDef::Seg(prefs::tr("Material notch"), mat_opts(false), mat_idx(s.notch_material)),
+                            RowDef::Seg(prefs::tr("Material Visor"), mat_opts(false), mat_idx(s.notch_material)),
                             RowDef::Slider(prefs::tr("Tingkat blur"), s.blur, 0),
                             RowDef::Slider(prefs::tr("Transparansi"), s.transparency, 1),
-                            RowDef::Toggle(prefs::tr("Refraksi tepi kaca (dock)"), s.refraction, Action::Refraction),
+                            RowDef::Toggle(prefs::tr("Refraksi tepi kaca (Deck)"), s.refraction, Action::Refraction),
                         ],
                     ),
                 ]
@@ -838,7 +905,7 @@ impl Win {
                 (
                     None,
                     vec![
-                        RowDef::Toggle(prefs::tr("Aktifkan Stage Manager"), s.stage, Action::StageOn),
+                        RowDef::Toggle(prefs::tr("Aktifkan Scene"), s.stage, Action::StageOn),
                         RowDef::Toggle(prefs::tr("Ganti Alt+Tab dengan pengalih ABRA"), s.switcher, Action::SwitcherOn),
                         RowDef::Toggle(prefs::tr("Klik wallpaper menyimpan semua jendela"), s.stage_desktop_click, Action::StageFlag(1)),
                         RowDef::Toggle(prefs::tr("Judul jendela saat hover"), s.stage_titles, Action::StageFlag(3)),
@@ -865,7 +932,14 @@ impl Win {
                 let names = ["Kiri atas", "Kanan atas", "Kiri bawah", "Kanan bawah"];
                 vec![(None, names.iter().enumerate().map(|(i, nm)| RowDef::Pick(prefs::tr(nm), prefs::tr(hot_label(s.hot[i])).to_string(), Action::HotCycle(i))).collect())]
             }
-            _ => vec![(None, vec![RowDef::Toggle(prefs::tr("Riwayat Papan Klip di Spotlight"), s.clipboard_history, Action::ClipHistory)])],
+            8 => vec![(
+                None,
+                vec![
+                    RowDef::Seg(prefs::tr("Material widget"), vec![(prefs::tr("Original"), Action::WidgetStyle(0)), (prefs::tr("Crystal"), Action::WidgetStyle(1))], s.widget_style.min(1) as usize),
+                    RowDef::Pick(prefs::tr("Widget desktop"), prefs::tr("Tambah widget").to_string(), Action::WidgetGallery),
+                ],
+            )],
+            _ => vec![(None, vec![RowDef::Toggle(prefs::tr("Riwayat Papan Klip di Quick Search"), s.clipboard_history, Action::ClipHistory)])],
         }
     }
 
@@ -879,15 +953,13 @@ impl Win {
         let look = prefs::look(Role::Themed);
         let c = &content;
 
-        // lampu jendela berwarna seperti macOS (merah menutup)
         for (i, rgb) in [[255u8, 95, 87], [254, 188, 46], [40, 200, 64]].iter().enumerate() {
-            let (cx, cy) = ((22.0 + i as f32 * 20.0) * d, 24.0 * d);
+            let (cx, cy) = ((26.0 + i as f32 * 20.0) * d, 27.0 * d);
             self.rect(c, cx - 6.0 * d, cy - 6.0 * d, 12.0 * d, 12.0 * d, 6.0 * d, col(*rgb, 255));
         }
-        self.region_fixed(14.0 * d, 14.0 * d, 20.0 * d, 20.0 * d, Action::Close);
+        self.region_fixed(18.0 * d, 17.0 * d, 20.0 * d, 20.0 * d, Action::Close);
 
-        // kolom cari di sidebar
-        let (fx, fy, fw, fh) = (10.0 * d, 46.0 * d, (SIDEBAR_W - 20.0) * d, 30.0 * d);
+        let (fx, fy, fw, fh) = (16.0 * d, 48.0 * d, (SIDEBAR_W - 32.0) * d, 30.0 * d);
         self.rect(c, fx, fy, fw, fh, 9.0 * d, col(look.fg, if self.search_focus { 36 } else { 22 }));
         self.glyph_icon(c, "\u{E721}", fx + 15.0 * d, fy + fh / 2.0, 11.0, look.fg);
         let (shown, op) = if self.search.is_empty() && !self.search_focus {
@@ -898,8 +970,7 @@ impl Win {
         self.text(c, &shown, fx + 29.0 * d, fy + (fh - 17.0 * d) / 2.0, 13.0, 400, look.fg, op, 0);
         self.region_fixed(fx, fy, fw, fh, Action::Search);
 
-        // kartu profil (akun Windows)
-        let (px0, py0, av) = (14.0 * d, 88.0 * d, 38.0 * d);
+        let (px0, py0, av) = (20.0 * d, 90.0 * d, 38.0 * d);
         self.rect(c, px0, py0, av, av, av / 2.0, crate::prefs::accent_c(255));
         let user = user_name();
         let initial: String = user.chars().take(1).collect::<String>().to_uppercase();
@@ -907,44 +978,86 @@ impl Win {
         self.text(c, &user, px0 + av + 10.0 * d, py0 + 2.0 * d, 13.5, 600, look.fg, 0.95, 0);
         self.text(c, prefs::tr("Akun Windows"), px0 + av + 10.0 * d, py0 + 20.0 * d, 11.0, 400, look.fg, 0.6, 0);
 
-        // sidebar
-        let pages: [(&'static str, &'static str, [u8; 3], u8); 8] = [
+        let pages: [(&'static str, &'static str, [u8; 3], u8); 9] = [
             (prefs::tr("Umum"), "\u{E713}", [142, 142, 147], 0),
-            (prefs::tr("Dock"), "\u{E7C4}", [10, 132, 255], 1),
-            (prefs::tr("Notch"), "\u{E7F4}", [58, 58, 60], 2),
-            (prefs::tr("Menu Bar"), "\u{E700}", [90, 200, 250], 3),
+            (prefs::tr("Deck"), "\u{E7C4}", [10, 132, 255], 1),
+            (prefs::tr("Visor"), "\u{E7F4}", [58, 58, 60], 2),
+            (prefs::tr("Rail"), "\u{E700}", [90, 200, 250], 3),
             (prefs::tr("Tampilan"), "\u{E790}", [88, 86, 214], 4),
-            (prefs::tr("Stage Manager"), "\u{E8A0}", [48, 209, 88], 5),
-            (prefs::tr("Sudut Layar"), "\u{E73F}", [175, 82, 222], 6),
-            (prefs::tr("Spotlight"), "\u{E721}", [255, 149, 10], 7),
+            (prefs::tr("Scene"), "\u{E8A0}", [48, 209, 88], 5),
+            (prefs::tr("Screen Corners"), "\u{E73F}", [175, 82, 222], 6),
+            (prefs::tr("Quick Search"), "\u{E721}", [255, 149, 10], 7),
+            (prefs::tr("Widget"), "\u{E737}", [0, 122, 255], 8),
         ];
         let mut sy = 140.0 * d;
+        self.side.clear();
+        let (view_top, view_bot) = (134.0 * d, (H - 96.0) * d);
+        let side_body = match (self.comp.CreateContainerVisual(), self.comp.CreateContainerVisual()) {
+            (Ok(v), Ok(b)) => {
+                let _ = v.SetOffset(Vector3 { X: 0.0, Y: view_top, Z: 0.0 });
+                let _ = v.SetSize(Vector2 { X: SIDEBAR_W * d, Y: view_bot - view_top });
+                if let Ok(clip) = self.comp.CreateInsetClip() {
+                    let _ = v.SetClip(&clip);
+                }
+                let _ = b.SetOffset(Vector3 { X: 0.0, Y: -view_top - self.side_scroll, Z: 0.0 });
+                let _ = c.Children().and_then(|k| k.InsertAtTop(&v));
+                let _ = v.Children().and_then(|k| k.InsertAtTop(&b));
+                b
+            }
+            _ => c.clone(),
+        };
+        let parent = &side_body;
         for (name, glyph, color, idx) in pages {
             if !self.page_matches(idx, name) {
                 continue;
             }
             let sel = idx == self.tab;
-            let (rx, rw, rh) = (10.0 * d, (SIDEBAR_W - 20.0) * d, 36.0 * d);
+            let (rx, rw, rh) = (16.0 * d, (SIDEBAR_W - 32.0) * d, 36.0 * d);
+            let Ok(ic) = self.comp.CreateContainerVisual() else { continue };
+            let _ = parent.Children().and_then(|k| k.InsertAtTop(&ic));
+            if self.side_hover == Some(idx) {
+                let _ = ic.SetCenterPoint(Vector3 { X: rx + rw / 2.0, Y: sy + rh / 2.0, Z: 0.0 });
+                let _ = ic.SetScale(Vector3 { X: crate::motion::HOVER_ROW, Y: crate::motion::HOVER_ROW, Z: 1.0 });
+            }
+            self.side.push((idx, (rx, sy, rw, rh), ic.clone()));
+            let c = &ic;
             if sel {
                 self.rect(c, rx, sy, rw, rh, 10.0 * d, crate::prefs::accent_c(235));
             }
             self.rect(c, rx + 8.0 * d, sy + 6.0 * d, 24.0 * d, 24.0 * d, 7.0 * d, col(color, 255));
             self.glyph_icon(c, glyph, rx + 20.0 * d, sy + 18.0 * d, 13.0, [255, 255, 255]);
             self.text(c, name, rx + 42.0 * d, sy + (rh - 17.0 * d) / 2.0, 13.5, if sel { 600 } else { 400 }, if sel { [255, 255, 255] } else { look.fg }, 1.0, 0);
-            self.region_fixed(rx, sy, rw, rh, Action::Tab(idx));
+            let vis_top = (sy - self.side_scroll).max(view_top);
+            let vis_bot = (sy - self.side_scroll + rh).min(view_bot);
+            if vis_bot > vis_top {
+                self.region_fixed(rx, vis_top, rw, vis_bot - vis_top, Action::Tab(idx));
+            }
             sy += 40.0 * d;
         }
-        // kaki sidebar: kredit pembuat + tombol donasi (Saweria), selalu terlihat
-        let (kx, kw) = (14.0 * d, (SIDEBAR_W - 28.0) * d);
-        let ky = (H - 78.0) * d;
+        let side_max = (sy - 4.0 * d - view_bot).max(0.0);
+        self.side_view = (view_top, side_max);
+        if self.side_scroll > side_max {
+            self.side_scroll = side_max;
+        }
+        self.side_bar = None;
+        if side_max > 0.5 {
+            let (track_top, track_h) = (view_top + 4.0 * d, view_bot - view_top - 8.0 * d);
+            let content = view_bot - view_top + side_max;
+            let th = (track_h * (view_bot - view_top) / content).max(28.0 * d);
+            let ty = track_top + (track_h - th) * (self.side_scroll / side_max);
+            let bw = if self.side_drag.is_some() { 7.0 * d } else { 5.0 * d };
+            let bx = (SIDEBAR_W - SIDE_INSET - 5.0) * d - bw;
+            self.rect(c, bx, ty, bw, th, bw / 2.0, col(look.fg, if self.side_drag.is_some() { 110 } else { 70 }));
+            self.side_bar = Some(((bx - 6.0 * d, track_top, bw + 12.0 * d, track_h), th));
+        }
+        let (kx, kw) = (20.0 * d, (SIDEBAR_W - 40.0) * d);
+        let ky = (H - 84.0) * d;
         self.text(c, prefs::tr("Dibuat oleh kreativa.dev"), kx + kw / 2.0, ky, 11.0, 500, look.fg, 0.55, 1);
         let (kby, kbh) = (ky + 22.0 * d, 32.0 * d);
         self.rect(c, kx, kby, kw, kbh, kbh / 2.0, col([255, 159, 10], 255));
         self.text(c, prefs::tr("Belikan aku kopi"), kx + kw / 2.0, kby + (kbh - 17.0 * d) / 2.0, 13.0, 600, [255, 255, 255], 1.0, 1);
         self.region_fixed(kx, kby, kw, kbh, Action::Donate);
-        self.rect(c, SIDEBAR_W * d, 0.0, 1.0, H * d, 0.0, col(look.fg, 30));
 
-        // tombol ◀ ▶ (riwayat halaman) lalu judul halaman, seperti bilah judul Pengaturan macOS
         let (bx, by, bw, bh) = (CONTENT_X * d, 11.0 * d, 64.0 * d, 28.0 * d);
         self.rect(c, bx, by, bw, bh, 14.0 * d, col(look.fg, 24));
         let (can_back, can_fwd) = (self.hpos > 0, self.hpos + 1 < self.history.len());
@@ -957,7 +1070,6 @@ impl Win {
         let title = pages.iter().find(|p| p.3 == self.tab).map(|p| p.0).unwrap_or("");
         self.text(c, title, bx + bw + 12.0 * d, by + (bh - 19.0 * d) / 2.0, 15.0, 700, look.fg, 1.0, 0);
 
-        // isi (tergulir) di dalam viewport berklip
         let view = match (self.comp.CreateContainerVisual(), self.comp.CreateContainerVisual()) {
             (Ok(v), Ok(b)) => Some((v, b)),
             _ => None,
@@ -977,8 +1089,7 @@ impl Win {
         let _ = c.Children().and_then(|k| k.InsertAtTop(&viewport));
         let _ = viewport.Children().and_then(|k| k.InsertAtTop(&body));
 
-        // koordinat isi dihitung dalam ruang halaman (y=VIEW_TOP+...) lalu dipindah ke viewport (dikurangi vt)
-        let mut y = VIEW_TOP * d - vt; // 0
+        let mut y = VIEW_TOP * d - vt;
         y += 4.0 * d;
         let groups = self.page(self.tab);
         for (header, rows) in groups {
@@ -1000,22 +1111,54 @@ impl Win {
         let (nw, nh) = ((W * d) as i32, (H * d) as i32);
         if (nw, nh) != (ww, hh) {
             let _ = self.popup.set_rect(x, yy, nw, nh);
-            let _ = self.popup.panel.set_radius(24.0 * d);
+        }
+        self.frame();
+    }
+
+    fn frame(&mut self) {
+        let d = self.dpi;
+        let (w, h) = ((W * d) as i32, (H * d) as i32);
+        let (hx, hy, hw, hh) = (SIDE_INSET * d, SIDE_INSET * d, (SIDEBAR_W - 2.0 * SIDE_INSET) * d, (H - 2.0 * SIDE_INSET) * d);
+        let _ = self.popup.panel.set_rect(hx, hy, hw, hh);
+        let _ = self.popup.panel.set_radius(SIDE_RADIUS * d);
+        let dark = prefs::look(Role::Themed).dark;
+        if self.frame.is_some() && self.frame_key == (w, h, dark) {
+            return;
+        }
+        let data = frame_pixels(w, h, 24.0 * d, (hx, hy, hw, hh), SIDE_RADIUS * d, dark);
+        let go = || -> windows_core::Result<windows::UI::Composition::SpriteVisual> {
+            let surf = self.gfx.surface_from_bgra(w as u32, h as u32, &data)?;
+            let br = self.comp.CreateSurfaceBrushWithSurface(&surf)?;
+            br.SetStretch(CompositionStretch::Fill)?;
+            let v = match &self.frame {
+                Some(v) => v.clone(),
+                None => {
+                    let v = self.comp.CreateSpriteVisual()?;
+                    self.popup.root().Children()?.InsertAtBottom(&v)?;
+                    v
+                }
+            };
+            v.SetBrush(&br)?;
+            v.SetSize(Vector2 { X: w as f32, Y: h as f32 })?;
+            Ok(v)
+        };
+        match go() {
+            Ok(v) => {
+                self.frame = Some(v);
+                self.frame_key = (w, h, dark);
+            }
+            Err(e) => log::line("settings", &format!("bingkai gagal: {e}")),
         }
     }
 
-    /// Teks pada ruang isi (tanpa penyesuaian).
     #[allow(clippy::too_many_arguments)]
     fn text_abs(&mut self, parent: &ContainerVisual, s: &str, x: f32, y: f32, size: f32, weight: i32, rgb: [u8; 3], alpha: f32) {
         self.text(parent, s, x, y, size, weight, rgb, alpha, 0);
     }
 
-    /// `card` yang menggambar di ruang viewport (y relatif atas viewport) dan mendaftarkan wilayah di ruang layar-gulir
-    /// (y + VIEW_TOP): wilayah diuji dengan `hit` yang menambahkan gulir.
     fn card_in(&mut self, body: &ContainerVisual, y: f32, rows: &[RowDef], look: &nacre_core::settings::Look, vt: f32) -> f32 {
         let before = self.regions.len();
         let used = self.card(body, y, rows, look);
-        // geser wilayah baru ke ruang klien (tambah offset viewport)
         for r in self.regions[before..].iter_mut() {
             r.y += vt;
         }
@@ -1068,10 +1211,10 @@ fn hot_label(a: nacre_core::settings::HotAction) -> &'static str {
     use nacre_core::settings::HotAction::*;
     match a {
         None => "Tidak ada",
-        Mission => "Mission Control",
+        Mission => "Overview",
         Launchpad => "Apps",
         Desktop => "Tampilkan Desktop",
-        Stage => "Stage Manager",
+        Stage => "Scene",
         Notifications => "Pusat Notifikasi",
         Lock => "Kunci Layar",
     }
@@ -1089,7 +1232,6 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
     match msg {
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
         WM_NCHITTEST => {
-            // Judul (di luar tombol tutup) bisa menyeret jendela.
             let mut r = windows::Win32::Foundation::RECT::default();
             let _ = GetWindowRect(hwnd, &mut r);
             let (px, py) = ((lp.0 as i16) as i32, ((lp.0 >> 16) as i16) as i32);
@@ -1105,6 +1247,14 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             with_win(|w| {
                 let d = w.dpi;
                 let vh = (H - VIEW_TOP - 10.0) * d;
+                let mut p = windows::Win32::Foundation::POINT::default();
+                let _ = GetCursorPos(&mut p);
+                if ((p.x - w.popup.rect.0) as f32) < SIDEBAR_W * d {
+                    let max = w.side_view.1;
+                    w.side_scroll = (w.side_scroll - delta / 120.0 * 40.0 * d).clamp(0.0, max);
+                    w.render();
+                    return;
+                }
                 let max = (w.content_h - vh).max(0.0);
                 w.scroll = (w.scroll - delta / 120.0 * 48.0 * d).clamp(0.0, max);
                 w.render();
@@ -1113,6 +1263,24 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         }
         WM_LBUTTONDOWN => {
             let (x, y) = xy(lp);
+            let grabbed = with_win(|w| {
+                let Some((r, th)) = w.side_bar else { return false };
+                if !(x >= r.0 && x < r.0 + r.2 && y >= r.1 && y < r.1 + r.3) {
+                    return false;
+                }
+                let max = w.side_view.1;
+                let ty = r.1 + (r.3 - th) * (w.side_scroll / max.max(0.001));
+                let grab = if y >= ty && y < ty + th { y - ty } else { th / 2.0 };
+                w.side_drag = Some(grab);
+                w.side_scroll = (((y - grab - r.1) / (r.3 - th).max(1.0)) * max).clamp(0.0, max);
+                w.render();
+                true
+            })
+            .unwrap_or(false);
+            if grabbed {
+                SetCapture(hwnd);
+                return LRESULT(0);
+            }
             let started = with_win(|w| match w.hit(x, y) {
                 Some(Action::Slider(id, sx, sw)) => {
                     w.dragging = Some((id, sx, sw));
@@ -1134,12 +1302,28 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
-            let (x, _) = xy(lp);
+            let (x, y) = xy(lp);
             with_win(|w| {
+                if let (Some(grab), Some((r, th))) = (w.side_drag, w.side_bar) {
+                    let max = w.side_view.1;
+                    w.side_scroll = (((y - grab - r.1) / (r.3 - th).max(1.0)) * max).clamp(0.0, max);
+                    w.render();
+                    return;
+                }
                 if let Some((id, sx, sw)) = w.dragging {
                     w.slide(id, x, sx, sw, false);
+                    return;
                 }
+                let mut t = TRACKMOUSEEVENT { cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32, dwFlags: TME_LEAVE, hwndTrack: hwnd, dwHoverTime: 0 };
+                let _ = TrackMouseEvent(&mut t);
+                let (top, s) = (w.side_view.0, w.side_scroll);
+                let hit = if y < top || y > (H - 96.0) * w.dpi { None } else { w.side.iter().find(|(_, r, _)| x >= r.0 && x < r.0 + r.2 && y + s >= r.1 && y + s < r.1 + r.3).map(|e| e.0) };
+                w.hover_side(hit);
             });
+            LRESULT(0)
+        }
+        WM_MOUSELEAVE => {
+            with_win(|w| w.hover_side(None));
             LRESULT(0)
         }
         WM_CHAR => {
@@ -1193,7 +1377,6 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                         w.search_focus = false;
                     }
                     0x0D => {
-                        // Enter: buka halaman cocok pertama
                         if let Some(t) = (0u8..8).find(|i| w.page_matches(*i, "")) {
                             w.go(t, true);
                             return;
@@ -1208,6 +1391,10 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         WM_LBUTTONUP => {
             let (x, y) = xy(lp);
             let _ = ReleaseCapture();
+            if with_win(|w| w.side_drag.take().is_some()).unwrap_or(false) {
+                with_win(|w| w.render());
+                return LRESULT(0);
+            }
             let act = with_win(|w| {
                 let was_pressed = w.press.take().is_some();
                 if let Some((id, sx, sw)) = w.dragging.take() {
@@ -1229,7 +1416,6 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                     }
                 });
             }
-            // klik di luar kolom yang sedang diketik = simpan
             if !matches!(act, Some(Action::EditText(_))) {
                 with_win(|w| {
                     if w.edit.is_some() {
@@ -1258,8 +1444,26 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 Some(Action::NotchDownloads) => prefs::update(|s| s.notch_downloads = !s.notch_downloads),
                 Some(Action::NotchSend) => prefs::update(|s| s.notch_send = !s.notch_send),
                 Some(Action::LyricsOnline) => prefs::update(|s| s.lyrics_online = !s.lyrics_online),
-                // halaman donasi Saweria pembuat ABRA (dibuka di browser bawaan)
                 Some(Action::Donate) => nacre_platform::launch::open(DONATE_URL),
+                Some(Action::MenuLogoPick) => {
+                    let _ = SetWindowPos(hwnd, Some(HWND_NOTOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                    let picked = nacre_platform::pick::open_file(prefs::tr("Pilih gambar"), &[(prefs::tr("Gambar logo"), "*.png;*.jpg;*.jpeg;*.bmp;*.ico;*.gif;*.webp;*.tif;*.tiff")]);
+                    let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                    if let Some(p) = picked {
+                        if crate::menulogo::set(&p) {
+                            prefs::broadcast();
+                        }
+                    }
+                }
+                Some(Action::UiScale(v)) => prefs::update(|s| s.ui_scale = v),
+                Some(Action::WidgetStyle(v)) => prefs::update(|s| s.widget_style = v),
+                Some(Action::BatteryPct(v)) => prefs::update(|s| s.battery_pct = v),
+                Some(Action::WidgetGallery) => crate::widgets::open_gallery(),
+                Some(Action::NotchShape(b)) => prefs::update(|s| s.notch_island = b),
+                Some(Action::MenuLogoReset) => {
+                    crate::menulogo::reset();
+                    prefs::broadcast();
+                }
                 Some(Action::LyricsDir) => {
                     let dir = crate::paths::config_dir().join("lyrics");
                     let _ = std::fs::create_dir_all(&dir);
@@ -1270,7 +1474,6 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                         w.search_focus = true;
                         w.render();
                     });
-                    // ambil fokus keyboard agar bisa mengetik di kolom cari
                     let _ = SetForegroundWindow(hwnd);
                     let _ = SetFocus(Some(hwnd));
                 }
@@ -1359,7 +1562,6 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 Some(Action::Refraction) => prefs::update(|s| s.refraction = !s.refraction),
                 Some(Action::Anim) => prefs::update(|s| s.anim = !s.anim),
                 Some(Action::Autostart) => prefs::update(|s| s.autostart = !s.autostart),
-                // material dock dan menu bar (true) dipilih terpisah dari material notch (false)
                 Some(Action::Material(true, m)) => prefs::update(|s| s.dock_material = m),
                 Some(Action::Material(false, m)) => prefs::update(|s| s.notch_material = m),
                 Some(Action::Tab(t)) => {
@@ -1374,7 +1576,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             let (themed, _) = (prefs::look(Role::Themed), ());
             with_win(|w| {
                 let base = nacre_ui::glass::GlassParams::dark((10.0, 10.0), 24.0 * w.dpi);
-                let _ = w.popup.panel.set_params(prefs::apply(base, &themed));
+                let _ = w.popup.panel.set_params(side_glass(prefs::apply(base, &themed)));
             });
             LRESULT(0)
         }
@@ -1383,6 +1585,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             let win = WIN.with(|s| s.borrow_mut().take());
             drop(win);
             let _ = DestroyWindow(hwnd);
+            nacre_platform::sys::trim_later(5000);
             log::line("settings", "ditutup");
             LRESULT(0)
         }

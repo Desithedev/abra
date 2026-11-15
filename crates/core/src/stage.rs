@@ -1,21 +1,14 @@
-//! Model Stage Manager: satu grup app di "panggung" (boleh lebih dari satu app), grup lain terbaru di strip samping.
-//! Murni: pemanggil menjalankan hasilnya (parkir/tampilkan jendela).
-
 pub const MAX_STRIP: usize = 6;
 
 pub type Group = Vec<String>;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Stage {
-    /// App di panggung (satu grup; urutan = urutan ditambahkan).
     pub current: Group,
-    /// Grup di strip, paling baru lebih dulu. Tidak berisi app yang ada di `current`.
     pub strip: Vec<Group>,
-    /// Batas jumlah grup di strip (0 = `MAX_STRIP`).
     pub max: usize,
 }
 
-/// Hasil operasi: app yang harus diparkir (keluar panggung) dan yang harus ditampilkan (masuk panggung).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Change {
     pub park: Vec<String>,
@@ -27,7 +20,6 @@ impl Stage {
         if self.max == 0 { MAX_STRIP } else { self.max }
     }
 
-    /// Masukkan grup di depan strip; grup yang terdorong keluar batas dikembalikan (jendelanya harus ditampilkan lagi).
     fn push_front_group(&mut self, g: Group) -> Vec<String> {
         if g.is_empty() {
             return Vec::new();
@@ -50,7 +42,6 @@ impl Stage {
         self.current.iter().any(|a| a == app) || self.strip.iter().any(|g| g.iter().any(|a| a == app))
     }
 
-    /// `app` mendapat fokus. `running`: semua app yang punya jendela (yang belum dikenal masuk strip).
     pub fn focus(&mut self, app: &str, running: &[String]) -> Change {
         let mut ch = Change::default();
         if !self.current.iter().any(|a| a == app) {
@@ -64,7 +55,6 @@ impl Stage {
             }
             ch.show.extend(dropped);
         }
-        // app berjalan yang belum punya tempat: jadi grup tunggal di ujung strip
         for a in running {
             if !self.contains(a) && self.strip.len() < self.cap() {
                 self.strip.push(vec![a.clone()]);
@@ -76,7 +66,6 @@ impl Stage {
         ch
     }
 
-    /// Gabungkan `app` ke grup panggung (seret kartu strip ke panggung / Shift-klik).
     pub fn add_to_stage(&mut self, app: &str) -> Change {
         let mut ch = Change::default();
         if self.current.iter().any(|a| a == app) {
@@ -92,7 +81,6 @@ impl Stage {
         ch
     }
 
-    /// Keluarkan `app` dari grup panggung ke strip (hanya bila masih ada app lain di panggung).
     pub fn remove_from_stage(&mut self, app: &str) -> Change {
         let mut ch = Change::default();
         if self.current.len() > 1 {
@@ -107,7 +95,6 @@ impl Stage {
         ch
     }
 
-    /// Tampilkan desktop: seluruh panggung masuk strip.
     pub fn desktop(&mut self) -> Change {
         let g = std::mem::take(&mut self.current);
         let mut ch = Change { park: g.clone(), show: vec![] };
@@ -117,7 +104,6 @@ impl Stage {
         ch
     }
 
-    /// Buang app yang sudah tidak berjalan.
     pub fn prune(&mut self, running: &[String]) {
         self.current.retain(|a| running.contains(a));
         for g in &mut self.strip {
@@ -191,7 +177,6 @@ mod tests {
         assert_eq!(st.current, s(&["a", "b"]));
         assert_eq!(ch.show, s(&["b"]));
         assert!(!st.strip.iter().any(|g| g.contains(&"b".to_string())));
-        // pindah ke app lain memarkir seluruh grup dan grup kembali utuh saat dipilih
         let ch = st.focus("c", &running);
         assert_eq!(ch.park, s(&["a", "b"]));
         assert_eq!(st.strip[0], s(&["a", "b"]));
@@ -233,7 +218,6 @@ mod tests {
         st.focus("b", &running);
         let ch = st.focus("c", &running);
         assert!(st.strip.len() <= 2);
-        // grup yang terdorong keluar tidak boleh tetap diparkir
         for g in st.strip.iter() {
             for a in g {
                 assert!(!ch.show.contains(a));

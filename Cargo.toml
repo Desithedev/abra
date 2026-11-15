@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 license = "PolyForm-Noncommercial-1.0.0"
 publish = false
@@ -23,9 +23,7 @@ codegen-units = 1
 strip = true
 panic = "abort"
 
-# Iterasi cepat saat pengembangan (tanpa LTO penuh): cargo build --profile fast
 [profile.fast]
 inherits = "release"
 lto = false
 codegen-units = 16
-

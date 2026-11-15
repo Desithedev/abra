@@ -1,11 +1,3 @@
-//! Jendela pemilih Wi-Fi dan Bluetooth ala macOS, dibuka dari ikon Wi-Fi menu bar (di bawah ikon) dan modul Control Center
-//! (Control Center menutup, jendela ini muncul di pojok kanan atas dengan animasi Control Center). Sudutnya sebesar kartu
-//! slider Suara/Layar di Control Center.
-//! Wi-Fi: sakelar, jaringan dikenal (sinyal + gembok), "Jaringan Lain" yang bisa dibuka, Pengaturan Wi-Fi.
-//! Bluetooth: sakelar, perangkat terpasang (lingkaran biru = tersambung), Pengaturan Bluetooth.
-//! Data dibaca di thread pekerja (`wifi::spawn`, `bt::spawn`, `radio::spawn`); menu digambar ulang di tempat saat data
-//! baru datang tanpa menutupnya.
-
 use crate::dock::menu::{Card, Item, Menu, MENU_CLOSE, MENU_PICK};
 use crate::prefs;
 use nacre_core::netlist::{bars, DevKind, Device};
@@ -23,6 +15,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 const WM_WIFI: u32 = WM_APP + 140;
 const WM_BT: u32 = WM_APP + 141;
 const WM_RADIO: u32 = WM_APP + 142;
+const T_LIVE: usize = 1;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Which {
@@ -30,16 +23,12 @@ pub enum Which {
     Bluetooth,
 }
 
-/// Letak jendela (piksel layar).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Anchor {
-    /// Di bawah ikon menu bar: tepi kiri `x`, tepi atas `top`.
     Below(i32, i32),
-    /// Pojok kanan atas, menggantikan Control Center: tepi kanan `right`, tepi atas `top`.
     Corner(i32, i32),
 }
 
-/// Sudut sama dengan kartu slider Suara/Layar Control Center (0,34 × sel 82 dp), tepi dalam lebih lega.
 const CARD: Card = Card { radius: 28.0, pad: 10.0, min_w: 300.0 };
 
 const ID_TOGGLE: usize = 1;
@@ -57,9 +46,7 @@ struct Net {
     gfx: Option<Gfx>,
     menu: Option<Menu>,
     dpi: f32,
-    /// Jendela yang terbuka dan letaknya.
     open: Option<(Which, Anchor)>,
-    /// "Jaringan Lain" sedang dibuka.
     others: bool,
     scanner: Option<wifi::Scanner>,
     scan: Option<wifi::Scan>,
@@ -67,9 +54,7 @@ struct Net {
     devices: Option<Vec<Device>>,
     radios: Option<radio::Radios>,
     radio: radio::Snapshot,
-    /// Sakelar dibalik dari menu ini: kabari menu bar dan Control Center saat keadaan baru tiba.
     toggled: bool,
-    /// Perangkat audio Bluetooth yang sedang disambung/diputus: (alamat, ingin tersambung, sejak).
     pending: Option<(u64, bool, std::time::Instant)>,
 }
 
@@ -123,7 +108,6 @@ fn ensure(comp: &Compositor) -> bool {
     true
 }
 
-/// Buka jendela `which` di `anchor`. Membuka jendela yang sama lagi menutupnya.
 pub fn show(comp: &Compositor, which: Which, anchor: Anchor, dpi: f32) {
     if !ensure(comp) {
         return;
@@ -150,6 +134,9 @@ pub fn show(comp: &Compositor, which: Which, anchor: Anchor, dpi: f32) {
             Which::Wifi => {
                 let s = n.scanner.get_or_insert_with(|| wifi::spawn(post(h, WM_WIFI)));
                 let _ = s.commands.send(wifi::Cmd::Scan);
+                unsafe {
+                    SetTimer(Some(n.hwnd), T_LIVE, 2000, None);
+                }
             }
             Which::Bluetooth => {
                 let w = n.watcher.get_or_insert_with(|| bt::spawn(post(h, WM_BT)));
@@ -160,12 +147,10 @@ pub fn show(comp: &Compositor, which: Which, anchor: Anchor, dpi: f32) {
     });
 }
 
-/// Khusus uji (`NACRE_TEST_NETMENU=wifi-others`): buka/tutup "Jaringan Lain" seperti diklik.
 pub fn test_toggle_others() {
     with(|n| n.pick(ID_OTHERS));
 }
 
-/// Khusus uji (`NACRE_TEST_NETMENU=bt-click`, hanya dengan data palsu): klik perangkat audio pertama.
 pub fn test_click_audio() {
     if std::env::var_os("NACRE_FAKE_WIFI").is_none() {
         return;
@@ -196,12 +181,42 @@ fn device_sym(k: DevKind) -> Sym {
 }
 
 impl Net {
-    /// Tutup dengan animasi tutup Control Center.
     fn close(&mut self) {
         if let Some(m) = self.menu.as_mut() {
             m.hide_animated(&self.comp);
         }
         self.open = None;
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), T_LIVE);
+        }
+    }
+
+    fn live_signal(&mut self) {
+        if self.open.map(|o| o.0) != Some(Which::Wifi) {
+            unsafe {
+                let _ = KillTimer(Some(self.hwnd), T_LIVE);
+            }
+            return;
+        }
+        let Some(scan) = self.scan.as_mut() else { return };
+        let link = wifi::link();
+        let mut changed = false;
+        for n in scan.networks.iter_mut() {
+            let want = match &link {
+                Some((name, b)) if n.connected || n.ssid == *name => Some(b * 20),
+                _ => None,
+            };
+            if let Some(sig) = want {
+                if n.signal != sig || !n.connected {
+                    n.signal = sig;
+                    n.connected = true;
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            self.render();
+        }
     }
 
     fn wifi_items(&self) -> Vec<Item> {
@@ -212,19 +227,41 @@ impl Net {
                 None => v.push(Item::heading(prefs::tr("Mencari jaringan…"))),
                 Some(s) if !s.adapter => v.push(Item::heading(prefs::tr("Tidak ada adaptor Wi-Fi"))),
                 Some(s) if s.denied => {
-                    // Windows 11 24H2+: tanpa izin Lokasi hanya nama jaringan tersambung yang boleh dibaca
-                    if s.current.is_some() || s.connected {
-                        let label = s.current.clone().unwrap_or_else(|| prefs::tr("Tersambung").to_string());
-                        v.push(Item::heading(prefs::tr("Jaringan Dikenal")));
-                        v.push(Item::action(ID_CURRENT, &label, true).with_lead(Sym::Wifi, true));
+                    let row = |i: usize, n: &nacre_core::netlist::Network| {
+                        let it = Item::action(ID_NET0 + i, &n.ssid, true).with_lead(if n.connected { signal_sym(n.signal) } else { Sym::Wifi }, n.connected);
+                        if n.connected && bars(n.signal) <= 1 {
+                            it.with_accel(prefs::tr("Sinyal lemah"))
+                        } else {
+                            it
+                        }
+                    };
+                    if s.networks.is_empty() {
+                        if s.current.is_some() || s.connected {
+                            let label = s.current.clone().unwrap_or_else(|| prefs::tr("Tersambung").to_string());
+                            v.push(Item::heading(prefs::tr("Jaringan Dikenal")));
+                            v.push(Item::action(ID_CURRENT, &label, true).with_lead(Sym::Wifi, true));
+                        }
+                    } else {
+                        v.push(Item::heading(prefs::tr("Jaringan Tersimpan")));
+                        let limit = if self.others { 20 } else { 6 };
+                        v.extend(s.networks.iter().enumerate().take(limit).map(|(i, n)| row(i, n)));
+                        if s.networks.len() > 6 {
+                            let label = if self.others { prefs::tr("Lebih sedikit") } else { prefs::tr("Jaringan tersimpan lainnya") };
+                            v.push(Item::action(ID_OTHERS, label, true).with_trail(vec![if self.others { Sym::ChevronDown } else { Sym::ChevronRight }]).keep_open());
+                        }
                     }
-                    v.push(Item::heading(prefs::tr("Lokasi mati: jaringan sekitar tersembunyi")));
-                    v.push(Item::action(ID_LOCATION, prefs::tr("Nyalakan Lokasi…"), true));
-                    v.push(Item::action(ID_FLYOUT, prefs::tr("Jaringan Lain…"), true));
+                    v.push(Item::heading(prefs::tr("Jaringan sekitar perlu izin Lokasi Windows")));
+                    v.push(Item::heading(prefs::tr("ABRA tidak membaca atau menyimpan lokasimu")));
+                    v.push(Item::action(ID_LOCATION, prefs::tr("Izinkan di Pengaturan Lokasi\u{2026}"), true));
                 }
                 Some(s) => {
                     let row = |i: usize, n: &nacre_core::netlist::Network| {
-                        Item::action(ID_NET0 + i, &n.ssid, true).with_lead(signal_sym(n.signal), n.connected).with_trail(if n.secured { vec![Sym::Lock] } else { vec![] })
+                        let it = Item::action(ID_NET0 + i, &n.ssid, true).with_lead(signal_sym(n.signal), n.connected).with_trail(if n.secured { vec![Sym::Lock] } else { vec![] });
+                        if n.connected && bars(n.signal) <= 1 {
+                            it.with_accel(prefs::tr("Sinyal lemah"))
+                        } else {
+                            it
+                        }
                     };
                     let known: Vec<usize> = (0..s.networks.len()).filter(|i| s.networks[*i].known() || s.networks[*i].connected).collect();
                     if !known.is_empty() {
@@ -258,9 +295,7 @@ impl Net {
                 Some(d) => v.extend(d.iter().take(12).enumerate().map(|(i, dev)| {
                     let it = Item::action(ID_DEV0 + i, &dev.name, true).with_lead(device_sym(dev.kind), dev.connected);
                     match self.pending {
-                        // sedang disambung/diputus: label redup di kanan sampai keadaannya berubah
                         Some((a, want, _)) if a == dev.addr && dev.audio => it.with_accel(prefs::tr(if want { "Menyambung…" } else { "Memutus…" })).keep_open(),
-                        // headphone/speaker: klik = sambung/putus langsung, menu tetap terbuka
                         _ if dev.audio => it.keep_open(),
                         _ => it,
                     }
@@ -279,7 +314,7 @@ impl Net {
             Which::Bluetooth => self.bt_items(),
         };
         if self.gfx.is_none() {
-            self.gfx = Gfx::new(&self.comp).ok();
+            self.gfx = Gfx::shared(&self.comp).ok();
         }
         if self.menu.is_none() {
             let c = sys::conditions();
@@ -298,12 +333,9 @@ impl Net {
             nacre_platform::log::line("netmenu", &format!("menu gagal: {e}"));
             return;
         }
-        // di atas Control Center yang sedang menutup
         menu.raise();
     }
 
-    /// Item dipilih. Item `keep_open` (sakelar, Jaringan Lain, perangkat audio) menggambar ulang jendela; selainnya
-    /// jendela ditutup dengan animasi lalu aksinya dijalankan.
     fn pick(&mut self, id: usize) {
         let Some((which, _)) = self.open else { return };
         match id {
@@ -313,7 +345,6 @@ impl Net {
                     Which::Bluetooth => (radio::Kind::Bluetooth, &mut self.radio.bluetooth),
                 };
                 let want = *cur != Some(true);
-                // tampilkan langsung (sakelar terasa responsif); keadaan sebenarnya menyusul lewat WM_RADIO
                 *cur = Some(want);
                 if let Some(r) = &self.radios {
                     let _ = r.commands.send(radio::Cmd::Set(kind, want));
@@ -356,7 +387,6 @@ impl Net {
                             let _ = s.commands.send(wifi::Cmd::Connect(n));
                         }
                     } else {
-                        // jaringan baru berkata sandi: biarkan Windows menanyakan sandinya
                         launch::open("ms-availablenetworks:");
                     }
                 }
@@ -375,8 +405,11 @@ unsafe extern "system" fn proc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LRESU
             LRESULT(0)
         }
         MENU_CLOSE => {
-            // klik di luar jendela
             with(|n| n.close());
+            LRESULT(0)
+        }
+        WM_TIMER if wp.0 == T_LIVE => {
+            with(|n| n.live_signal());
             LRESULT(0)
         }
         WM_WIFI => {
@@ -399,7 +432,6 @@ unsafe extern "system" fn proc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LRESU
                         n.devices = Some(d);
                     }
                 }
-                // sambung/putus selesai (keadaan sudah sesuai) atau menyerah setelah 12 detik
                 if let Some((addr, want, since)) = n.pending {
                     let done = n.devices.as_ref().is_some_and(|d| d.iter().any(|x| x.addr == addr && x.connected == want));
                     if done || since.elapsed() > std::time::Duration::from_secs(12) {
@@ -420,7 +452,6 @@ unsafe extern "system" fn proc(h: HWND, m: u32, wp: WPARAM, lp: LPARAM) -> LRESU
                         n.radio = s;
                     }
                 }
-                // Wi-Fi baru dinyalakan: pindai ulang supaya daftar jaringan muncul
                 if before.wifi != Some(true) && n.radio.wifi == Some(true) {
                     if let Some(s) = &n.scanner {
                         let _ = s.commands.send(wifi::Cmd::Scan);

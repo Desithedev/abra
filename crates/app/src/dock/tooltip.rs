@@ -1,5 +1,3 @@
-//! Tooltip kapsul kaca gelap di atas ikon yang di-hover, dengan ekor kecil menunjuk ke ikon (seperti macOS).
-
 use crate::popup::Popup;
 use nacre_platform::text::{measure, render, Style};
 use nacre_ui::gfx::Gfx;
@@ -22,21 +20,17 @@ pub struct Tooltip {
     text: SpriteVisual,
     dpi: f32,
     screen_w: i32,
-    /// Teks yang sudah dirender per label: melewati ikon yang sama berulang tidak merender GDI + mengunggah lagi.
     cache: HashMap<String, (CompositionDrawingSurface, i32, i32)>,
     shown: Option<String>,
     tail: SpriteVisual,
-    /// Warna ekor (mengikuti kaca) dan permukaan segitiganya; dibuat ulang hanya saat tampilan berubah.
     tail_color: Color,
     tail_surface: Option<(CompositionDrawingSurface, i32)>,
 }
 
-/// Segitiga menghadap bawah selebar 2t, tinggi t, dengan tepi halus (BGRA ter-premultiply).
 fn tail_bitmap(t: i32, c: Color) -> Vec<u8> {
     let (w, h) = (2 * t, t);
     let mut out = vec![0u8; (w * h * 4) as usize];
     for y in 0..h {
-        // lebar separuh pada baris y: dari t (atas) menyempit ke 0 (bawah)
         let half = t as f32 - (y as f32 + 0.5);
         for x in 0..w {
             let d = (x as f32 + 0.5 - t as f32).abs();
@@ -55,7 +49,6 @@ fn tail_bitmap(t: i32, c: Color) -> Vec<u8> {
 impl Tooltip {
     pub fn new(comp: &Compositor, dpi: f32, screen_w: i32) -> Result<Tooltip> {
         let glass = crate::prefs::glass((10.0, 10.0), 10.0, crate::prefs::Role::Dark);
-        // WS_EX_TRANSPARENT: tooltip tidak pernah menerima/menelan klik.
         let popup = Popup::new(comp, w!("NacreTooltip"), Some(proc), WS_EX_TRANSPARENT, glass)?;
         let text = comp.CreateSpriteVisual()?;
         popup.content.Children()?.InsertAtTop(&text)?;
@@ -64,7 +57,6 @@ impl Tooltip {
         Ok(Tooltip { popup, text, dpi, screen_w, cache: HashMap::new(), shown: None, tail, tail_color: Color { A: 200, R: 30, G: 32, B: 38 }, tail_surface: None })
     }
 
-    /// `cx`: pusat horizontal (px layar); `bottom`: tepi bawah tooltip (px layar).
     pub fn show(&mut self, comp: &Compositor, gfx: &Gfx, label: &str, cx: i32, bottom: i32) -> Result<()> {
         let style = Style { px: (15.0 * self.dpi).round() as i32, weight: 500 };
         let (px, py) = ((14.0 * self.dpi) as i32, (5.0 * self.dpi) as i32);
@@ -89,7 +81,6 @@ impl Tooltip {
             self.shown = Some(label.to_string());
         }
         let x = (cx - w / 2).clamp(4, (self.screen_w - w - 4).max(4));
-        // ekor: segitiga di bawah kapsul, tepat di atas pusat ikon (tinggi ekor mengurangi jarak ke ikon)
         let t = ((5.0 * self.dpi).round() as i32).max(3);
         self.popup.set_rect(x, bottom - h - t, w, h + t)?;
         self.popup.panel.set_rect(0.0, 0.0, w as f32, h as f32)?;
@@ -111,7 +102,6 @@ impl Tooltip {
 
     pub fn apply_look(&mut self, p: GlassParams) {
         let _ = self.popup.panel.set_params(p);
-        // ekor sewarna dasar kaca (segitiga kecil, tanpa blur sendiri)
         let c = if p.tint.A > 0 { p.solid } else { self.tail_color };
         self.tail_color = Color { A: 205, R: c.R, G: c.G, B: c.B };
         self.tail_surface = None;
@@ -127,6 +117,3 @@ impl Tooltip {
         }
     }
 }
-
-
-

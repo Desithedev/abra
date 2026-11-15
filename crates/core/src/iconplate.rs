@@ -1,19 +1,11 @@
-//! Ikon dock seragam ala macOS: setiap ikon menempati "badan" squircle (superelips) yang sama besar dengan bayangan
-//! lembut di bawahnya. Ikon yang sudah berbentuk kotak membulat dipakai apa adanya (hanya diperkecil ke ukuran badan);
-//! ikon berbentuk bebas (perisai, map, logo) diletakkan di atas pelat putih. Murni (BGRA ter-premultiply), diuji.
-
-/// Badan ikon terhadap kanvas (macOS: 824/1024; sedikit lebih besar agar terbaca di dock kecil).
 pub const BODY: f32 = 0.86;
-/// Ikon bentuk bebas di atas pelat, terhadap kanvas.
 const GLYPH: f32 = 0.60;
-/// Pangkat superelips (sudut kontinu ala Apple).
 const POWER: f32 = 5.0;
 
 fn alpha(b: &[u8], n: u32, x: u32, y: u32) -> u8 {
     b[((y * n + x) * 4 + 3) as usize]
 }
 
-/// Apakah ikon sudah berupa kotak membulat penuh (mengisi kanvas, sudut transparan)?
 pub fn is_rounded_square(bgra: &[u8], n: u32) -> bool {
     if n < 8 || bgra.len() < (n * n * 4) as usize {
         return false;
@@ -28,7 +20,6 @@ pub fn is_rounded_square(bgra: &[u8], n: u32) -> bool {
     edges && quarters && filled > 0.80
 }
 
-/// Ubah ukuran `n`×`n` → `m`×`m` dengan rata-rata area (untuk memperkecil) / bilinear sederhana.
 fn resample(src: &[u8], n: u32, m: u32) -> Vec<u8> {
     let mut out = vec![0u8; (m * m * 4) as usize];
     let k = n as f32 / m as f32;
@@ -65,7 +56,6 @@ fn resample(src: &[u8], n: u32, m: u32) -> Vec<u8> {
     out
 }
 
-/// Cakupan superelips berpusat di tengah kanvas `n` dengan setengah-sisi `half` px, pada piksel (x,y) (supersampling 3×3).
 fn squircle_cov(n: u32, half: f32, x: u32, y: u32) -> f32 {
     let c = n as f32 / 2.0;
     let mut hit = 0;
@@ -81,7 +71,6 @@ fn squircle_cov(n: u32, half: f32, x: u32, y: u32) -> f32 {
     hit as f32 / 9.0
 }
 
-/// Letakkan `top` (m×m, premultiply) di atas `dst` (n×n) pada (ox, oy).
 fn over(dst: &mut [u8], n: u32, top: &[u8], m: u32, ox: u32, oy: u32) {
     for y in 0..m {
         for x in 0..m {
@@ -134,7 +123,6 @@ fn box_blur(a: &mut [f32], n: usize, r: usize) {
     }
 }
 
-/// Tambahkan bayangan lembut di bawah gambar (di dalam kanvas yang sama).
 fn with_shadow(img: &[u8], n: u32) -> Vec<u8> {
     let nn = n as usize;
     let dy = ((n as f32 * 0.022).round() as usize).max(1);
@@ -149,7 +137,7 @@ fn with_shadow(img: &[u8], n: u32) -> Vec<u8> {
     box_blur(&mut a, nn, r);
     let mut out = vec![0u8; img.len()];
     for i in 0..nn * nn {
-        let sa = (a[i] * 0.30 * 255.0) as u32; // hitam, alfa 30%
+        let sa = (a[i] * 0.30 * 255.0) as u32;
         let ia = 255 - img[i * 4 + 3] as u32;
         for c in 0..3 {
             out[i * 4 + c] = img[i * 4 + c];
@@ -159,17 +147,12 @@ fn with_shadow(img: &[u8], n: u32) -> Vec<u8> {
     out
 }
 
-/// Warna tint untuk gaya Tinted: Biru, Ungu, Merah Muda, Oranye, Hijau.
 pub const TINTS: [[u8; 3]; 5] = [[10, 132, 255], [175, 82, 222], [255, 55, 95], [255, 149, 10], [48, 209, 88]];
 
-/// Terapkan gaya ikon Tahoe pada ikon BGRA ter-premultiply (`Default` mengembalikan salinan apa adanya).
-/// Dark: latar digelapkan; Clear: abu-abu bening berkilau; Tinted: warna ikon dipetakan ke satu warna tint.
 pub fn style_icon(bgra: &[u8], style: crate::settings::IconStyle, tint_index: u8) -> Vec<u8> {
     style_icon_v(bgra, style, tint_index, true)
 }
 
-/// Seperti `style_icon` dengan varian Terang/Gelap (Tahoe: radio Light · Dark · Auto di bawah gaya ikon).
-/// Varian terang: Gelap = ikon biasa, Bening = kaca putih susu, Berwarna = tint di atas dasar terang.
 pub fn style_icon_v(bgra: &[u8], style: crate::settings::IconStyle, tint_index: u8, dark: bool) -> Vec<u8> {
     use crate::settings::IconStyle;
     let mut out = bgra.to_vec();
@@ -186,7 +169,6 @@ pub fn style_icon_v(bgra: &[u8], style: crate::settings::IconStyle, tint_index: 
         let lum = 0.299 * r + 0.587 * g + 0.114 * b;
         let (nr, ng, nb, na) = match style {
             IconStyle::Dark => {
-                // kurangi saturasi sedikit lalu gelapkan
                 let (sr, sg, sb) = (r * 0.75 + lum * 0.25, g * 0.75 + lum * 0.25, b * 0.75 + lum * 0.25);
                 (sr * 0.38 + 8.0, sg * 0.38 + 8.0, sb * 0.40 + 14.0, a as f32)
             }
@@ -221,7 +203,6 @@ pub fn style_icon_v(bgra: &[u8], style: crate::settings::IconStyle, tint_index: 
     out
 }
 
-/// Hasilkan ikon dock seragam `n`×`n` dari ikon sumber `n`×`n`.
 pub fn plate(bgra: &[u8], n: u32) -> Vec<u8> {
     if n < 8 || bgra.len() < (n * n * 4) as usize {
         return bgra.to_vec();
@@ -232,7 +213,6 @@ pub fn plate(bgra: &[u8], n: u32) -> Vec<u8> {
         let small = resample(bgra, n, m);
         over(&mut canvas, n, &small, m, (n - m) / 2, (n - m) / 2);
     } else {
-        // pelat putih bergradasi halus (atas putih, bawah abu sangat muda)
         let half = n as f32 * BODY / 2.0;
         for y in 0..n {
             let t = y as f32 / n as f32;
@@ -243,7 +223,7 @@ pub fn plate(bgra: &[u8], n: u32) -> Vec<u8> {
                     let a = (cov * 255.0) as u32;
                     let i = ((y * n + x) * 4) as usize;
                     let p = (v * a / 255) as u8;
-                    canvas[i] = (((v + 3).min(255)) * a / 255) as u8; // sedikit kebiruan
+                    canvas[i] = (((v + 3).min(255)) * a / 255) as u8;
                     canvas[i + 1] = p;
                     canvas[i + 2] = p;
                     canvas[i + 3] = a as u8;
@@ -257,7 +237,6 @@ pub fn plate(bgra: &[u8], n: u32) -> Vec<u8> {
     with_shadow(&canvas, n)
 }
 
-/// Ikon bentuk bebas tanpa pelat (mis. tempat sampah): diperkecil sedikit agar setara badan ikon lain, plus bayangan.
 pub fn free(bgra: &[u8], n: u32) -> Vec<u8> {
     if n < 8 || bgra.len() < (n * n * 4) as usize {
         return bgra.to_vec();
@@ -269,7 +248,6 @@ pub fn free(bgra: &[u8], n: u32) -> Vec<u8> {
     with_shadow(&canvas, n)
 }
 
-/// Ikon tombol Launchpad ala macOS: badan squircle terang bergradasi dengan kisi 3×3 titik berwarna, plus bayangan.
 pub fn launchpad_icon(n: u32) -> Vec<u8> {
     const DOTS: [[u8; 3]; 9] = [
         [255, 69, 58],
@@ -288,7 +266,6 @@ pub fn launchpad_icon(n: u32) -> Vec<u8> {
     let (pitch, radius) = (n as f32 * 0.205, n as f32 * 0.085);
     for y in 0..n {
         let t = y as f32 / n as f32;
-        // atas hampir putih, bawah abu kebiruan lembut
         let (br, bg, bb) = (250.0 - 40.0 * t, 250.0 - 38.0 * t, 252.0 - 28.0 * t);
         for x in 0..n {
             let cov = squircle_cov(n, half, x, y);
@@ -300,7 +277,7 @@ pub fn launchpad_icon(n: u32) -> Vec<u8> {
             for (i, col) in DOTS.iter().enumerate() {
                 let (cx, cy) = (c + ((i % 3) as f32 - 1.0) * pitch, c + ((i / 3) as f32 - 1.0) * pitch);
                 let d = ((px - cx).powi(2) + (py - cy).powi(2)).sqrt();
-                let k = (radius + 0.5 - d).clamp(0.0, 1.0); // anti-alias 1 px
+                let k = (radius + 0.5 - d).clamp(0.0, 1.0);
                 if k > 0.0 {
                     r += (col[0] as f32 - r) * k;
                     g += (col[1] as f32 - g) * k;
@@ -346,12 +323,11 @@ mod style_tests {
     fn tinted_takes_the_tint_hue_and_keeps_alpha_zero_clear() {
         let mut src = solid(8, [200, 120, 60]);
         src[0..4].copy_from_slice(&[0, 0, 0, 0]);
-        let t = style_icon(&src, IconStyle::Tinted, 0); // biru
+        let t = style_icon(&src, IconStyle::Tinted, 0);
         assert_eq!(&t[0..4], &[0, 0, 0, 0]);
-        let p = &t[4..8]; // B, G, R, A
+        let p = &t[4..8];
         assert!(p[0] > p[2] && p[0] > p[1], "biru dominan: {p:?}");
         let pink = style_icon(&src, IconStyle::Tinted, 2);
-        // varian terang: Bening lebih terang daripada Bening gelap; Gelap+terang = ikon asli
         let lum = |b: &[u8]| b.chunks_exact(4).map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32).sum::<u32>();
         assert!(lum(&style_icon_v(&src, IconStyle::Clear, 0, false)) > lum(&style_icon(&src, IconStyle::Clear, 0)));
         assert_eq!(style_icon_v(&src, IconStyle::Dark, 0, false), src);
@@ -381,7 +357,6 @@ mod tests {
     #[test]
     fn detects_rounded_square_but_not_free_shapes() {
         assert!(is_rounded_square(&solid(64, 0, 6), 64));
-        // lingkaran kecil di tengah: bukan
         let n = 64u32;
         let mut c = vec![0u8; (n * n * 4) as usize];
         for y in 0..n {
@@ -407,13 +382,11 @@ mod tests {
         }
         let p = plate(&c, n);
         assert_eq!(p.len(), c.len());
-        // sudut kanvas kosong, tengah = ikon merah, antara tepi badan dan ikon = pelat terang
         assert_eq!(alpha(&p, n, 0, 0), 0);
         let mid = ((48 * n + 48) * 4) as usize;
         assert!(p[mid + 2] > 200 && p[mid] < 60);
         let pl = ((48 * n + 14) * 4) as usize;
         assert!(p[pl + 3] > 240 && p[pl + 1] > 220);
-        // premultiply tetap sah
         for px in p.chunks_exact(4) {
             assert!(px[0] <= px[3] && px[1] <= px[3] && px[2] <= px[3]);
         }
@@ -423,11 +396,9 @@ mod tests {
     fn rounded_square_is_shrunk_to_body_with_shadow_below() {
         let n = 100u32;
         let p = plate(&solid(n, 0, 8), n);
-        // tepi kanvas kini kosong (badan 86%), tengah tetap berwarna ikon
         assert_eq!(alpha(&p, n, 50, 1), 0);
         let mid = ((50 * n + 50) * 4) as usize;
         assert_eq!(&p[mid..mid + 4], &[200, 100, 50, 255]);
-        // bayangan: di bawah badan ada alfa tipis, di atas badan tidak
         assert!(alpha(&p, n, 50, 95) > 0 && alpha(&p, n, 50, 95) < 120);
         assert!(alpha(&p, n, 50, 4) < alpha(&p, n, 50, 95));
     }
@@ -438,10 +409,8 @@ mod tests {
         let p = launchpad_icon(n);
         assert_eq!(p.len(), (n * n * 4) as usize);
         assert_eq!(alpha(&p, n, 1, 1), 0);
-        // tengah = titik biru (kisi 3x3 tengah: biru muda 90,200,250)
         let mid = ((64 * n + 64) * 4) as usize;
         assert!(p[mid] > 200 && p[mid + 3] == 255, "titik tengah berwarna cerah");
-        // badan terang di antara titik
         let body = ((20 * n + 64) * 4) as usize;
         assert!(p[body + 1] > 200 && p[body + 3] > 240);
         for px in p.chunks_exact(4) {

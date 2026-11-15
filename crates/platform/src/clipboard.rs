@@ -1,7 +1,3 @@
-//! Riwayat papan klip (teks saja) untuk mode Papan Klip di Spotlight. Hanya di memori: tidak pernah ditulis ke disk atau
-//! dikirim ke mana pun, dibatasi 8 jam / 100 butir, dan bisa dimatikan. Isi yang ditandai pengelola kata sandi
-//! ("ExcludeClipboardContentFromMonitorProcessing" / "CanIncludeInClipboardHistory"=0) diabaikan.
-
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use windows::core::{w, PCWSTR};
@@ -21,7 +17,6 @@ const MAX_CHARS: usize = 4000;
 
 #[derive(Clone, Debug)]
 pub struct Entry {
-    /// Detik sejak epoch Unix.
     pub at: i64,
     pub text: String,
 }
@@ -34,8 +29,6 @@ fn now_secs() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
-/// Tambahkan teks ke riwayat (di luar jendela, agar bisa diuji): buang yang kosong/terlalu panjang, gabungkan duplikat,
-/// pangkas yang lebih tua dari 8 jam dan melebihi batas jumlah.
 pub fn push(history: &mut Vec<Entry>, text: &str, now: i64) {
     let t = text.trim_end_matches(['\r', '\n', '\0']);
     if t.trim().is_empty() {
@@ -73,7 +66,6 @@ unsafe fn read_text(hwnd: HWND) -> Option<String> {
     for _ in 0..6 {
         if OpenClipboard(Some(hwnd)).is_ok() {
             let r = (|| {
-                // pengelola kata sandi menandai isi sensitif: jangan simpan
                 for name in [w!("ExcludeClipboardContentFromMonitorProcessing")] {
                     let f = RegisterClipboardFormatW(name);
                     if f != 0 && IsClipboardFormatAvailable(f).is_ok() {
@@ -116,7 +108,6 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
     DefWindowProcW(hwnd, msg, wp, lp)
 }
 
-/// Pasang pendengar papan klip (panggil sekali dari thread UI).
 pub fn init() -> windows_core::Result<()> {
     unsafe {
         let hi = GetModuleHandleW(None)?.into();
@@ -138,7 +129,6 @@ pub fn shutdown() {
     }
 }
 
-/// Salin `text` kembali ke papan klip sistem (agar bisa ditempel).
 pub fn copy_text(text: &str) -> bool {
     unsafe {
         let hwnd = HWND(HWND_LISTENER.load(Ordering::Relaxed) as *mut _);
@@ -179,7 +169,7 @@ mod tests {
         let mut h = Vec::new();
         push(&mut h, "a", 1000);
         push(&mut h, "b\r\n", 1001);
-        push(&mut h, "a", 1002); // duplikat naik ke atas
+        push(&mut h, "a", 1002);
         assert_eq!(h.iter().map(|e| e.text.as_str()).collect::<Vec<_>>(), vec!["a", "b"]);
         push(&mut h, "   ", 1003);
         assert_eq!(h.len(), 2, "kosong diabaikan");

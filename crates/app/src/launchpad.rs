@@ -1,6 +1,3 @@
-//! "Launchpad" di Tahoe sudah menjadi mode **Apps** milik Spotlight. Modul ini hanya meneruskan pemanggil lama
-//! (tombol dock, hot corner, menu, Control Center) ke `spotlight::toggle_mode(Mode::Apps)`.
-
 use nacre_core::spotlight::Mode;
 use windows::UI::Composition::Compositor;
 

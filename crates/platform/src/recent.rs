@@ -1,11 +1,6 @@
-//! Berkas yang baru dibuka (folder "Recent" Windows) untuk seksi "Terbaru" di Spotlight → Berkas.
-//! Hanya membaca pintasan yang dibuat Windows sendiri; berkas tidak dibuka.
-
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-/// `n` berkas terbaru: (nama, path), terbaru lebih dulu. Hanya berkas yang masih ada (bukan folder).
-/// Thread pemanggil harus sudah menginisialisasi COM (pembacaan `.lnk`).
 pub fn list(n: usize) -> Vec<(String, String)> {
     let Some(appdata) = std::env::var_os("APPDATA") else { return Vec::new() };
     let dir = PathBuf::from(appdata).join("Microsoft").join("Windows").join("Recent");

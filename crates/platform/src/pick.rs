@@ -1,6 +1,3 @@
-//! Dialog pilih berkas (IFileOpenDialog) dan penyelesaian pintasan `.lnk` ke target aslinya.
-//! Dipanggil dari thread UI (STA). Dialog bersifat modal dan memakai loop pesannya sendiri.
-
 use windows::core::{w, HSTRING, PCWSTR};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Com::{CoCreateInstance, IPersistFile, CLSCTX_INPROC_SERVER, STGM_READ};
@@ -10,7 +7,6 @@ use windows::Win32::UI::Shell::{
     SIGDN_FILESYSPATH,
 };
 
-/// Tampilkan dialog pilih folder.
 pub fn folder(title: &str) -> Option<String> {
     unsafe {
         let dlg: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER).ok()?;
@@ -26,14 +22,12 @@ pub fn folder(title: &str) -> Option<String> {
     }
 }
 
-/// Tampilkan dialog buka berkas. `filters`: pasangan (nama tampil, pola seperti "*.exe;*.lnk").
 pub fn open_file(title: &str, filters: &[(&str, &str)]) -> Option<String> {
     unsafe {
         let dlg: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER).ok()?;
         let opts = dlg.GetOptions().ok()?;
         dlg.SetOptions(opts | FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST | FOS_FORCEFILESYSTEM).ok()?;
         let _ = dlg.SetTitle(&HSTRING::from(title));
-        // HSTRING hidup sampai dialog selesai: PCWSTR di spec menunjuk ke sini.
         let owned: Vec<(HSTRING, HSTRING)> = filters.iter().map(|(n, p)| (HSTRING::from(*n), HSTRING::from(*p))).collect();
         let specs: Vec<COMDLG_FILTERSPEC> =
             owned.iter().map(|(n, p)| COMDLG_FILTERSPEC { pszName: PCWSTR(n.as_ptr()), pszSpec: PCWSTR(p.as_ptr()) }).collect();
@@ -49,7 +43,6 @@ pub fn open_file(title: &str, filters: &[(&str, &str)]) -> Option<String> {
     }
 }
 
-/// Selesaikan `.lnk` ke jalur target; selain `.lnk` dikembalikan apa adanya.
 pub fn resolve_shortcut(path: &str) -> Option<String> {
     if !path.to_ascii_lowercase().ends_with(".lnk") {
         return Some(path.to_string());
@@ -66,8 +59,6 @@ pub fn resolve_shortcut(path: &str) -> Option<String> {
         if !target.is_empty() {
             return Some(target);
         }
-        // Aplikasi Microsoft Store (WhatsApp, Calculator, ...): pintasannya tidak punya jalur berkas, targetnya
-        // identitas aplikasi (AUMID) di dalam ID-list. Ubah ke `shell:AppsFolder\<AUMID>` seperti yang dipakai dock.
         let pidl = link.GetIDList().ok()?;
         let name = windows::Win32::UI::Shell::SHGetNameFromIDList(pidl, windows::Win32::UI::Shell::SIGDN_DESKTOPABSOLUTEPARSING).ok()?;
         let parsed = name.to_string().ok();

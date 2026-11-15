@@ -1,19 +1,11 @@
-//! Paket ikon opsional (mis. folder PNG ikon macOS) yang dipasang pengguna di `%APPDATA%\ABRA\iconpack`.
-//!
-//! ABRA tidak membawa ikon apa pun; ia hanya mencocokkan app Windows dengan berkas bernama mirip di folder itu
-//! (Calculator, Finder, Terminal, ...). Ikon yang dipilih manual lewat "Ubah ikon…" selalu menang atas paket.
-//! App yang tidak punya padanan jelas (mis. browser pihak ketiga) tidak pernah diganti.
-
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-/// Batas aman saat memindai paket: kedalaman folder, jumlah berkas, dan ukuran satu gambar.
 const MAX_DEPTH: usize = 3;
 const MAX_FILES: usize = 2000;
 const MAX_BYTES: u64 = 12 * 1024 * 1024;
 
-/// Nama biner (tanpa `.exe`, huruf kecil) → nama berkas ikon di paket.
 const EXE_ALIASES: &[(&str, &str)] = &[
     ("explorer", "Finder"),
     ("calc", "Calculator"),
@@ -40,7 +32,6 @@ const EXE_ALIASES: &[(&str, &str)] = &[
     ("soundrecorder", "Voice Memos"),
 ];
 
-/// Potongan AUMID app Store/UWP (huruf kecil) → nama berkas ikon.
 const UWP_ALIASES: &[(&str, &str)] = &[
     ("windowscalculator", "Calculator"),
     ("windowsalarms", "Clock"),
@@ -68,16 +59,13 @@ const UWP_ALIASES: &[(&str, &str)] = &[
     ("gamingapp", "Games"),
 ];
 
-/// Tombol dock bawaan ABRA (kunci internal) → nama berkas ikon.
 const SPECIAL: &[(&str, &str)] = &[("abra:launchpad", "Apps")];
 
 #[derive(Default)]
 struct State {
     enabled: bool,
     dir: Option<PathBuf>,
-    /// nama berkas tanpa ekstensi (huruf kecil) → path
     index: HashMap<String, PathBuf>,
-    /// path app (huruf kecil) → hasil pencocokan, agar pencocokan tidak diulang
     cache: HashMap<String, Option<String>>,
 }
 
@@ -101,7 +89,6 @@ fn scan(dir: &Path) -> HashMap<String, PathBuf> {
                 if seen > MAX_FILES {
                     return out;
                 }
-                // tautan simbolik dilewati agar paket tidak bisa menunjuk ke luar foldernya
                 let Ok(md) = std::fs::symlink_metadata(e.path()) else { continue };
                 if md.file_type().is_symlink() {
                     continue;
@@ -111,7 +98,6 @@ fn scan(dir: &Path) -> HashMap<String, PathBuf> {
                     next.push(p);
                 } else if md.is_file() && md.len() <= MAX_BYTES && p.extension().is_some_and(|x| x.eq_ignore_ascii_case("png")) {
                     if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
-                        // folder yang lebih dangkal lebih dulu, jadi yang pertama dipertahankan
                         out.entry(stem.to_lowercase()).or_insert(p);
                     }
                 }
@@ -122,7 +108,6 @@ fn scan(dir: &Path) -> HashMap<String, PathBuf> {
     out
 }
 
-/// Atur folder paket dan apakah dipakai. Indeks dibangun ulang hanya bila folder berubah.
 pub fn configure(dir: &Path, enabled: bool) {
     with(|s| {
         if s.dir.as_deref() != Some(dir) {
@@ -137,7 +122,6 @@ pub fn configure(dir: &Path, enabled: bool) {
     });
 }
 
-/// Banyak ikon yang terbaca di paket.
 pub fn count() -> usize {
     with(|s| s.index.len())
 }
@@ -162,7 +146,6 @@ fn resolve(s: &State, app: &str) -> Option<String> {
     s.index.get(&want.to_lowercase()).map(|p| p.to_string_lossy().to_string())
 }
 
-/// Berkas ikon paket untuk app `app` (path exe, `shell:AppsFolder\AUMID`, atau kunci internal), bila ada padanannya.
 pub fn lookup(app: &str) -> Option<String> {
     with(|s| {
         if !s.enabled || s.index.is_empty() {

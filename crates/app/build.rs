@@ -1,4 +1,3 @@
-//! Ikon ABRA di abra.exe (Explorer, Start, taskbar, tray).
 include!("icon_res.rs");
 
 fn main() {

@@ -1,4 +1,3 @@
-//! Lokasi berkas. `NACRE_CONFIG_DIR` menimpa folder config (dipakai tes agar tidak menyentuh data asli).
 use std::path::PathBuf;
 
 pub fn config_dir() -> PathBuf {
@@ -11,7 +10,6 @@ pub fn config_dir() -> PathBuf {
     dir
 }
 
-/// Pertama kali dijalankan sebagai ABRA: salin data lama (pins, pengaturan) dari folder "Nacre" bila ada.
 fn migrate_legacy(old: &std::path::Path, new: &std::path::Path) {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
@@ -33,7 +31,6 @@ pub fn log() -> PathBuf {
     config_dir().join("abra.log")
 }
 
-/// `abra-guard.exe` ada di folder yang sama dengan exe utama.
 pub fn guard_exe() -> PathBuf {
     std::env::current_exe()
         .ok()

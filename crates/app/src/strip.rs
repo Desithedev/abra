@@ -1,7 +1,3 @@
-//! Strip tepi 2 px: window layered berkas alfa 1 yang tetap menerima hover. Menggantikan hook mouse global untuk
-//! mendeteksi kursor menempel di tepi layar (nol polling, nol hook). Satu `Strip` per tepi; pesan masuk/keluar
-//! diposting ke window pemilik.
-
 use std::sync::Once;
 use windows::core::w;
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
@@ -14,7 +10,6 @@ use windows_core::Result;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 static REGISTER: Once = Once::new();
 
-/// Data per instance, disimpan di GWLP_USERDATA.
 struct State {
     target: HWND,
     enter: u32,
@@ -93,7 +88,6 @@ impl Strip {
                 None, None, Some(hi), None,
             )?;
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(Box::new(State { target, enter, leave, inside: false })) as isize);
-            // Alfa 1/255: tak terlihat, tapi tetap ikut hit-test.
             SetLayeredWindowAttributes(hwnd, COLORREF(0), 1, LWA_ALPHA)?;
             Ok(Strip { hwnd })
         }

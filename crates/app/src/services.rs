@@ -1,6 +1,3 @@
-﻿//! Layanan sistem bersama (volume, kecerahan). Event-driven: pekerja platform mengabari lewat pesan window
-//! ke HUD dan island yang terdaftar; nilai terbaru dibaca dari `audio::latest()` / `brightness::latest()`.
-
 use nacre_platform::{audio, brightness};
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::OnceLock;
@@ -35,7 +32,6 @@ fn post_all(msg: u32) {
     }
 }
 
-/// Memulai pekerja volume dan kecerahan (sekali).
 pub fn init() {
     if AUDIO.get().is_some() {
         return;
@@ -64,13 +60,11 @@ pub fn set_brightness(frac: f32) {
     }
 }
 
-// ---- posisi notch (dibaca menu bar untuk menyisakan celah) ----
 use std::sync::atomic::AtomicI32;
 static NOTCH_L: AtomicI32 = AtomicI32::new(0);
 static NOTCH_R: AtomicI32 = AtomicI32::new(0);
 static NOTCH_H: AtomicI32 = AtomicI32::new(0);
 
-/// Island mengumumkan pil notch (px layar) saat diam; `(0,0,0)` bila notch mati.
 pub fn set_notch(l: i32, r: i32, h: i32) {
     NOTCH_L.store(l, Ordering::Relaxed);
     NOTCH_R.store(r, Ordering::Relaxed);
@@ -83,7 +77,6 @@ pub fn set_notch(l: i32, r: i32, h: i32) {
     }
 }
 
-/// `(kiri, kanan, tinggi)` pil notch atau `None` bila notch mati.
 pub fn notch() -> Option<(i32, i32, i32)> {
     let (l, r, h) = (NOTCH_L.load(Ordering::Relaxed), NOTCH_R.load(Ordering::Relaxed), NOTCH_H.load(Ordering::Relaxed));
     (r > l && h > 0).then_some((l, r, h))
@@ -94,7 +87,6 @@ pub fn register_bar(h: HWND) {
     BAR.store(h.0 as isize, Ordering::Relaxed);
 }
 
-/// Kirim pesan ke island (mis. buka panel Kontrol dari menu bar).
 pub fn post_island(msg: u32) {
     let h = ISLAND.load(Ordering::Relaxed);
     if h != 0 {

@@ -1,6 +1,3 @@
-//! Window utama tersembunyi: penerima pesan sistem (TaskbarCreated, sesi berakhir),
-//! ikon tray, dan pemilik siklus hidup. Bukan permukaan UI.
-
 use crate::{paths, single_instance};
 use nacre_platform::shell::taskbar;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -25,7 +22,6 @@ pub fn create() -> windows::core::Result<HWND> {
         let class = w!("NacreMain");
         RegisterClassW(&WNDCLASSW { lpfnWndProc: Some(proc), hInstance: hi, lpszClassName: class, ..Default::default() });
         TASKBAR_CREATED.store(RegisterWindowMessageW(w!("TaskbarCreated")), Ordering::Relaxed);
-        // Window tingkat-atas tak terlihat (bukan message-only) agar menerima pesan broadcast.
         CreateWindowExW(
             WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
             class,
@@ -43,7 +39,6 @@ pub fn set_exit_timer(hwnd: HWND, seconds: u32) {
     }
 }
 
-/// Ikon ABRA (sumber daya id 1 di exe, ditanam build.rs) seukuran ikon kecil sistem; cadangan: ikon aplikasi umum.
 fn tray_icon() -> HICON {
     unsafe {
         let hi = GetModuleHandleW(None).map(|h| HINSTANCE(h.0)).ok();
@@ -85,10 +80,8 @@ fn remove_tray(hwnd: HWND) {
     }
 }
 
-/// Apakah pengaturan "mode penuh" boleh mengubah taskbar (mati untuk uji `--keep-taskbar` atau tanpa dock).
 pub static TAKEOVER_ALLOWED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Samakan entri Run dengan pengaturan. Hanya menulis bila berbeda (atau jalur exe berubah).
 pub fn apply_autostart() {
     use nacre_platform::startup;
     let want = crate::prefs::get().autostart;
@@ -122,7 +115,6 @@ fn show_menu(hwnd: HWND) {
         let _ = AppendMenuW(menu, MF_STRING, ID_QUIT, w!("Keluar dari ABRA"));
         let mut pt = POINT::default();
         let _ = GetCursorPos(&mut pt);
-        // Wajib agar menu tertutup saat klik di luar.
         let _ = SetForegroundWindow(hwnd);
         let _ = TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_BOTTOMALIGN, pt.x, pt.y, Some(0), hwnd, None);
         let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
@@ -133,7 +125,6 @@ fn show_menu(hwnd: HWND) {
 unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     let tc = TASKBAR_CREATED.load(Ordering::Relaxed);
     if tc != 0 && msg == tc {
-        // Explorer dibuat ulang: ikon tray hilang dan taskbar baru muncul lagi.
         add_tray(hwnd);
         taskbar::reassert();
         crate::dock::request_appbar_resync();
@@ -193,5 +184,3 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         _ => DefWindowProcW(hwnd, msg, wp, lp),
     }
 }
-
-

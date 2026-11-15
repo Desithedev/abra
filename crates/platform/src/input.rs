@@ -1,7 +1,3 @@
-﻿//! Hook mouse global yang HANYA hidup selama popup kustom terbuka (SPEC: tidak ada hook permanen).
-//! Klik di luar area popup menutupnya; klik itu ditelan (tidak sampai ke aplikasi di bawah).
-//! Hook low-level berjalan di thread pemasang, jadi `begin_dismiss` harus dipanggil dari thread UI.
-
 use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -27,17 +23,15 @@ unsafe extern "system" fn proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
             );
             let inside = pt.x >= l && pt.x < r && pt.y >= t && pt.y < b;
             if !inside {
-                // titik klik (layar) di lParam seperti MAKELPARAM, untuk pemilik yang perlu tahu di mana klik terjadi
                 let packed = ((pt.y as i16 as u16 as u32) << 16) | (pt.x as i16 as u16 as u32);
                 let _ = PostMessageW(Some(HWND(TARGET.load(Ordering::Relaxed) as *mut _)), MSG.load(Ordering::Relaxed), WPARAM(0), LPARAM(packed as isize));
-                return LRESULT(1); // telan klik penutup
+                return LRESULT(1);
             }
         }
     }
     CallNextHookEx(None, code, wp, lp)
 }
 
-/// Mulai mengawasi klik di luar `rect` (kiri, atas, kanan, bawah; piksel layar). Saat terjadi, `msg` diposting ke `target`.
 pub fn begin_dismiss(rect: (i32, i32, i32, i32), target: isize, msg: u32) {
     end_dismiss();
     RECT[0].store(rect.0, Ordering::Relaxed);

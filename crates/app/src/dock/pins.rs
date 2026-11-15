@@ -1,10 +1,7 @@
-//! Daftar pin: satu path per baris di `pins.txt`. Ditulis atomik; berkas hilang = pin bawaan.
-
 use nacre_core::dock::items::{name_from_path, Pin};
 use std::io::Write;
 use std::path::Path;
 
-/// Nama ramah dari metadata exe, jatuh ke nama berkas bila tidak ada.
 pub fn name_for(path: &str) -> String {
     let n = nacre_platform::wins::names::friendly(path);
     if n.is_empty() {
@@ -22,7 +19,6 @@ fn default_pins() -> Vec<Pin> {
 
 pub fn load(path: &Path) -> Vec<Pin> {
     match std::fs::read_to_string(path) {
-        // Notepad (dan banyak editor) menyimpan UTF-8 dengan BOM; baris pertama tidak boleh rusak karenanya.
         Ok(text) => text
             .trim_start_matches('\u{feff}')
             .lines()
@@ -50,6 +46,3 @@ pub fn save(path: &Path, pins: &[Pin]) -> std::io::Result<()> {
     drop(f);
     std::fs::rename(&tmp, path)
 }
-
-
-

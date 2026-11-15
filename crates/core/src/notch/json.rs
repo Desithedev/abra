@@ -1,5 +1,3 @@
-//! Pembaca JSON kecil (RFC 8259) untuk jawaban LRCLIB, tanpa dependensi. Tidak untuk menulis JSON.
-
 #[derive(Clone, Debug, PartialEq)]
 pub enum Json {
     Null,
@@ -90,7 +88,7 @@ impl P<'_> {
         u32::from_str_radix(h, 16).ok()
     }
     fn string(&mut self) -> Option<String> {
-        self.i += 1; // "
+        self.i += 1;
         let mut out: Vec<u8> = Vec::new();
         loop {
             let c = *self.s.get(self.i)?;
@@ -112,7 +110,6 @@ impl P<'_> {
                         b'u' => {
                             let hi = self.hex4()?;
                             let code = if (0xD800..0xDC00).contains(&hi) {
-                                // pasangan surrogate
                                 if !self.eat(b"\\u") {
                                     return None;
                                 }
@@ -197,7 +194,6 @@ impl P<'_> {
     }
 }
 
-/// Urai satu dokumen JSON; `None` bila tidak sah.
 pub fn parse(src: &str) -> Option<Json> {
     let mut p = P { s: src.as_bytes(), i: 0, depth: 0 };
     let v = p.value()?;

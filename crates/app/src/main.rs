@@ -1,4 +1,3 @@
-//! Nacre â€” titik masuk. M1: cangkang, keselamatan taskbar, host Composition.
 #![windows_subsystem = "windows"]
 
 mod controlcenter;
@@ -12,6 +11,8 @@ mod notch;
 mod hotcorners;
 mod launchpad;
 mod menubar;
+mod menulogo;
+mod widgets;
 mod netmenu;
 mod mission;
 mod motion;
@@ -45,9 +46,9 @@ struct Args {
     appbar: bool,
     dock_mode: Option<Mode>,
     island_mode: Option<Mode>,
-    /// Uji: jangan menyembunyikan taskbar meski pengaturan meminta.
     keep_taskbar: bool,
     open_settings: bool,
+    open_widgets: bool,
     add_app: Option<String>,
     set_icon: Option<(String, String)>,
     glass: Option<Tier>,
@@ -72,18 +73,18 @@ fn parse_args() -> Args {
         add_app: flag_value(&v, "--add-app"),
         set_icon: v.iter().position(|a| a == "--set-icon").and_then(|i| Some((v.get(i + 1)?.clone(), v.get(i + 2)?.clone()))),
         open_settings: v.iter().any(|a| a == "--open-settings"),
+        open_widgets: v.iter().any(|a| a == "--open-widgets"),
         keep_taskbar: v.iter().any(|a| a == "--keep-taskbar"),
         glass: flag_value(&v, "--glass").and_then(|s| match s.as_str() {
             "full" => Some(Tier::Full),
             "light" => Some(Tier::Light),
             "solid" => Some(Tier::Solid),
-            _ => None, // "auto" atau tak dikenal: otomatis
+            _ => None,
         }),
         exit_after: v.iter().position(|a| a == "--exit-after").and_then(|i| v.get(i + 1)).and_then(|s| s.parse().ok()),
     }
 }
 
-/// Dipanggil pada setiap jalur keluar tak normal.
 fn release_all(why: &str) {
     log::line("exit", why);
     nacre_platform::shell::appbar::release();
@@ -101,7 +102,6 @@ unsafe extern "system" fn ctrl_handler(t: u32) -> BOOL {
     BOOL(0)
 }
 
-/// Pastikan taskbar kembali walau main() keluar lewat jalur lain.
 struct ExitGuard;
 impl Drop for ExitGuard {
     fn drop(&mut self) {
@@ -123,7 +123,6 @@ fn main() {
     let _keep = mutex;
     log::line("start", &format!("hide={} demo={}", args.hide_taskbar, args.demo_surface));
 
-    // Keselamatan lebih dulu: sisa sesi sebelumnya (crash/dibunuh) dipulihkan sebelum apa pun.
     taskbar::recover_leftover(&paths::marker());
 
     std::panic::set_hook(Box::new(|info| {
@@ -135,7 +134,6 @@ fn main() {
     }
     let _exit = ExitGuard;
 
-    // COM STA di thread UI: properti shell (AUMID), dialog dan menu membutuhkannya.
     unsafe {
         let _ = windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_APARTMENTTHREADED);
     }
@@ -188,7 +186,6 @@ fn main() {
     if let Err(e) = launchpad::init(&host.compositor) {
         log::line("launchpad", &format!("gagal: {e}"));
     }
-    // sisa kursor bulat dari ABRA versi lama yang mati mendadak
     if nacre_platform::cursors::recover_leftover(&paths::config_dir().join("cursors_replaced.flag")) {
         log::line("cursor", "kursor sistem dipulihkan");
     }
@@ -222,16 +219,22 @@ fn main() {
     if let Err(e) = fx::init(&host) {
         log::line("fx", &format!("gagal: {e}"));
     }
+    if let Err(e) = widgets::init(&host.compositor) {
+        log::line("widgets", &format!("gagal: {e}"));
+    }
+    nacre_platform::sys::trim_later(20_000);
+    if args.open_widgets {
+        widgets::open_gallery();
+    }
     services::init();
     let _hud = if args.no_hud { None } else { hud::Hud::create(&host, args.glass).ok() };
 
     let _demo = if args.demo_surface { demo_surface(&host).ok() } else { None };
 
-    // Mode penuh: dock aktif ⇒ taskbar bawaan disembunyikan permanen (dipulihkan saat keluar/crash oleh guard).
     mainwin::TAKEOVER_ALLOWED.store(!args.no_dock && !args.keep_taskbar, std::sync::atomic::Ordering::Relaxed);
     prefs::listen(main_hwnd);
     if pref.autostart {
-        mainwin::apply_autostart(); // perbarui jalur bila exe dipindah
+        mainwin::apply_autostart();
     }
     if args.hide_taskbar || (pref.takeover && pref.dock_enabled && !args.no_dock && !args.keep_taskbar) {
         mainwin::set_taskbar_hidden(true);
@@ -248,9 +251,6 @@ fn main() {
     stage::shutdown();
     nacre_platform::clipboard::shutdown();
     macshortcuts::shutdown();
-    // Semua pemulihan (taskbar, appbar, jendela, kursor) sudah selesai. Membongkar objek Composition/WinRT satu per satu
-    // saat main() berakhir (dan pembongkaran proses oleh runtime) memicu crash ntdll 0xC000000D, jadi akhiri proses
-    // langsung dan biarkan sistem operasi membersihkan sisanya.
     release_all("exit");
     unsafe {
         let _ = windows::Win32::System::Threading::TerminateProcess(windows::Win32::System::Threading::GetCurrentProcess(), 0);
@@ -258,7 +258,6 @@ fn main() {
     std::process::exit(0);
 }
 
-/// Permukaan kaca sementara untuk membuktikan host Composition berjalan (dibuang di M2).
 fn demo_surface(host: &nacre_ui::host::Host) -> windows::core::Result<nacre_ui::host::Surface> {
     unsafe {
         let hi: HINSTANCE = GetModuleHandleW(None)?.into();
@@ -286,9 +285,3 @@ fn demo_surface(host: &nacre_ui::host::Host) -> windows::core::Result<nacre_ui::
         Ok(surface)
     }
 }
-
-
-
-
-
-

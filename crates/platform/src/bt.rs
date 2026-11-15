@@ -1,11 +1,3 @@
-//! Perangkat Bluetooth yang sudah dipasangkan (klasik + LE) beserta status tersambung, untuk menu Bluetooth.
-//!
-//! Headphone/speaker (audio Bluetooth klasik) bisa disambung/diputus langsung: setiap perangkat audio punya filter
-//! kernel-streaming yang menerima properti terdokumentasi `KSPROPERTY_ONESHOT_RECONNECT` / `KSPROPERTY_ONESHOT_DISCONNECT`
-//! (`KSPROPSETID_BtAudio`). Filternya dicari lewat topologi endpoint audio, lalu dicocokkan dengan alamat Bluetooth di
-//! jalur perangkatnya. Perangkat lain (keyboard, mouse, ponsel) tetap dibuka di Pengaturan Bluetooth Windows.
-//! Berjalan di thread pekerja karena `FromIdAsync` dan penyambungan bisa makan ratusan milidetik sampai detik.
-
 use nacre_core::netlist::{bt_addr_from_path, kind_from_appearance, kind_from_cod, merge_devices, Device};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::Duration;
@@ -17,7 +9,6 @@ use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoTaskMemFre
 
 pub enum Cmd {
     Refresh,
-    /// Sambungkan (`true`) atau putuskan perangkat audio beralamat ini.
     Audio(u64, bool),
 }
 
@@ -32,19 +23,16 @@ fn ids(selector: windows_core::Result<windows_core::HSTRING>) -> Vec<windows_cor
     (0..list.Size().unwrap_or(0)).filter_map(|i| list.GetAt(i).ok()).filter_map(|d| d.Id().ok()).collect()
 }
 
-/// Filter audio Bluetooth klasik per alamat: endpoint audio (aktif atau terputus) → konektor → filter KS di seberangnya.
 fn audio_filters() -> Vec<(u64, IKsControl)> {
     let dbg = std::env::var_os("NACRE_DEBUG_BTAUDIO").is_some();
     let mut out: Vec<(u64, IKsControl)> = Vec::new();
     unsafe {
         let Ok(en) = CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL) else { return out };
-        // aktif (1) + tidak dicolok (8): headphone yang sedang terputus tercatat sebagai "unplugged"
         let Ok(col) = en.EnumAudioEndpoints(eAll, DEVICE_STATE(1 | 8)) else { return out };
         for i in 0..col.GetCount().unwrap_or(0) {
             let Ok(dev) = col.Item(i) else { continue };
             let Ok(topo) = dev.Activate::<IDeviceTopology>(CLSCTX_ALL, None) else { continue };
             let Ok(conn) = topo.GetConnector(0) else { continue };
-            // jalur perangkat filter di seberang konektor endpoint (mis. "{2}.\?thenum#...")
             let Ok(pid) = conn.GetDeviceIdConnectedTo() else { continue };
             let path = pid.to_string().unwrap_or_default();
             let Some(addr) = bt_addr_from_path(&path) else {
@@ -55,7 +43,6 @@ fn audio_filters() -> Vec<(u64, IKsControl)> {
                 CoTaskMemFree(Some(pid.0 as *const _));
                 continue;
             }
-            // filter itu sendiri dibuka sebagai IMMDevice, lalu IKsControl-nya diaktifkan
             let ks = en.GetDevice(windows::core::PCWSTR(pid.0)).and_then(|f| f.Activate::<IKsControl>(CLSCTX_ALL, None));
             CoTaskMemFree(Some(pid.0 as *const _));
             match ks {
@@ -74,7 +61,6 @@ fn audio_filters() -> Vec<(u64, IKsControl)> {
     out
 }
 
-/// Kirim perintah sambung/putus ke filter audio perangkat `addr`. `false` bila filternya tidak ditemukan atau ditolak.
 fn set_audio(addr: u64, connect: bool) -> bool {
     let Some((_, ks)) = audio_filters().into_iter().find(|(a, _)| *a == addr) else { return false };
     let id = if connect { KSPROPERTY_ONESHOT_RECONNECT } else { KSPROPERTY_ONESHOT_DISCONNECT };
@@ -114,7 +100,6 @@ fn read() -> Vec<Device> {
     list
 }
 
-/// Data palsu untuk uji tampilan (`NACRE_FAKE_WIFI=1` juga memalsukan Bluetooth).
 fn fake(connected_headphone: bool) -> Vec<Device> {
     use nacre_core::netlist::DevKind;
     let d = |n: &str, c: bool, k: DevKind, addr: u64, audio: bool| Device { name: n.into(), connected: c, kind: k, addr, audio };
@@ -141,7 +126,6 @@ pub fn spawn(notify: impl Fn() + Send + 'static) -> Watcher {
             };
             match cmd {
                 Cmd::Refresh => {
-                    // baca-ulang beruntun cukup dijawab sekali; perintah lain menunggu giliran
                     while let Ok(c) = rx.try_recv() {
                         if !matches!(c, Cmd::Refresh) {
                             queue.push_back(c);
@@ -160,7 +144,6 @@ pub fn spawn(notify: impl Fn() + Send + 'static) -> Watcher {
                     }
                     let ok = set_audio(addr, on);
                     crate::log::line("bluetooth", &format!("{} perangkat audio: {}", if on { "sambung" } else { "putus" }, if ok { "perintah terkirim" } else { "filter tidak ditemukan" }));
-                    // penyambungan butuh beberapa detik: kirim keadaan dua kali
                     for wait in [2500u64, 4500] {
                         std::thread::sleep(Duration::from_millis(wait));
                         let _ = list_tx.send(read());

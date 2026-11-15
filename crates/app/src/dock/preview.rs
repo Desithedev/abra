@@ -1,6 +1,3 @@
-//! Kartu pratinjau window: thumbnail DWM hidup + judul, di atas ikon yang di-hover.
-//! Thumbnail digambar DWM di atas visual dan berbentuk persegi (Spike C), jadi judul diletakkan di bawahnya.
-
 use crate::popup::Popup;
 use nacre_platform::text::{render, Style};
 use nacre_platform::wins::thumbnail;
@@ -88,9 +85,6 @@ impl Preview {
         self.popup.is_visible()
     }
 
-    /// `windows`: (hwnd, judul). `cx`: pusat horizontal; `bottom`: tepi bawah kartu (px layar).
-    /// `windows`: (hwnd, judul, diminimize?). Window yang diminimize tidak punya gambar hidup di DWM, jadi
-    /// diganti ikon aplikasi (`icon`) yang diredupkan di tengah kotak thumbnail.
     pub fn show(
         &mut self,
         comp: &Compositor,
@@ -154,7 +148,6 @@ impl Preview {
         Ok(())
     }
 
-    /// Window di bawah koordinat klien `x`.
     pub fn hit(&self, x: i32) -> Option<isize> {
         self.cells.iter().find(|c| x >= c.left && x < c.right).map(|c| c.hwnd)
     }
@@ -177,4 +170,3 @@ impl Preview {
         }
     }
 }
-

@@ -1,7 +1,3 @@
-﻿//! Daftar window yang pantas muncul di dock (SPEC Â§4.5, versi M2a).
-//!
-//! Belum ditangani: PWA browser (AUMID web-app), relaunch-command untuk app yang UI-nya di proses pembantu, prompt UAC `consent.exe`.
-
 use nacre_core::dock::items::Win;
 use std::ffi::c_void;
 use windows::core::BOOL;
@@ -15,7 +11,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
     IsWindowVisible, GWL_EXSTYLE, GW_OWNER, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
 };
 
-/// Proses sistem/latar yang punya window tetapi bukan app bagi pengguna.
 const HIDDEN_EXES: &[&str] = &[
     "conhost.exe",
     "shellexperiencehost.exe",
@@ -49,8 +44,6 @@ pub fn exe_path_of_pid(pid: u32) -> Option<String> {
     }
 }
 
-/// Jalur exe proses yang punya jendela tingkat atas dan bernama berkas `name` (mis. "Spotify.exe"); dipakai bila sesi
-/// media hanya memberi nama exe sebagai id app.
 pub fn exe_path_of_running(name: &str) -> Option<String> {
     struct Find {
         name: String,
@@ -81,6 +74,10 @@ pub fn exe_path_of_running(name: &str) -> Option<String> {
     f.found
 }
 
+pub fn cloaked(hwnd: isize) -> bool {
+    is_cloaked(HWND(hwnd as *mut _))
+}
+
 fn is_cloaked(hwnd: HWND) -> bool {
     let mut cloaked = 0u32;
     unsafe {
@@ -107,7 +104,6 @@ unsafe extern "system" fn each(hwnd: HWND, lparam: LPARAM) -> BOOL {
     if ex & WS_EX_TOOLWINDOW.0 != 0 && !app_window {
         return BOOL(1);
     }
-    // Dialog milik window lain tampil di bawah window induknya, seperti di taskbar.
     if !app_window {
         if let Ok(owner) = GetWindow(hwnd, GW_OWNER) {
             if !owner.0.is_null() && IsWindowVisible(owner).as_bool() {
@@ -135,8 +131,6 @@ unsafe extern "system" fn each(hwnd: HWND, lparam: LPARAM) -> BOOL {
         if class != "ApplicationFrameWindow" {
             return BOOL(1);
         }
-        // Tiap app UWP punya frame sendiri. AUMID memberi identitas, jalur peluncuran, dan ikon yang benar;
-        // tanpa AUMID, pisahkan kuncinya dengan judul (ikon host generik).
         path = match super::identity::aumid(hwnd.0 as isize) {
             Some(id) => super::identity::shell_path(&id),
             None => format!("{path}?{title}"),
@@ -154,5 +148,3 @@ pub fn list(own_pid: u32) -> Vec<Win> {
     }
     ctx.out
 }
-
-

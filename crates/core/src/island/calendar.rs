@@ -1,5 +1,3 @@
-﻿//! Kalender bulanan (tanpa Win32): jumlah hari, kolom awal, jumlah baris, nama dalam bahasa Indonesia.
-
 pub fn is_leap(y: i32) -> bool {
     (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
 }
@@ -14,7 +12,6 @@ pub fn days_in_month(y: i32, m: u32) -> u32 {
     }
 }
 
-/// Hari dalam pekan untuk tanggal `d` (0 = Minggu), algoritma Sakamoto.
 pub fn weekday(y: i32, m: u32, d: u32) -> u32 {
     const T: [i32; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
     let y = if m < 3 { y - 1 } else { y };
@@ -23,7 +20,6 @@ pub fn weekday(y: i32, m: u32, d: u32) -> u32 {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Grid {
-    /// Kolom (0-based) tempat tanggal 1 jatuh.
     pub first_col: u32,
     pub days: u32,
     pub rows: u32,
@@ -36,7 +32,6 @@ pub fn grid(y: i32, m: u32, monday_first: bool) -> Grid {
     Grid { first_col, days, rows: (first_col + days).div_ceil(7) }
 }
 
-/// Geser bulan sebesar `delta`, menjaga tahun.
 pub fn shift_month(y: i32, m: u32, delta: i32) -> (i32, u32) {
     let idx = y * 12 + (m as i32 - 1) + delta;
     (idx.div_euclid(12), (idx.rem_euclid(12) + 1) as u32)
@@ -50,7 +45,6 @@ pub fn month_name(m: u32) -> &'static str {
     N[(m.clamp(1, 12) - 1) as usize]
 }
 
-/// Tanggal `delta` hari dari (y, m, d).
 pub fn add_days(y: i32, m: u32, d: u32, delta: i32) -> (i32, u32, u32) {
     let (mut y, mut m, mut d) = (y, m, d as i32 + delta);
     while d < 1 {
@@ -64,7 +58,6 @@ pub fn add_days(y: i32, m: u32, d: u32, delta: i32) -> (i32, u32, u32) {
     (y, m, d as u32)
 }
 
-/// Nama bulan singkat ("Nov" / "Agu" atau "Aug").
 pub fn month_short(m: u32, en: bool) -> &'static str {
     const ID: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
     const EN: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -76,7 +69,6 @@ pub fn month_short(m: u32, en: bool) -> &'static str {
     }
 }
 
-/// Nama hari singkat huruf besar untuk strip tanggal (`wd` 0 = Minggu): "KAM" / "THU".
 pub fn weekday_short(wd: u32, en: bool) -> &'static str {
     const ID: [&str; 7] = ["MIN", "SEN", "SEL", "RAB", "KAM", "JUM", "SAB"];
     const EN: [&str; 7] = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
@@ -102,9 +94,9 @@ mod tests {
 
     #[test]
     fn known_weekdays() {
-        assert_eq!(weekday(2026, 11, 4), 3); // Rabu
-        assert_eq!(weekday(2000, 1, 1), 6); // Sabtu
-        assert_eq!(weekday(2024, 2, 29), 4); // Kamis
+        assert_eq!(weekday(2026, 11, 4), 3);
+        assert_eq!(weekday(2000, 1, 1), 6);
+        assert_eq!(weekday(2024, 2, 29), 4);
     }
 
     #[test]
@@ -118,10 +110,8 @@ mod tests {
 
     #[test]
     fn grid_rows_depend_on_week_start() {
-        // Nov 2026 dimulai hari Minggu: 30 hari
         assert_eq!(grid(2026, 11, false), Grid { first_col: 0, days: 30, rows: 5 });
         assert_eq!(grid(2026, 11, true), Grid { first_col: 6, days: 30, rows: 6 });
-        // Feb 2026 dimulai Minggu, 28 hari: tepat 4 baris bila pekan mulai Minggu
         assert_eq!(grid(2026, 2, false).rows, 4);
     }
 

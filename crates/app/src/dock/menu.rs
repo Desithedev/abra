@@ -1,7 +1,3 @@
-//! Menu konteks kaca kustom. Menggantikan menu Win32 bawaan: tidak ada loop pesan bersarang
-//! (timer dan event dock tetap berjalan), dan menutup saat klik di luar lewat penangkapan mouse
-//! hook mouse yang hanya dipasang selama menu terbuka (SetCapture tidak andal untuk window NOACTIVATE).
-
 use crate::popup::Popup;
 use nacre_platform::text::{measure, render, Style};
 use nacre_ui::gfx::Gfx;
@@ -12,7 +8,9 @@ use windows::core::w;
 use windows::UI::Color;
 use windows::UI::Composition::{CompositionStretch, Compositor, SpriteVisual};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
 use windows::Win32::UI::WindowsAndMessaging::*;
+const WM_MOUSELEAVE: u32 = 0x02A3;
 use windows_core::Result;
 use windows_numerics::{Vector2, Vector3};
 
@@ -27,21 +25,13 @@ pub struct Item {
     pub label: String,
     pub enabled: bool,
     pub separator: bool,
-    /// Teks pintasan di kanan (mis. "Ctrl+S"), redup.
     pub accel: String,
-    /// Simbol di kiri label (opsional).
     pub sym: Option<nacre_core::symbols::Sym>,
-    /// Sakelar di kanan (menu Wi-Fi/Bluetooth): `Some(nyala)`.
     pub toggle: Option<bool>,
-    /// Judul bagian kecil redup (mis. "Jaringan Dikenal"), tidak bisa diklik.
     pub heading: bool,
-    /// Judul tebal di baris pertama (mis. "Wi-Fi").
     pub title: bool,
-    /// Ikon dalam lingkaran di kiri; `true` = aktif (lingkaran warna aksen).
     pub lead: Option<(nacre_core::symbols::Sym, bool)>,
-    /// Simbol kecil di kanan (gembok, chevron).
     pub trail: Vec<nacre_core::symbols::Sym>,
-    /// Klik tidak menutup menu (sakelar, buka/tutup "Jaringan Lain").
     pub keep_open: bool,
 }
 
@@ -55,7 +45,6 @@ impl Item {
     pub fn heading(label: &str) -> Item {
         Item { heading: true, ..Item::action(0, label, false) }
     }
-    /// Baris judul tebal dengan sakelar (klik di mana saja pada baris membalik sakelar; menu tetap terbuka).
     pub fn switch(id: usize, label: &str, on: bool) -> Item {
         Item { title: true, toggle: Some(on), keep_open: true, ..Item::action(id, label, true) }
     }
@@ -81,31 +70,23 @@ impl Item {
     }
 }
 
-/// Gaya "kartu" (jendela Wi-Fi/Bluetooth): sudut sebesar kartu slider Control Center, tepi dalam lebih lega, dan
-/// animasi buka/tutup Control Center (tumbuh dari titik jangkar dengan pantulan kecil, baris muncul berurutan).
 #[derive(Clone, Copy, Debug)]
 pub struct Card {
-    /// Radius sudut (dp).
     pub radius: f32,
-    /// Jarak tepi ke baris (dp).
     pub pad: f32,
-    /// Lebar minimum (dp).
     pub min_w: f32,
 }
 
-/// Timer jendela menu: sembunyikan setelah animasi tutup kartu selesai.
 const T_HIDE: usize = 77;
 
-/// Keadaan yang dibaca window proc (thread UI yang sama dengan pemiliknya).
 struct Live {
-    rows: Vec<(f32, f32, Item)>, // (y, tinggi, item)
+    rows: Vec<(f32, f32, Item)>,
     size: (f32, f32),
     hover: Option<usize>,
     highlight: SpriteVisual,
+    boxes: Vec<windows::UI::Composition::ContainerVisual>,
     pad: f32,
-    /// Radius sorotan maksimum untuk gaya kartu (px); `None` = sorotan menu biasa.
     hl_max: Option<f32>,
-    /// Pemilik menutup menu sendiri (dengan animasi) setelah item dipilih.
     owner_hides: bool,
 }
 
@@ -113,7 +94,6 @@ thread_local! {
     static LIVE: RefCell<Option<Live>> = const { RefCell::new(None) };
 }
 
-/// Warnai bitmap teks putih ter-premultiply menjadi `rgb`.
 fn tint(src: &[u8], rgb: [u8; 3]) -> Vec<u8> {
     let mut out = src.to_vec();
     for px in out.chunks_exact_mut(4) {
@@ -132,15 +112,29 @@ fn row_at(l: &Live, x: f32, y: f32) -> Option<usize> {
     l.rows.iter().position(|(ry, rh, it)| y >= *ry && y < ry + rh && !it.separator && it.enabled)
 }
 
-/// Pindahkan sorotan ke baris `hit` (atau sembunyikan).
 fn set_hover(live: &mut Live, hit: Option<usize>) {
+    let comp = live.highlight.Compositor().ok();
+    let row_center = |i: usize| Vector3 { X: live.size.0 / 2.0, Y: live.rows[i].0 + live.rows[i].1 / 2.0, Z: 0.0 };
+    if let (Some(comp), Some(old)) = (&comp, live.hover) {
+        if let Some(b) = live.boxes.get(old) {
+            let _ = crate::motion::hover_pop(comp, b, row_center(old), 1.0);
+        }
+    }
+    if let (Some(comp), Some(new)) = (&comp, hit) {
+        let k = crate::motion::fit_pop(crate::motion::HOVER_ROW, live.size.0 / 2.0 - live.pad, live.pad);
+        if let Some(b) = live.boxes.get(new) {
+            let _ = crate::motion::hover_pop(comp, b, row_center(new), k);
+        }
+        let _ = live.highlight.SetScale(Vector3 { X: 1.0, Y: 1.0, Z: 1.0 });
+        let hc = Vector3 { X: live.size.0 / 2.0 - live.pad, Y: live.rows[new].1 / 2.0, Z: 0.0 };
+        let _ = crate::motion::hover_pop(comp, &live.highlight, hc, k);
+    }
     live.hover = hit;
     match hit {
         Some(i) => {
             let (ry, rh, _) = &live.rows[i];
             let _ = live.highlight.SetOffset(Vector3 { X: live.pad, Y: *ry, Z: 0.0 });
             let _ = live.highlight.SetSize(Vector2 { X: live.size.0 - 2.0 * live.pad, Y: *rh });
-            // sudut bulat ala Tahoe (radius ±8)
             if let Ok(comp) = live.highlight.Compositor() {
                 if let (Ok(g), Ok(clip)) = (comp.CreateRoundedRectangleGeometry(), comp.CreateGeometricClip()) {
                     let r = match live.hl_max {
@@ -161,7 +155,6 @@ fn set_hover(live: &mut Live, hit: Option<usize>) {
     }
 }
 
-/// Kotak membulat berwarna rata.
 fn rounded(comp: &Compositor, r: (f32, f32, f32, f32), radius: f32, c: Color) -> Result<SpriteVisual> {
     let v = comp.CreateSpriteVisual()?;
     v.SetBrush(&comp.CreateColorBrushWithColor(c)?)?;
@@ -186,6 +179,8 @@ unsafe extern "system" fn proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESULT
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
         WM_MOUSEMOVE => {
             let (x, y) = xy(l);
+            let mut t = TRACKMOUSEEVENT { cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32, dwFlags: TME_LEAVE, hwndTrack: h, dwHoverTime: 0 };
+            let _ = TrackMouseEvent(&mut t);
             LIVE.with(|c| {
                 if let Some(live) = c.borrow_mut().as_mut() {
                     let hit = row_at(live, x, y).filter(|i| live.rows[*i].2.toggle.is_none());
@@ -196,7 +191,16 @@ unsafe extern "system" fn proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESULT
             });
             LRESULT(0)
         }
-        // Klik pertama di luar menu menutupnya (dan tidak diteruskan ke aplikasi di bawah).
+        WM_MOUSELEAVE => {
+            LIVE.with(|c| {
+                if let Some(live) = c.borrow_mut().as_mut() {
+                    if live.hover.is_some() {
+                        set_hover(live, None);
+                    }
+                }
+            });
+            LRESULT(0)
+        }
         WM_LBUTTONUP | WM_RBUTTONUP => {
             let (x, y) = xy(l);
             let picked = LIVE.with(|c| c.borrow().as_ref().and_then(|live| row_at(live, x, y).map(|i| (live.rows[i].2.id, live.rows[i].2.keep_open || live.owner_hides))));
@@ -226,9 +230,7 @@ pub struct Menu {
     dpi: f32,
     screen: (i32, i32),
     card: Option<Card>,
-    /// Animasi tutup kartu sedang berjalan.
     closing: bool,
-    /// Titik jangkar animasi kartu (px, relatif jendela).
     pop_at: Vector3,
 }
 
@@ -248,17 +250,14 @@ impl Menu {
         Ok(Menu { target: dock_hwnd, popup, content, highlight, dpi, screen, card: None, closing: false, pop_at: Vector3 { X: 0.0, Y: 0.0, Z: 0.0 } })
     }
 
-    /// Pakai gaya kartu (lihat [`Card`]) untuk menu ini.
     pub fn set_card(&mut self, card: Option<Card>) {
         self.card = card;
     }
 
-    /// Kartu dengan tepi atas di `top`; `right_aligned` = `x` adalah tepi KANAN (pojok kanan layar), selain itu tepi kiri.
     pub fn show_card(&mut self, comp: &Compositor, gfx: &Gfx, items: Vec<Item>, x: i32, top: i32, right_aligned: bool) -> Result<()> {
         self.show_impl(comp, gfx, items, x, top, false, right_aligned)
     }
 
-    /// Tutup kartu dengan animasi tutup Control Center (mengecil ke titik jangkar sambil memudar).
     pub fn hide_animated(&mut self, comp: &Compositor) {
         if !self.popup.is_visible() || self.closing {
             return;
@@ -283,12 +282,10 @@ impl Menu {
         let _ = self.popup.panel.set_tier(t);
     }
 
-    /// Tampilkan di `(x, y)` (sudut kiri-bawah menu di dekat kursor; digeser agar tetap di layar).
     pub fn show(&mut self, comp: &Compositor, gfx: &Gfx, items: Vec<Item>, x: i32, y: i32) -> Result<()> {
         self.show_impl(comp, gfx, items, x, y, true, false)
     }
 
-    /// Seperti `show`, tetapi `top` adalah tepi ATAS menu (dropdown menu bar muncul tepat di bawah bar).
     pub fn show_below(&mut self, comp: &Compositor, gfx: &Gfx, items: Vec<Item>, x: i32, top: i32) -> Result<()> {
         self.show_impl(comp, gfx, items, x, top, false, false)
     }
@@ -297,7 +294,6 @@ impl Menu {
     fn show_impl(&mut self, comp: &Compositor, gfx: &Gfx, items: Vec<Item>, x: i32, y: i32, above: bool, right_aligned: bool) -> Result<()> {
         TARGET.store(self.target.0 as isize, Ordering::Relaxed);
         let d = self.dpi;
-        // dibuka lagi saat animasi tutup belum selesai: sembunyikan dulu lalu buka dengan animasi baru
         if self.closing {
             self.closing = false;
             unsafe {
@@ -305,11 +301,9 @@ impl Menu {
             }
             self.popup.hide();
         }
-        // menu yang sudah terbuka digambar ulang di tempat (daftar jaringan diperbarui, sakelar dibalik): tanpa animasi muncul
         let refresh = self.popup.is_visible();
         let card = self.card;
         let radius = card.map_or(13.0, |c| c.radius) * d;
-        // kaca dan warna teks mengikuti tema (Tahoe: menu terang di mode terang)
         let look = crate::prefs::look(crate::prefs::Role::Themed);
         let base = GlassParams::dark((10.0, 10.0), radius);
         let _ = self.popup.panel.set_params(crate::prefs::apply(base, &look));
@@ -389,7 +383,6 @@ impl Menu {
             Ok(s)
         };
         let gray = Color { A: if look.dark { 46 } else { 30 }, R: ink[0], G: ink[1], B: ink[2] };
-        // tiap baris di wadahnya sendiri: kartu memunculkannya berurutan seperti modul Control Center
         let mut boxes: Vec<(windows::UI::Composition::ContainerVisual, f32)> = Vec::new();
         for (ry, rh, it) in &rows {
             let rb = comp.CreateContainerVisual()?;
@@ -404,7 +397,6 @@ impl Menu {
                 continue;
             }
             if let Some((s, _, th)) = tex(&it.label, &style_of(it))? {
-                // judul bagian sedikit turun agar dekat dengan baris di bawahnya
                 let dy = if it.heading { 3.0 * d } else { 0.0 };
                 s.SetOffset(Vector3 { X: label_x(it), Y: ry + (rh - th) / 2.0 + dy, Z: 0.0 })?;
                 s.SetOpacity(if it.heading { 0.5 } else if it.enabled { 1.0 } else { 0.38 })?;
@@ -465,10 +457,9 @@ impl Menu {
         self.highlight.SetOpacity(0.0)?;
         self.highlight.SetBrush(&comp.CreateColorBrushWithColor(crate::prefs::accent_c(235))?)?;
         LIVE.with(|c| {
-            *c.borrow_mut() = Some(Live { rows, size: (w, h), hover: None, highlight: self.highlight.clone(), pad, hl_max: card.map(|_| (radius - pad).max(6.0 * d)), owner_hides: card.is_some() });
+            *c.borrow_mut() = Some(Live { rows, size: (w, h), hover: None, highlight: self.highlight.clone(), boxes: boxes.iter().map(|b| b.0.clone()).collect(), pad, hl_max: card.map(|_| (radius - pad).max(6.0 * d)), owner_hides: card.is_some() });
         });
         if refresh {
-            // pertahankan sorotan di bawah kursor setelah digambar ulang
             let mut pt = windows::Win32::Foundation::POINT::default();
             unsafe {
                 let _ = GetCursorPos(&mut pt);
@@ -481,8 +472,6 @@ impl Menu {
                 }
             });
         } else if card.is_some() {
-            // animasi Control Center: kartu tumbuh dari jangkar (pojok kanan atas, atau ikon menu bar) dengan pantulan kecil,
-            // lalu barisnya muncul berurutan; jeda awal pendek agar frame pertama sudah tampil (jendela baru)
             let ax = if right_aligned { wi as f32 - 24.0 * d } else { ((anchor - px) as f32 + 12.0 * d).clamp(0.0, wi as f32) };
             self.pop_at = Vector3 { X: ax, Y: 0.0, Z: 0.0 };
             self.popup.show();
@@ -494,12 +483,10 @@ impl Menu {
             self.popup.show();
             self.popup.fade_in(comp, !above);
         }
-        // Klik di luar menu menutupnya: hook mouse dipasang hanya selama menu terbuka.
         nacre_platform::input::begin_dismiss((px, py, px + wi, py + hi), self.target.0 as isize, MENU_CLOSE);
         Ok(())
     }
 
-    /// Naikkan ke atas jendela topmost lain (menu yang dibuka dari panel Control Center).
     pub fn raise(&self) {
         unsafe {
             let _ = SetWindowPos(self.popup.hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
@@ -518,4 +505,3 @@ impl Menu {
         self.popup.is_visible() && !self.closing
     }
 }
-

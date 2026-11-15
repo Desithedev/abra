@@ -1,13 +1,9 @@
-//! Radio Wi-Fi dan Bluetooth lewat Windows.Devices.Radios: baca dan nyalakan/matikan.
-//! Berjalan di thread pekerja karena `SetStateAsync` bisa makan ratusan milidetik.
-
 use std::sync::mpsc::{channel, Receiver, Sender};
 use windows::Devices::Radios::{Radio, RadioKind, RadioState};
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct Snapshot {
-    /// `None` = tidak ada radio jenis itu (atau akses ditolak).
     pub wifi: Option<bool>,
     pub bluetooth: Option<bool>,
 }
@@ -50,7 +46,6 @@ pub fn spawn(notify: impl Fn() + Send + 'static) -> Radios {
         unsafe {
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
         }
-        // Izin akses radio untuk aplikasi desktop; hasilnya tidak menghalangi percobaan berikutnya.
         let _ = Radio::RequestAccessAsync().ok().and_then(|o| o.join().ok());
         let _ = snap_tx.send(snapshot(&read_all()));
         notify();

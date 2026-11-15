@@ -1,17 +1,9 @@
-//! Parkir jendela: memindahkan jendela ke luar layar (bukan diminimalkan) agar isinya tetap tertangkap hidup. Hanya sudut
-//! kanan-bawah jendela seluas `SLIVER` px yang tersisa di pojok kiri-atas layar (tersembunyi di bawah menu bar): browser
-//! berbasis Chromium menganggap jendela yang sepenuhnya di luar layar sebagai "tertutup" lalu berhenti menggambar
-//! (video berhenti, kartu Stage Manager hitam); sepotong kecil yang masih terlihat menjaganya tetap berjalan.
-//! Daftar jendela terparkir disimpan ke berkas supaya bisa dipulihkan setelah ABRA mati mendadak.
-
 use std::path::Path;
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-/// Lebar/tinggi sudut jendela yang tetap berada di layar saat terparkir.
 pub const SLIVER: i32 = 4;
 
-/// Jendela dianggap terparkir bila seluruhnya berada di kiri-atas titik (SLIVER, SLIVER) dan hanya sudutnya menyentuh layar.
 fn rect_is_parked(r: &RECT) -> bool {
     r.right > 0 && r.right <= SLIVER + 2 && r.bottom > 0 && r.bottom <= SLIVER + 2 && r.left < -100 && r.top < -50
 }
@@ -19,7 +11,6 @@ fn rect_is_parked(r: &RECT) -> bool {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Parked {
     pub hwnd: isize,
-    /// Persegi normal jendela (kiri, atas, kanan, bawah) sebelum diparkir.
     pub rect: (i32, i32, i32, i32),
     pub maximized: bool,
 }
@@ -28,7 +19,6 @@ fn h(v: isize) -> HWND {
     HWND(v as *mut _)
 }
 
-/// Pindahkan `hwnd` keluar layar. `None` bila bukan jendela hidup atau sedang diminimalkan.
 pub fn park(hwnd: isize) -> Option<Parked> {
     unsafe {
         let w = h(hwnd);
@@ -43,7 +33,7 @@ pub fn park(hwnd: isize) -> Option<Parked> {
         GetWindowRect(w, &mut cur).ok()?;
         let rect = if maximized { (r.left, r.top, r.right, r.bottom) } else { (cur.left, cur.top, cur.right, cur.bottom) };
         if rect_is_parked(&cur) {
-            return None; // sudah terparkir
+            return None;
         }
         let size = (cur.right - cur.left, cur.bottom - cur.top);
         if maximized {
@@ -55,7 +45,6 @@ pub fn park(hwnd: isize) -> Option<Parked> {
     }
 }
 
-/// Kembalikan jendela ke posisi semula.
 pub fn unpark(p: &Parked) {
     unsafe {
         let w = h(p.hwnd);
@@ -70,7 +59,6 @@ pub fn unpark(p: &Parked) {
     }
 }
 
-/// Apakah jendela sedang terparkir (di luar layar oleh kita).
 pub fn is_parked(hwnd: isize) -> bool {
     unsafe {
         let mut r = RECT::default();
@@ -100,11 +88,9 @@ pub fn load(path: &Path) -> Vec<Parked> {
         .collect()
 }
 
-/// Pulihkan semua jendela di berkas lalu hapus berkasnya (dipakai saat start, keluar, dan oleh guard).
 pub fn restore_file(path: &Path) -> usize {
     let list = load(path);
     for p in &list {
-        // hanya yang benar-benar masih terparkir (hwnd bisa sudah dipakai ulang)
         if is_parked(p.hwnd) {
             unpark(p);
         }

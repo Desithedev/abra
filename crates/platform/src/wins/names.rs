@@ -1,5 +1,3 @@
-﻿//! Nama ramah aplikasi dari metadata exe (FileDescription), di-cache per path.
-
 use std::collections::HashMap;
 use std::sync::Mutex;
 use windows::core::{HSTRING, PCWSTR};
@@ -18,7 +16,6 @@ fn read(path: &str) -> String {
         if GetFileVersionInfoW(&wide, None, size, buf.as_mut_ptr() as *mut _).is_err() {
             return String::new();
         }
-        // bahasa/codepage pertama dari tabel terjemahan
         let mut ptr: *mut std::ffi::c_void = std::ptr::null_mut();
         let mut len = 0u32;
         let lang = if VerQueryValueW(buf.as_ptr() as *const _, &HSTRING::from("\\VarFileInfo\\Translation"), &mut ptr, &mut len).as_bool()
@@ -38,7 +35,6 @@ fn read(path: &str) -> String {
     }
 }
 
-/// FileDescription untuk `path` (kosong bila tidak ada). Jalur `shell:`/berkunci `?` dilewati.
 pub fn friendly(path: &str) -> String {
     if path.contains('?') || path.to_lowercase().starts_with("shell:") {
         return String::new();

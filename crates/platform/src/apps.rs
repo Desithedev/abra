@@ -1,6 +1,3 @@
-//! Indeks aplikasi terpasang dari folder shell `AppsFolder` (aplikasi desktop dan Microsoft Store), dimuat di
-//! thread pekerja dan di-cache. Dipakai Spotlight dan Launchpad.
-
 use std::sync::Mutex;
 use windows::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, COINIT_MULTITHREADED};
 use windows::Win32::UI::Shell::{
@@ -11,7 +8,6 @@ use windows::Win32::UI::Shell::{
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct App {
     pub name: String,
-    /// Jalur `shell:AppsFolder\...` yang bisa dibuka (`launch::open`) dan dimuat ikonnya (`icons::load`).
     pub path: String,
 }
 
@@ -53,7 +49,6 @@ fn load() -> Vec<App> {
     out
 }
 
-/// Mulai (atau segarkan) pemuatan indeks di thread pekerja; `notify` dipanggil setelah selesai.
 pub fn refresh(notify: impl Fn() + Send + 'static) {
     if LOADING.swap(true, std::sync::atomic::Ordering::AcqRel) {
         return;
@@ -70,7 +65,6 @@ pub fn refresh(notify: impl Fn() + Send + 'static) {
     });
 }
 
-/// Indeks terakhir yang dimuat (kosong bila belum selesai).
 pub fn snapshot() -> Vec<App> {
     CACHE.lock().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or_default()
 }

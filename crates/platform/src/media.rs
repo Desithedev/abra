@@ -1,6 +1,3 @@
-﻿//! Sesi media sistem (SMTC) berbasis event: tanpa polling. Satu thread pekerja memegang manajer sesi,
-//! berlangganan perubahan, menggabungkan (debounce) lalu mengirim `Snapshot` ke thread UI.
-
 use crate::icons::Bitmap;
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::time::Duration;
@@ -15,7 +12,6 @@ use windows::Storage::Streams::{DataReader, IRandomAccessStreamReference};
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 
 pub enum ArtUpdate {
-    /// Lagu sama: artwork lama tetap dipakai.
     Unchanged,
     None,
     New(Bitmap),
@@ -31,7 +27,6 @@ pub struct Snapshot {
     pub duration_ms: i64,
     pub can_seek: bool,
     pub art: ArtUpdate,
-    /// AppUserModelID app sumber (mis. "Spotify.exe", "Chrome"), untuk badge ikon app di notch.
     pub app: String,
 }
 
@@ -61,17 +56,14 @@ fn read_art(r: Option<IRandomAccessStreamReference>) -> Option<Vec<u8>> {
         reader.ReadBytes(&mut chunk).ok()?;
         all.extend_from_slice(&chunk);
         if all.len() > 8 * 1024 * 1024 {
-            return None; // artwork tak masuk akal besarnya
+            return None;
         }
     }
     (!all.is_empty()).then_some(all)
 }
 
-/// Properti media (termasuk sampul) berubah sejak snapshot terakhir. Browser mengirim judul lebih dulu dengan logo
-/// browser sebagai gambar sementara, lalu sampul aslinya menyusul lewat event yang sama.
 static PROPS_DIRTY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Keadaan sampul antar-snapshot: kunci lagu, sidik isi gambar, dan kapan lagu berganti.
 struct ArtState {
     key: String,
     hash: u64,
@@ -133,7 +125,6 @@ impl Subscriptions {
     }
 }
 
-/// Mulai pekerja. `notify` dipanggil (dari thread pekerja) setelah snapshot masuk antrean.
 #[allow(unused_assignments)]
 pub fn spawn(notify: impl Fn() + Send + 'static) -> Media {
     let (cmd_tx, cmd_rx) = channel::<Command>();
@@ -161,7 +152,7 @@ pub fn spawn(notify: impl Fn() + Send + 'static) -> Media {
 
         let mut subs = Subscriptions { session: None, tokens: (0, 0, 0) };
         let mut art_state = ArtState { key: String::new(), hash: 0, since: std::time::Instant::now() };
-        let mut pending = true; // snapshot awal
+        let mut pending = true;
 
         loop {
             if pending {
@@ -179,7 +170,6 @@ pub fn spawn(notify: impl Fn() + Send + 'static) -> Media {
             }
             match cmd_rx.recv() {
                 Ok(Command::Refresh) => {
-                    // gabungkan semburan event dalam 80 ms menjadi satu pembaruan
                     loop {
                         match cmd_rx.recv_timeout(Duration::from_millis(80)) {
                             Ok(Command::Refresh) => continue,
@@ -195,7 +185,6 @@ pub fn spawn(notify: impl Fn() + Send + 'static) -> Media {
                 }
                 Ok(other) => {
                     act(&manager, other);
-                    // beri waktu aplikasi memperbarui statusnya, lalu baca ulang
                     std::thread::sleep(Duration::from_millis(120));
                     pending = true;
                 }
@@ -218,7 +207,6 @@ fn act(manager: &GlobalSystemMediaTransportControlsSessionManager, cmd: Command)
         Command::Prev => {
             let _ = s.TrySkipPreviousAsync();
         }
-        // satuan SMTC: tick 100 ns
         Command::SeekMs(ms) => {
             let _ = s.TryChangePlaybackPositionAsync(ms * 10_000);
         }
@@ -226,8 +214,6 @@ fn act(manager: &GlobalSystemMediaTransportControlsSessionManager, cmd: Command)
     }
 }
 
-/// Snapshot sesi `session`. Sampul dibaca saat lagu berganti, saat properti media berubah (`recheck`), dan selama 8 detik
-/// pertama sebuah lagu (sampul dari browser sering menyusul); hanya didekode ulang bila isinya memang berbeda.
 fn build(session: Option<&GlobalSystemMediaTransportControlsSession>, art_state: &mut ArtState, recheck: bool) -> Snapshot {
     let empty = |st: &mut ArtState| {
         st.key.clear();
@@ -306,10 +292,6 @@ fn build(session: Option<&GlobalSystemMediaTransportControlsSession>, art_state:
     Snapshot { has_media: true, title, artist, album, playing, position_ms, duration_ms, can_seek, art, app }
 }
 
-
-
-/// Jeda sesi media milik app `exe_stem` (mis. "chrome", "spotify") yang sedang memutar. Berjalan di thread sendiri;
-/// mengembalikan lewat `done` daftar id sumber yang dijeda (untuk dilanjutkan nanti).
 pub fn pause_app(exe_stem: String, done: impl FnOnce(Vec<String>) + Send + 'static) {
     std::thread::spawn(move || {
         unsafe {
@@ -334,7 +316,6 @@ pub fn pause_app(exe_stem: String, done: impl FnOnce(Vec<String>) + Send + 'stat
     });
 }
 
-/// Lanjutkan sesi media yang sebelumnya dijeda oleh `pause_app` (berdasarkan id sumber).
 pub fn resume_ids(ids: Vec<String>) {
     if ids.is_empty() {
         return;

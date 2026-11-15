@@ -1,17 +1,11 @@
-﻿//! Analisis spektrum untuk visualizer 5 pita: FFT 512 titik (radix-2 tulisan sendiri, tanpa dependensi),
-//! jendela Hann, normalisasi adaptif per pita, dan penghalusan asimetris (naik cepat, turun pelan).
-
 pub const FFT: usize = 512;
 pub const BANDS: usize = 5;
-/// Rentang bin per pita (bawah → atas) pada 48 kHz ≈ 94 Hz per bin.
 const RANGES: [(usize, usize); BANDS] = [(1, 2), (2, 6), (6, 18), (18, 60), (60, 200)];
-/// Pita tinggi berenergi kecil; bobot mengimbangi kemiringan spektrum musik.
 const WEIGHT: [f32; BANDS] = [1.2, 1.2, 1.5, 2.8, 5.0];
 pub const FLOOR: f32 = 0.18;
 
 fn fft(re: &mut [f32], im: &mut [f32]) {
     let n = re.len();
-    // pembalikan bit
     let mut j = 0;
     for i in 1..n {
         let mut bit = n >> 1;
@@ -74,7 +68,6 @@ impl Analyzer {
         }
     }
 
-    /// Masukkan sampel mono [-1, 1]. `emit` dipanggil tiap 512 sampel terkumpul.
     pub fn push(&mut self, mono: &[f32], mut emit: impl FnMut([f32; BANDS])) {
         for &s in mono {
             let w = 0.5 * (1.0 - (2.0 * std::f32::consts::PI * self.fill as f32 / FFT as f32).cos());
@@ -100,7 +93,6 @@ impl Analyzer {
                 n += 1;
             }
             let scaled = sum / n.max(1) as f32 * WEIGHT[i];
-            // pelacak puncak yang meluruh perlahan menormalkan loudness lagu
             if scaled > self.peaks[i] {
                 self.peaks[i] = scaled;
             } else {
@@ -139,7 +131,6 @@ mod tests {
 
     #[test]
     fn fft_places_a_pure_tone_in_the_right_bin() {
-        // 48 kHz, bin 10 = 937,5 Hz → pita ke-3 (indeks 2: bin 6..18)
         let tone = sine(937.5, 48_000.0, FFT * 30);
         let out = run(&tone);
         let top = out.iter().enumerate().max_by(|a, b| a.1.partial_cmp(b.1).unwrap()).unwrap().0;
@@ -149,7 +140,7 @@ mod tests {
 
     #[test]
     fn low_tone_lands_in_the_low_band_and_not_in_the_highest() {
-        let out = run(&sine(280.0, 48_000.0, FFT * 30)); // bin ≈ 3 → indeks 1
+        let out = run(&sine(280.0, 48_000.0, FFT * 30));
         assert!(out[1] > out[4], "{out:?}");
         assert_eq!(out.iter().enumerate().max_by(|a, b| a.1.partial_cmp(b.1).unwrap()).unwrap().0, 1);
     }

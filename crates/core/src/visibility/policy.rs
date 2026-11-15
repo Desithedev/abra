@@ -1,13 +1,7 @@
-﻿//! Kebijakan tampil/sembunyi untuk permukaan di tepi layar (dock, kelak island).
-//! Satu fungsi murni menggantikan tiga mode terpisah di referensi.
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
-    /// Selalu tampil.
     Always,
-    /// Sembunyi saat window lain menimpa area permukaan (maksimum, fullscreen, atau bersinggungan).
     AutoHide,
-    /// Sembunyi kecuali sedang dipakai atau tepi layar disentuh cukup lama.
     OnDemand,
 }
 
@@ -15,7 +9,6 @@ impl Mode {
     pub fn parse(s: &str) -> Option<Mode> {
         match s {
             "always" | "fixed" => Some(Mode::Always),
-            // nama lama referensi dipetakan ke satu mode
             "auto" | "smart" | "auto-hide" => Some(Mode::AutoHide),
             "peek" | "demand" => Some(Mode::OnDemand),
             _ => None,
@@ -25,19 +18,18 @@ impl Mode {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Inputs {
-    /// Window lain menimpa area permukaan.
     pub overlapped: bool,
-    /// Kursor di permukaan, menu terbuka, pratinjau terbuka, atau masih dalam masa tenggang sesudahnya.
     pub interacting: bool,
-    /// Kursor bertahan di tepi layar melewati jeda dwell.
     pub edge_armed: bool,
-    /// Animasi awal: jangan menyembunyikan dulu.
     pub starting: bool,
-    /// Foreground fullscreen: permukaan menyingkir sepenuhnya, bahkan bila tepi disentuh.
     pub fullscreen: bool,
+    pub revealing: bool,
 }
 
 pub fn should_hide(mode: Mode, i: &Inputs) -> bool {
+    if i.revealing {
+        return false;
+    }
     if i.fullscreen {
         return !i.interacting;
     }
@@ -89,6 +81,13 @@ mod tests {
     fn fullscreen_hides_even_when_edge_is_armed() {
         assert!(should_hide(Mode::AutoHide, &Inputs { fullscreen: true, edge_armed: true, ..i() }));
         assert!(!should_hide(Mode::AutoHide, &Inputs { fullscreen: true, interacting: true, ..i() }));
+    }
+
+    #[test]
+    fn minimize_reveal_shows_surface_in_every_mode() {
+        for mode in [Mode::Always, Mode::AutoHide, Mode::OnDemand] {
+            assert!(!should_hide(mode, &Inputs { revealing: true, overlapped: true, fullscreen: true, ..i() }));
+        }
     }
 
     #[test]

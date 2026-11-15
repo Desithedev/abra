@@ -1,4 +1,3 @@
-﻿//! Satu instance saja. Peluncuran kedua membangunkan instance pertama lalu keluar.
 use windows::core::w;
 use windows::Win32::Foundation::{CloseHandle, GetLastError, HWND, WPARAM, LPARAM, ERROR_ALREADY_EXISTS, HANDLE};
 use windows::Win32::System::Threading::{
@@ -6,17 +5,13 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
 
-pub const WM_WAKE: u32 = 0x8000 + 2; // WM_APP + 2
+pub const WM_WAKE: u32 = 0x8000 + 2;
 
 pub enum Role {
-    /// Instance pertama; pegang handle sampai proses berakhir.
     Primary(HANDLE, HANDLE),
-    /// Sudah ada instance lain; sudah dibangunkan.
     Secondary,
 }
 
-/// Akhiran nama objek: kosong untuk pemakaian normal; untuk uji (`NACRE_CONFIG_DIR`) diturunkan dari folder config
-/// supaya instance uji tidak bentrok dengan instance ABRA asli yang sedang dipakai.
 fn suffix() -> String {
     match std::env::var("NACRE_CONFIG_DIR") {
         Ok(d) if !d.is_empty() => {
@@ -53,7 +48,6 @@ pub fn acquire() -> Role {
     }
 }
 
-/// Thread kecil yang tidur sampai event dibunyikan; hanya memposting pesan ke window utama.
 pub fn listen(event: HANDLE, main_hwnd: HWND) {
     if event.is_invalid() {
         return;

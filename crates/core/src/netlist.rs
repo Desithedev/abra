@@ -1,15 +1,9 @@
-//! Daftar jaringan Wi-Fi dan perangkat Bluetooth untuk menu pemilih (murni, dites). Platform mengisi entri mentah;
-//! modul ini menggabungkan entri ganda, mengurutkan, dan memilih ikon sinyal.
-
-/// Satu jaringan Wi-Fi yang terlihat (sudah digabung per SSID).
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct Network {
     pub ssid: String,
-    /// Kualitas sinyal 0..=100.
     pub signal: u8,
     pub secured: bool,
     pub connected: bool,
-    /// Nama profil tersimpan (jaringan "dikenal"), bila ada.
     pub profile: Option<String>,
 }
 
@@ -19,8 +13,6 @@ impl Network {
     }
 }
 
-/// Gabungkan entri mentah: Windows mengembalikan satu entri per profil dan satu tanpa profil untuk SSID yang sama.
-/// SSID kosong (jaringan tersembunyi) dibuang. Urutan: tersambung, dikenal, lalu lainnya; masing-masing sinyal terkuat dulu.
 pub fn merge(raw: Vec<Network>) -> Vec<Network> {
     let mut out: Vec<Network> = Vec::new();
     for n in raw {
@@ -43,7 +35,6 @@ pub fn merge(raw: Vec<Network>) -> Vec<Network> {
     out
 }
 
-/// Jumlah busur ikon sinyal (1..=3).
 pub fn bars(signal: u8) -> u8 {
     match signal {
         0..=39 => 1,
@@ -52,7 +43,6 @@ pub fn bars(signal: u8) -> u8 {
     }
 }
 
-/// Jenis perangkat Bluetooth untuk ikon di menu.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum DevKind {
     Headphones,
@@ -67,14 +57,10 @@ pub struct Device {
     pub name: String,
     pub connected: bool,
     pub kind: DevKind,
-    /// Alamat Bluetooth (48 bit), 0 bila tidak diketahui.
     pub addr: u64,
-    /// Punya endpoint audio Bluetooth klasik (A2DP): bisa disambung/diputus langsung dari menu.
     pub audio: bool,
 }
 
-/// Alamat Bluetooth dari jalur perangkat filter audio Bluetooth klasik, mis.
-/// `...bthenum#{0000110b-...}_vid&...#8&2f1c8c4d&0&9C3E53ABCDEF_C00000000#{...}` → 0x9C3E53ABCDEF.
 pub fn bt_addr_from_path(path: &str) -> Option<u64> {
     let l = path.to_ascii_lowercase();
     if !l.contains("bthenum") {
@@ -88,7 +74,6 @@ pub fn bt_addr_from_path(path: &str) -> Option<u64> {
     u64::from_str_radix(hex, 16).ok().filter(|a| *a != 0)
 }
 
-/// Jenis dari Class of Device Bluetooth klasik (24 bit).
 pub fn kind_from_cod(cod: u32) -> DevKind {
     let major = (cod >> 8) & 0x1F;
     let minor = (cod >> 2) & 0x3F;
@@ -100,7 +85,6 @@ pub fn kind_from_cod(cod: u32) -> DevKind {
     }
 }
 
-/// Jenis dari nilai Appearance Bluetooth LE (kategori = 10 bit atas).
 pub fn kind_from_appearance(raw: u16) -> DevKind {
     let (cat, sub) = (raw >> 6, raw & 0x3F);
     match cat {
@@ -111,7 +95,6 @@ pub fn kind_from_appearance(raw: u16) -> DevKind {
     }
 }
 
-/// Gabungkan perangkat bernama sama (perangkat mode ganda muncul sebagai klasik dan LE). Tersambung dulu, lalu nama.
 pub fn merge_devices(raw: Vec<Device>) -> Vec<Device> {
     let mut out: Vec<Device> = Vec::new();
     for d in raw {
@@ -124,7 +107,6 @@ pub fn merge_devices(raw: Vec<Device>) -> Vec<Device> {
                 if o.kind == DevKind::Other {
                     o.kind = d.kind;
                 }
-                // alamat dari entri klasik (yang punya endpoint audio) lebih berguna daripada alamat LE
                 if o.addr == 0 || (d.audio && !o.audio) {
                     o.addr = d.addr;
                 }
@@ -166,10 +148,10 @@ mod tests {
 
     #[test]
     fn device_kinds() {
-        assert_eq!(kind_from_cod(0x240404), DevKind::Headphones); // headset audio/video
+        assert_eq!(kind_from_cod(0x240404), DevKind::Headphones);
         assert_eq!(kind_from_cod(0x002540), DevKind::Keyboard);
         assert_eq!(kind_from_cod(0x002580), DevKind::Mouse);
-        assert_eq!(kind_from_cod(0x5A020C), DevKind::Other); // ponsel
+        assert_eq!(kind_from_cod(0x5A020C), DevKind::Other);
         assert_eq!(kind_from_appearance(0x0941), DevKind::Headphones);
         assert_eq!(kind_from_appearance(0x03C1), DevKind::Keyboard);
         assert_eq!(kind_from_appearance(0x03C2), DevKind::Mouse);
@@ -183,7 +165,6 @@ mod tests {
         assert_eq!(m.len(), 2);
         assert_eq!(m[0], d("buds", true, DevKind::Headphones));
         assert_eq!(m[1].name, "Mouse");
-        // entri LE (alamat acak) + entri klasik ber-audio dengan nama sama: alamat klasik dan audio dipakai
         let le = Device { addr: 0x1111, ..d("buds", false, DevKind::Headphones) };
         let classic = Device { addr: 0x2222, audio: true, ..d("buds", false, DevKind::Headphones) };
         let m = merge_devices(vec![le, classic]);

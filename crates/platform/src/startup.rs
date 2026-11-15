@@ -1,7 +1,3 @@
-//! Jalankan otomatis saat login: nilai `ABRA` di `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
-//! Cara yang dianjurkan untuk app per-pengguna: tanpa hak admin, tanpa Task Scheduler, dan terlihat/bisa
-//! dimatikan pengguna dari Settings → Apps → Startup. Jalur exe dikutip agar aman dengan spasi.
-
 use std::path::Path;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::ERROR_FILE_NOT_FOUND;
@@ -10,7 +6,6 @@ use windows::Win32::System::Registry::{RegDeleteKeyValueW, RegGetValueW, RegSetK
 const RUN_KEY: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
 const NAME: PCWSTR = w!("ABRA");
 
-/// Isi nilai Run saat ini (jalur terkutip), atau `None` bila tidak ada.
 pub fn current() -> Option<String> {
     unsafe {
         let mut size = 0u32;
@@ -30,12 +25,10 @@ pub fn is_enabled() -> bool {
     current().is_some()
 }
 
-/// Nilai yang akan ditulis untuk `exe`.
 pub fn command_for(exe: &Path) -> String {
     format!("\"{}\"", exe.display())
 }
 
-/// Nyalakan (tulis jalur exe saat ini) atau matikan (hapus nilai). Idempoten.
 pub fn set(enabled: bool, exe: &Path) -> Result<(), String> {
     unsafe {
         if enabled {

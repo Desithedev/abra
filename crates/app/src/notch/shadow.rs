@@ -1,6 +1,3 @@
-//! Bayangan tipis notch. Jendela notch dipotong oleh region kliknya, jadi bayangan digambar di jendela tersendiri yang
-//! tembus klik, tepat di bawah notch dalam urutan-Z. Sprite nine-grid digerakkan pegas yang sama dengan badan notch.
-
 use super::spring;
 use nacre_core::notch::shade;
 use nacre_ui::gfx::Gfx;
@@ -22,8 +19,8 @@ pub struct Shadow {
     sprite: SpriteVisual,
     brushes: HashMap<(i32, i32, i32), (CompositionBrush, f32, f32)>,
     key: (i32, i32, i32),
-    /// Jarak tepi kiri jendela bayangan dari tepi kiri jendela notch (px).
     pub pad: f32,
+    pub island: f32,
 }
 
 unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
@@ -41,9 +38,6 @@ impl Shadow {
             let class = w!("AbraNotchShadow");
             RegisterClassW(&WNDCLASSW { lpfnWndProc: Some(proc), hInstance: hi, lpszClassName: class, ..Default::default() });
             let hwnd = CreateWindowExW(
-                // LAYERED + TRANSPARENT = benar-benar tembus klik untuk semua aplikasi. TRANSPARENT saja (atau
-                // HTTRANSPARENT) hanya meneruskan klik ke jendela di thread yang sama, sehingga kotak bayangan ini dulu
-                // menelan klik di sekitar notch (mis. tab Chrome) dan mengganggu tangkapan layar.
                 WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT | WS_EX_LAYERED,
                 class,
                 w!("abra-notch-shadow"),
@@ -58,11 +52,10 @@ impl Shadow {
             let sprite = comp.CreateSpriteVisual()?;
             sprite.SetOpacity(0.0)?;
             stage.Children()?.InsertAtTop(&sprite)?;
-            Ok(Shadow { hwnd, comp: comp.clone(), _surface: surface, stage, sprite, brushes: HashMap::new(), key: (0, 0, 0), pad })
+            Ok(Shadow { hwnd, comp: comp.clone(), _surface: surface, stage, sprite, brushes: HashMap::new(), key: (0, 0, 0), pad, island: 0.0 })
         }
     }
 
-    /// Letakkan jendela bayangan tepat di bawah `notch` (sama-sama paling atas).
     pub fn place_window(&self, notch: HWND, x: i32, y: i32, w: i32, h: i32) {
         unsafe {
             let _ = SetWindowPos(self.hwnd, Some(notch), x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
@@ -85,7 +78,6 @@ impl Shadow {
         let make = || -> windows_core::Result<CompositionBrush> {
             let surf = gfx.surface_from_bgra(s.w, s.h, &s.bgra)?;
             let src = self.comp.CreateSurfaceBrushWithSurface(&surf)?;
-            // tanpa Fill, sumber digambar seukuran aslinya di tengah dan nine-grid tidak meregang
             src.SetStretch(CompositionStretch::Fill)?;
             let ng = self.comp.CreateNineGridBrush()?;
             ng.SetSource(&src)?;
@@ -101,8 +93,6 @@ impl Shadow {
         Some(b)
     }
 
-    /// Ikuti badan notch: `body` = (x, y, w, h) dalam koordinat jendela notch (termasuk bagian di atas layar),
-    /// `look` = (blur, geser y, opasitas) dalam px. `spring_params` = None untuk langsung (tanpa animasi).
     pub fn follow(&mut self, gfx: &Gfx, body: (f32, f32, f32, f32), radius: f32, look: (f32, f32, f32), spring_params: Option<(f32, u32)>) {
         let (blur, dy, opacity) = look;
         let Some((brush, m, dy)) = self.brush(gfx, radius, blur, dy) else { return };
@@ -129,10 +119,22 @@ impl Shadow {
         }
     }
 
-    /// Geser seluruh bayangan (mis. notch menyingkir ke atas).
     pub fn stage_y(&self, y: f32, ratio: f32, period: u32) {
         let o: CompositionObject = self.stage.cast().unwrap();
-        spring(&self.comp, &o, "Offset.Y", y, ratio, period);
+        spring(&self.comp, &o, "Offset.Y", y + self.island, ratio, period);
+    }
+
+    pub fn set_island(&mut self, gap: f32, shown: bool) {
+        if (gap - self.island).abs() < 0.5 {
+            return;
+        }
+        self.island = gap;
+        if shown {
+            if let Ok(o) = self.stage.cast::<CompositionObject>() {
+                let _ = o.StopAnimation(&HSTRING::from("Offset.Y"));
+            }
+            let _ = self.stage.SetOffset(Vector3 { X: 0.0, Y: gap, Z: 0.0 });
+        }
     }
 }
 

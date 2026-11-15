@@ -1,5 +1,3 @@
-//! Lapisan Win32: semua `unsafe` hidup di sini, dibungkus API kecil yang aman.
-
 pub mod agenda;
 pub mod apps;
 pub mod audio;
@@ -39,10 +37,3 @@ pub mod vdesk;
 pub mod wic;
 pub mod wifi;
 pub mod wins;
-
-
-
-
-
-
-

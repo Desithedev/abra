@@ -1,7 +1,3 @@
-//! Warna dari sampul album untuk visualizer dan cahaya di notch: rona yang paling dominan di antara piksel yang cukup
-//! jenuh dan terang, lalu dicerahkan agar terbaca di atas notch gelap. Sampul abu-abu/hitam-putih tidak punya warna
-//! (`None`), dan app memakai warna aksen ABRA.
-
 const BUCKETS: usize = 12;
 
 fn hsv(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
@@ -20,7 +16,6 @@ fn hsv(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
     (h, if max > 0.0 { d / max } else { 0.0 }, max)
 }
 
-/// `bgra` = piksel w×h (BGRA). Mengambil paling banyak ±4096 sampel.
 pub fn from_art(bgra: &[u8], w: u32, h: u32) -> Option<[u8; 3]> {
     let n = (w as usize) * (h as usize);
     if n == 0 || bgra.len() < n * 4 {
@@ -51,12 +46,10 @@ pub fn from_art(bgra: &[u8], w: u32, h: u32) -> Option<[u8; 3]> {
         }
     }
     let (k, best) = weight.iter().copied().enumerate().max_by(|a, b| a.1.total_cmp(&b.1))?;
-    // terlalu sedikit piksel berwarna: anggap sampul tak berwarna
     if total == 0.0 || best / total < 0.04 {
         return None;
     }
     let c = [sum[k][0] / best, sum[k][1] / best, sum[k][2] / best];
-    // cerahkan: kanal terbesar menjadi 235, rona dipertahankan
     let max = c[0].max(c[1]).max(c[2]).max(1.0);
     let f = 235.0 / max;
     Some([(c[0] * f).round().min(255.0) as u8, (c[1] * f).round().min(255.0) as u8, (c[2] * f).round().min(255.0) as u8])
@@ -83,7 +76,6 @@ mod tests {
         let c = from_art(&red, 64, 64).unwrap();
         assert_eq!(c[0], 235);
         assert!(c[1] < 60 && c[2] < 60);
-        // sebagian besar biru tua dengan bintik oranye: biru menang
         let mixed = img(64, 64, |x, y| if x < 8 && y < 8 { [255, 140, 0] } else { [20, 40, 160] });
         let c = from_art(&mixed, 64, 64).unwrap();
         assert!(c[2] > c[0] && c[2] == 235);

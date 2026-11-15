@@ -1,7 +1,3 @@
-//! Simbol menu bar bergaya SF Symbols (Wi-Fi, kaca pembesar, Control Center, Stage Manager) yang digambar sendiri
-//! sebagai bentuk vektor ke bitmap BGRA ter-premultiply, supaya tidak bergantung pada font ikon Windows maupun berkas Apple.
-//! Semua bentuk dihitung di kotak satuan 0..1 dengan anti-alias supersampling 4×4.
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sym {
     Wifi,
@@ -35,16 +31,10 @@ pub enum Sym {
     Minus,
     Calendar,
     Note,
-    /// Keluaran audio (gelombang melingkar + segitiga), tombol pilih perangkat di modul Sound.
-    AirPlay,
-    /// Stopwatch (timer notch).
     Stopwatch,
-    /// Jam dinding (notch diam).
     Clock,
-    /// Baki terbuka (Rak di notch).
     Tray,
     Folder,
-    /// Sinyal Wi-Fi lemah (titik + 1 busur) dan sedang (titik + 2 busur); `Wifi` = penuh.
     Wifi1,
     Wifi2,
     ChevronRight,
@@ -52,14 +42,11 @@ pub enum Sym {
     Headphones,
     Keyboard,
     Mouse,
-    /// Panah unduh membulat (tengah busur unduhan) dan centang (unduhan selesai).
     ArrowDown,
     Check,
-    /// Panah kirim (zona "Kirim" dan progres kirim ke HP).
     ArrowUp,
 }
 
-/// Simbol untuk perintah menu bar (id yang dipakai `menubar.rs`); `None` = tanpa simbol.
 pub fn for_command(id: usize) -> Option<Sym> {
     match id {
         100 | 200 => Some(Sym::Info),
@@ -77,8 +64,6 @@ pub fn for_command(id: usize) -> Option<Sym> {
     }
 }
 
-/// Potong bitmap BGRA ter-premultiply ke kotak isi tinta (alfa > 10) supaya bisa dipusatkan tepat pada isinya, bukan pada
-/// kotak font/gambar. `None` bila kosong.
 pub fn crop_ink(bgra: &[u8], w: u32, h: u32) -> Option<(Vec<u8>, u32, u32)> {
     let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0u32, 0u32);
     for y in 0..h {
@@ -104,7 +89,6 @@ pub fn crop_ink(bgra: &[u8], w: u32, h: u32) -> Option<(Vec<u8>, u32, u32)> {
     Some((out, cw, ch))
 }
 
-/// Padanan simbol untuk glyph Segoe Fluent yang dipakai sebelumnya (kode titik).
 pub fn for_glyph(g: &str) -> Option<Sym> {
     match g {
         "\u{E701}" => Some(Sym::Wifi),
@@ -121,7 +105,6 @@ fn len(a: P, b: P) -> f32 {
     ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt()
 }
 
-/// Jarak ke ruas a-b (tanpa ketebalan).
 fn seg(p: P, a: P, b: P) -> f32 {
     let (dx, dy) = (b.0 - a.0, b.1 - a.1);
     let l2 = dx * dx + dy * dy;
@@ -129,7 +112,6 @@ fn seg(p: P, a: P, b: P) -> f32 {
     len(p, (a.0 + t * dx, a.1 + t * dy))
 }
 
-/// Jarak bertanda ke poligon (negatif di dalam). Dikurangi radius `r` oleh pemanggil untuk sudut membulat.
 fn poly(p: P, pts: &[P]) -> f32 {
     let mut d = f32::MAX;
     let mut inside = false;
@@ -149,43 +131,36 @@ fn poly(p: P, pts: &[P]) -> f32 {
     }
 }
 
-/// Segitiga membulat menghadap kiri dengan ujung di `tip` dan alas di `base` (koordinat luar).
 fn tri_left(p: P, tip: f32, base: f32) -> bool {
     poly(p, &[(tip + 0.07, 0.5), (base - 0.045, 0.29), (base - 0.045, 0.71)]) - 0.045 <= 0.0
 }
 
-/// Jarak bertanda ke lingkaran.
 fn circle(p: P, c: P, r: f32) -> f32 {
     len(p, c) - r
 }
 
-/// Jarak bertanda ke garis tebal `w` berujung bulat dari a ke b.
 fn line(p: P, a: P, b: P, w: f32) -> f32 {
     let (dx, dy) = (b.0 - a.0, b.1 - a.1);
     let t = (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / (dx * dx + dy * dy)).clamp(0.0, 1.0);
     len(p, (a.0 + t * dx, a.1 + t * dy)) - w / 2.0
 }
 
-/// Jarak bertanda ke kotak membulat berpusat `c`, setengah-ukuran `h`, radius `r`.
 fn rrect(p: P, c: P, h: P, r: f32) -> f32 {
     let (qx, qy) = ((p.0 - c.0).abs() - (h.0 - r), (p.1 - c.1).abs() - (h.1 - r));
     (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt() + qx.max(qy).min(0.0) - r
 }
 
-/// Cincin tebal `w` berjari-jari `r` (jarak bertanda ke tepi).
 fn ring(p: P, c: P, r: f32, w: f32) -> f32 {
     (len(p, c) - r).abs() - w / 2.0
 }
 
-/// Busur: bagian cincin dalam sudut ±`half` (rad) dari arah atas, dengan ujung bulat.
 fn arc(p: P, c: P, r: f32, w: f32, half: f32) -> f32 {
-    let ang = (p.0 - c.0).atan2(-(p.1 - c.1)); // 0 = lurus ke atas
+    let ang = (p.0 - c.0).atan2(-(p.1 - c.1));
     let a = ang.clamp(-half, half);
     let q = (c.0 + r * a.sin(), c.1 - r * a.cos());
     len(p, q) - w / 2.0
 }
 
-/// Cakupan (0..1) satu sampel: gabungan bentuk dikurangi lubang.
 fn shape(sym: Sym, p: P) -> bool {
     match sym {
         Sym::Search => {
@@ -194,7 +169,7 @@ fn shape(sym: Sym, p: P) -> bool {
         }
         Sym::Wifi | Sym::Wifi1 | Sym::Wifi2 => {
             let apex = (0.5, 0.80);
-            let half = 0.78; // ≈ 45°
+            let half = 0.78;
             let w = 0.10;
             let n = match sym {
                 Sym::Wifi1 => 1,
@@ -206,7 +181,6 @@ fn shape(sym: Sym, p: P) -> bool {
         Sym::ChevronRight => line(p, (0.38, 0.22), (0.64, 0.5), 0.1) <= 0.0 || line(p, (0.64, 0.5), (0.38, 0.78), 0.1) <= 0.0,
         Sym::ChevronDown => line(p, (0.22, 0.38), (0.5, 0.64), 0.1) <= 0.0 || line(p, (0.5, 0.64), (0.78, 0.38), 0.1) <= 0.0,
         Sym::Headphones => {
-            // bando setengah lingkaran + dua bantalan telinga membulat
             let band = arc(p, (0.5, 0.56), 0.34, 0.085, 1.5708) <= 0.0 && p.1 <= 0.58;
             let cups = rrect(p, (0.21, 0.70), (0.09, 0.17), 0.07) <= 0.0 || rrect(p, (0.79, 0.70), (0.09, 0.17), 0.07) <= 0.0;
             band || cups
@@ -224,7 +198,6 @@ fn shape(sym: Sym, p: P) -> bool {
             body || line(p, (0.5, 0.22), (0.5, 0.36), 0.075) <= 0.0
         }
         Sym::Control => {
-            // dua sakelar bertumpuk: atas terisi dengan lubang kenop di kanan, bawah garis tepi dengan kenop terisi di kiri
             let top = rrect(p, (0.5, 0.29), (0.43, 0.17), 0.17) <= 0.0 && circle(p, (0.70, 0.29), 0.105) > 0.0;
             let bot_outline = rrect(p, (0.5, 0.71), (0.43, 0.17), 0.17).abs() - 0.035 <= 0.0;
             let bot_knob = circle(p, (0.30, 0.71), 0.105) <= 0.0;
@@ -339,11 +312,6 @@ fn shape(sym: Sym, p: P) -> bool {
                 || line(p, c, (0.5, 0.39), 0.085) <= 0.0
                 || line(p, (0.76, 0.27), (0.83, 0.20), 0.08) <= 0.0
         }
-        Sym::AirPlay => {
-            let c = (0.5, 0.50);
-            let waves = arc(p, c, 0.36, 0.085, 2.25) <= 0.0 || arc(p, c, 0.20, 0.085, 2.25) <= 0.0;
-            waves || poly(p, &[(0.5, 0.58), (0.30, 0.90), (0.70, 0.90)]) - 0.03 <= 0.0
-        }
         Sym::Note => {
             let head = circle(p, (0.33, 0.74), 0.15) <= 0.0;
             let stem = line(p, (0.46, 0.72), (0.46, 0.18), 0.085) <= 0.0;
@@ -373,12 +341,10 @@ fn shape(sym: Sym, p: P) -> bool {
     }
 }
 
-/// Simbol `px`×`px` berwarna `rgb` (BGRA ter-premultiply).
 pub fn render(sym: Sym, px: u32, rgb: [u8; 3]) -> Vec<u8> {
     let n = px.max(1);
     let mut out = vec![0u8; (n * n * 4) as usize];
     const SS: u32 = 4;
-    // sisakan tepi 1 px agar bentuk tidak terpotong
     let inner = n as f32 - 2.0;
     for y in 0..n {
         for x in 0..n {
@@ -418,7 +384,7 @@ mod tests {
     fn menu_symbols_draw_and_command_map() {
         assert_eq!(for_command(111), Some(Sym::Restart));
         assert_eq!(for_command(999), None);
-        for s in [Sym::Info, Sym::Gear, Sym::Bag, Sym::Grid, Sym::Windows, Sym::XCircle, Sym::Moon, Sym::Restart, Sym::Power, Sym::Lock, Sym::EyeSlash, Sym::Speaker, Sym::SpeakerWave, Sym::SpeakerLow, Sym::SpeakerMid, Sym::SpeakerMute, Sym::Sun, Sym::SunSmall, Sym::Bluetooth, Sym::Play, Sym::Pause, Sym::Backward, Sym::Forward, Sym::Plus, Sym::Minus, Sym::Calendar, Sym::Note, Sym::AirPlay, Sym::Stopwatch, Sym::Clock, Sym::Tray, Sym::Folder, Sym::Wifi1, Sym::Wifi2, Sym::ChevronRight, Sym::ChevronDown, Sym::Headphones, Sym::Keyboard, Sym::Mouse, Sym::ArrowDown, Sym::Check, Sym::ArrowUp] {
+        for s in [Sym::Info, Sym::Gear, Sym::Bag, Sym::Grid, Sym::Windows, Sym::XCircle, Sym::Moon, Sym::Restart, Sym::Power, Sym::Lock, Sym::EyeSlash, Sym::Speaker, Sym::SpeakerWave, Sym::SpeakerLow, Sym::SpeakerMid, Sym::SpeakerMute, Sym::Sun, Sym::SunSmall, Sym::Bluetooth, Sym::Play, Sym::Pause, Sym::Backward, Sym::Forward, Sym::Plus, Sym::Minus, Sym::Calendar, Sym::Note, Sym::Stopwatch, Sym::Clock, Sym::Tray, Sym::Folder, Sym::Wifi1, Sym::Wifi2, Sym::ChevronRight, Sym::ChevronDown, Sym::Headphones, Sym::Keyboard, Sym::Mouse, Sym::ArrowDown, Sym::Check, Sym::ArrowUp] {
             let b = render(s, 40, [255, 255, 255]);
             let filled = b.chunks_exact(4).filter(|p| p[3] > 128).count();
             assert!(filled > 40 && filled < 40 * 40 * 3 / 4, "{s:?} terisi {filled}");
@@ -436,7 +402,6 @@ mod tests {
         assert_eq!(alpha(&pause, n, 32, 32), 0, "celah di antara dua batang");
         let fwd = render(Sym::Forward, n, [255, 255, 255]);
         let back = render(Sym::Backward, n, [255, 255, 255]);
-        // maju adalah cermin mundur: piksel kiri-kanan bertukar
         assert_eq!(alpha(&fwd, n, 10, 32), alpha(&back, n, 53, 32));
         let minus = render(Sym::Minus, n, [255, 255, 255]);
         assert!(alpha(&minus, n, 32, 32) > 200 && alpha(&minus, n, 32, 12) == 0);

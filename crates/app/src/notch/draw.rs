@@ -1,6 +1,3 @@
-//! Pembantu gambar isi notch: teks, simbol ABRA, dan persegi membulat sebagai sprite Composition. Permukaan teks dan
-//! simbol di-cache (isi notch digambar ulang tiap berganti tampilan).
-
 use nacre_core::symbols::{self, Sym};
 use nacre_platform::text::{self, Style};
 use nacre_ui::gfx::Gfx;
@@ -65,7 +62,6 @@ impl Painter {
         dp * self.dpi
     }
 
-    /// Lebar teks dalam px (ukuran dalam dp).
     pub fn measure(&self, s: &str, size: f32, weight: i32) -> f32 {
         text::measure(s, &Style { px: (size * self.dpi).round() as i32, weight }).0 as f32
     }
@@ -85,13 +81,11 @@ impl Painter {
         go().ok()
     }
 
-    /// Teks; `x` jangkar menurut `anchor`, `y` tepi atas, ukuran dalam dp, `max_w` px. Mengembalikan lebar terpakai (px).
     #[allow(clippy::too_many_arguments)]
     pub fn text(&mut self, parent: &ContainerVisual, s: &str, x: f32, y: f32, size: f32, weight: i32, rgb: [u8; 3], opacity: f32, anchor: Anchor, max_w: f32) -> f32 {
         self.text_v(parent, s, x, y, size, weight, rgb, opacity, anchor, max_w).0
     }
 
-    /// Seperti `text`, tetapi juga mengembalikan sprite-nya (untuk dianimasikan).
     #[allow(clippy::too_many_arguments)]
     pub fn text_v(&mut self, parent: &ContainerVisual, s: &str, x: f32, y: f32, size: f32, weight: i32, rgb: [u8; 3], opacity: f32, anchor: Anchor, max_w: f32) -> (f32, Option<SpriteVisual>) {
         if s.is_empty() {
@@ -123,7 +117,6 @@ impl Painter {
         (w as f32, v)
     }
 
-    /// Teks rata kiri yang diburamkan `blur` px (baris lirik yang tidak sedang dinyanyikan).
     #[allow(clippy::too_many_arguments)]
     pub fn text_soft(&mut self, parent: &ContainerVisual, s: &str, x: f32, y: f32, size: f32, weight: i32, rgb: [u8; 3], opacity: f32, blur: f32) -> Option<SpriteVisual> {
         if s.is_empty() {
@@ -158,7 +151,6 @@ impl Painter {
         self.place(parent, &surf, x - r as f32, y - r as f32, w as f32, h as f32, opacity)
     }
 
-    /// Simbol ABRA berpusat pada tintanya di (`cx`,`cy`); ukuran kotak dalam dp.
     #[allow(clippy::too_many_arguments)]
     pub fn sym(&mut self, parent: &ContainerVisual, s: Sym, cx: f32, cy: f32, size: f32, rgb: [u8; 3], opacity: f32) {
         let n = (size * self.dpi).round().max(8.0) as u32;
@@ -179,8 +171,6 @@ impl Painter {
         self.place(parent, &surf, cx - w as f32 / 2.0, cy - h as f32 / 2.0, w as f32, h as f32, opacity);
     }
 
-    /// Busur pengukur unduhan berpusat di (`cx`,`cy`) px: jari-jari `r` dan tebal `w` dalam dp, `from`..`to` sepanjang
-    /// busur (lihat `notch::download::arc_bitmap`). Mengembalikan sprite persegi (untuk diputar pada pusatnya).
     #[allow(clippy::too_many_arguments)]
     pub fn arc(&mut self, parent: &ContainerVisual, cx: f32, cy: f32, r: f32, w: f32, from: f32, to: f32, rgb: [u8; 3], alpha: u8) -> Option<(SpriteVisual, f32)> {
         let (rp, wp) = (r * self.dpi, w * self.dpi);
@@ -216,7 +206,6 @@ impl Painter {
         go().ok()
     }
 
-    /// Gambar bitmap BGRA (mis. sampul) sebagai sprite bersudut membulat.
     #[allow(clippy::too_many_arguments)]
     pub fn image(&self, parent: &ContainerVisual, s: &CompositionDrawingSurface, x: f32, y: f32, w: f32, h: f32, radius: f32) -> Option<SpriteVisual> {
         let go = || -> windows_core::Result<SpriteVisual> {
@@ -237,7 +226,6 @@ impl Painter {
 }
 
 impl Painter {
-    /// Ikon baterai ABRA (sama dengan menu bar), tepi kiri di `x`, tengah vertikal `cy`. Mengembalikan lebar (px).
     pub fn battery(&mut self, parent: &ContainerVisual, x: f32, cy: f32, pct: u8, charging: bool) -> f32 {
         let (bw, bh) = ((24.0 * self.dpi).round() as u32, (11.0 * self.dpi).round() as u32);
         let fill = if charging { [52, 199, 89] } else if pct <= 10 { [255, 69, 58] } else { WHITE };
@@ -258,7 +246,6 @@ impl Painter {
         w as f32
     }
 
-    /// Potong teks dengan "…" agar muat di `max` px.
     pub fn fit(&self, s: &str, size: f32, weight: i32, max: f32) -> String {
         if self.measure(s, size, weight) <= max {
             return s.to_string();

@@ -1,6 +1,3 @@
-//! Penyedia media palsu dalam-proses untuk pengujian (`NACRE_FAKE_MEDIA=1`): tidak menyentuh sesi media pengguna.
-//! Menanggapi perintah seperti sesi sungguhan (putar/jeda, berikutnya, sebelumnya, seek) dan mencatat tiap perintah.
-
 use crate::icons::Bitmap;
 use crate::media::{ArtUpdate, Command, Media, Snapshot};
 use std::sync::mpsc::channel;
@@ -10,7 +7,6 @@ const TITLES: [&str; 3] = ["Lagu Uji A", "Lagu Uji B", "Lagu Uji C"];
 const DUR: i64 = 180_000;
 
 fn cover(idx: usize) -> Bitmap {
-    // gradien berwarna per lagu, supaya pergantian lagu terlihat
     let n = 64usize;
     let mut b = vec![0u8; n * n * 4];
     for y in 0..n {
@@ -49,7 +45,6 @@ pub fn spawn(notify: impl Fn() + Send + 'static) -> Media {
                 duration_ms: DUR,
                 can_seek: true,
                 art,
-                // app sumber yang pasti terpasang, hanya agar badge ikon app bisa diuji
                 app: "Microsoft.WindowsStore_8wekyb3d8bbwe!App".into(),
             });
             notify();

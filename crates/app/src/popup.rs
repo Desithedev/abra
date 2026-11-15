@@ -1,6 +1,3 @@
-//! Window popup kecil (tooltip, pratinjau): window ber-Composition sendiri, dibuat satu kali dan
-//! disembunyikan (`SW_HIDE`, tanpa biaya compositor) saat tidak dipakai.
-
 use nacre_ui::glass::{GlassPanel, GlassParams};
 use nacre_ui::host::{attach, Surface};
 use windows::core::PCWSTR;
@@ -30,7 +27,6 @@ impl Popup {
         Self::new_with(comp, class, proc, ex_extra, glass, false)
     }
 
-    /// `activatable`: jendela bisa menerima fokus keyboard (Spotlight, Launchpad); selain itu tidak pernah mencuri fokus.
     pub fn new_with(
         comp: &Compositor,
         class: PCWSTR,
@@ -64,7 +60,6 @@ impl Popup {
         }
     }
 
-    /// Posisi/ukuran dalam piksel layar. Kartu kaca mengisi seluruh window.
     pub fn set_rect(&mut self, x: i32, y: i32, w: i32, h: i32) -> Result<()> {
         self.rect = (x, y, w, h);
         unsafe {
@@ -74,7 +69,6 @@ impl Popup {
         self.panel.set_rect(0.0, 0.0, w as f32, h as f32)
     }
 
-    /// Tampilkan dan ambil fokus keyboard (untuk popup `activatable`).
     pub fn show_active(&self) {
         unsafe {
             let _ = ShowWindow(self.hwnd, SW_SHOW);
@@ -88,7 +82,6 @@ impl Popup {
         }
     }
 
-    /// Animasi muncul ala macOS: pudar masuk + skala 0,97→1 dari tepi atas (dropdown) atau bawah (menu konteks).
     pub fn fade_in(&self, comp: &Compositor, from_top: bool) {
         use windows::Foundation::TimeSpan;
         use windows::UI::Composition::{CompositionEasingFunction, CompositionObject};
@@ -114,7 +107,6 @@ impl Popup {
         let _ = go();
     }
 
-    /// Animasi muncul layar penuh ala Launchpad: membesar dari 1,12 ke 1 sambil memudar masuk (±240 ms).
     pub fn zoom_in(&self, comp: &Compositor) {
         use windows::Foundation::TimeSpan;
         use windows::UI::Composition::{CompositionEasingFunction, CompositionObject};
@@ -140,7 +132,6 @@ impl Popup {
         let _ = go();
     }
 
-    /// Animasi tutup layar penuh ala Launchpad: membesar halus ke 1,08 sambil memudar (±170 ms).
     pub fn zoom_out(&self, comp: &Compositor) {
         let root = &self.surface.root;
         let (w, h) = (self.rect.2 as f32, self.rect.3 as f32);
@@ -150,7 +141,6 @@ impl Popup {
         let _ = root.SetOpacity(0.0);
     }
 
-    /// Visual akar window (untuk animasi buka/tutup khusus).
     pub fn root(&self) -> &ContainerVisual {
         &self.surface.root
     }

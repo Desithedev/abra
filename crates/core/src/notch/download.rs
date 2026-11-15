@@ -1,36 +1,23 @@
-//! Aktivitas unduhan di notch (murni, dites): model unduhan, angka di bawah busur, busur pengukur, dan pembaca
-//! manifes Steam. Busur mulai ±jam 8 dan berputar searah jarum jam sampai ±jam 4 (celah di bawah untuk angka).
-
-/// Asal unduhan; menentukan apakah persentase diketahui.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Source {
     Store,
     Steam,
-    /// Peramban (.crdownload / .part): ukuran total tidak diketahui, busur berputar dan angka = ukuran terunduh.
     Browser,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Download {
     pub source: Source,
-    /// Path exe pengunduh (untuk ikon), kosong bila tidak diketahui.
     pub app: String,
-    /// Nama berkas / app / game.
     pub name: String,
-    /// 0..=100 bila diketahui.
     pub percent: Option<f32>,
-    /// Byte yang sudah diunduh.
     pub bytes: u64,
 }
 
-/// Sudut awal busur (derajat, 0 = jam 12, searah jarum jam) dan panjangnya.
 pub const ARC_START_DEG: f32 = 232.0;
 pub const ARC_SWEEP_DEG: f32 = 256.0;
-/// Lama unduhan selesai tetap tampil (busur penuh + centang).
 pub const DONE_LINGER_MS: u32 = 3500;
 
-/// Angka di bawah busur: persen tanpa tanda "%" (dibulatkan ke bawah agar 100 hanya saat benar-benar selesai), atau
-/// ukuran terunduh singkat untuk peramban.
 pub fn label(d: &Download) -> String {
     match d.percent {
         Some(p) => format!("{}", p.clamp(0.0, 100.0).floor() as u32),
@@ -38,7 +25,6 @@ pub fn label(d: &Download) -> String {
     }
 }
 
-/// Ukuran singkat untuk ruang sempit: "640K", "12M", "1.4G".
 pub fn size_short(b: u64) -> String {
     const K: f64 = 1000.0;
     let f = b as f64;
@@ -56,8 +42,6 @@ pub fn size_short(b: u64) -> String {
     }
 }
 
-/// Bitmap BGRA ter-premultiply `n`×`n` berisi busur pengukur dari `from` ke `to` (0..1 sepanjang busur), berpusat di
-/// tengah, jari-jari `r` dan tebal `w` (px), ujung bulat. Dipakai untuk jalur (0..1), isi (0..persen), dan putaran.
 pub fn arc_bitmap(n: u32, r: f32, w: f32, from: f32, to: f32, rgb: [u8; 3], alpha: u8) -> Vec<u8> {
     let mut out = vec![0u8; (n * n * 4) as usize];
     let (from, to) = (from.clamp(0.0, 1.0), to.clamp(0.0, 1.0));
@@ -101,12 +85,10 @@ pub fn arc_bitmap(n: u32, r: f32, w: f32, from: f32, to: f32, rgb: [u8; 3], alph
     out
 }
 
-/// Nilai kunci pertama `key` dalam teks VDF Steam (`"kunci"  "nilai"`).
 pub fn vdf_value<'a>(text: &'a str, key: &'a str) -> Option<&'a str> {
     vdf_values(text, key).next()
 }
 
-/// Semua nilai untuk `key` (mis. setiap "path" di libraryfolders.vdf).
 pub fn vdf_values<'a>(text: &'a str, key: &'a str) -> impl Iterator<Item = &'a str> + 'a {
     text.lines().filter_map(move |line| {
         let mut parts = line.split('"').skip(1).step_by(2);
@@ -118,16 +100,13 @@ pub fn vdf_values<'a>(text: &'a str, key: &'a str) -> impl Iterator<Item = &'a s
     })
 }
 
-/// Folder perpustakaan Steam dari isi libraryfolders.vdf ("\\" di VDF = satu backslash).
 pub fn steam_libraries(vdf: &str) -> Vec<String> {
     vdf_values(vdf, "path").map(|p| p.replace("\\\\", "\\")).collect()
 }
 
-/// Bendera EAppState Steam yang berarti unduhan/pembaruan sedang berjalan, dan "dijeda".
 const STEAM_RUNNING: u64 = 256 | 1024 | 1_048_576;
 const STEAM_PAUSED: u64 = 512;
 
-/// Unduhan aktif dari isi appmanifest_*.acf: (nama game, terunduh, total). `None` bila tidak sedang mengunduh.
 pub fn steam_progress(acf: &str) -> Option<(String, u64, u64)> {
     let flags: u64 = vdf_value(acf, "StateFlags")?.parse().ok()?;
     if flags & STEAM_RUNNING == 0 || flags & STEAM_PAUSED != 0 {
@@ -141,8 +120,6 @@ pub fn steam_progress(acf: &str) -> Option<(String, u64, u64)> {
     Some((vdf_value(acf, "name").unwrap_or("Steam").to_string(), done, total))
 }
 
-/// Pilih unduhan yang ditampilkan: yang persennya diketahui dan paling jauh dari selesai kalah dari yang paling baru
-/// bergerak? Sederhana dan stabil: utamakan sumber berpersen (Store/Steam), lalu byte terbanyak.
 pub fn primary(list: &[Download]) -> Option<&Download> {
     list.iter().max_by(|a, b| a.percent.is_some().cmp(&b.percent.is_some()).then(a.bytes.cmp(&b.bytes)))
 }
@@ -181,7 +158,6 @@ mod tests {
         assert!(alpha(270.0) > 200, "jam 9 terisi");
         assert!(alpha(90.0) > 200, "jam 3 terisi");
         assert_eq!(alpha(180.0), 0, "jam 6 kosong (celah angka)");
-        // isi 25%: dari jam ±8 sampai sedikit lewat jam 10
         let part = arc_bitmap(n, r, 3.0, 0.0, 0.25, [52, 199, 89], 255);
         let pa = |deg: f32| {
             let t = deg.to_radians();

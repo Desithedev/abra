@@ -1,13 +1,6 @@
-//! Tata letak dock satu baris dengan magnifikasi ala macOS.
-//!
-//! Fungsi murni: diberi daftar slot dan posisi kursor (atau `None`), mengembalikan posisi
-//! kiri + skala tiap slot. Pusat tiap slot untuk perhitungan jarak diambil dari posisi
-//! *tanpa* magnifikasi, sehingga hasilnya stabil (tidak ada umpan balik antar frame).
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Slot {
     Item,
-    /// Garis pemisah: lebar tetap, tidak ikut membesar.
     Separator,
 }
 
@@ -15,15 +8,12 @@ pub enum Slot {
 pub struct Metrics {
     pub icon: f32,
     pub gap: f32,
-    /// Skala maksimum di bawah kursor (1.0 = tanpa magnifikasi).
     pub max_scale: f32,
-    /// Jarak (px) dari kursor sampai skala kembali ke 1.
     pub reach: f32,
     pub separator: f32,
 }
 
 impl Metrics {
-    /// Metrik dari pengaturan: ukuran ikon (dp), jarak antar ikon (dp), zoom maksimum (1.0 = tanpa zoom).
     pub fn custom(icon: f32, gap: f32, zoom: f32, scale: f32) -> Self {
         Metrics { icon: icon * scale, gap: gap * scale, max_scale: zoom.max(1.0), reach: 2.6 * icon * scale, separator: 10.0 * scale }
     }
@@ -41,9 +31,7 @@ impl Metrics {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Placed {
-    /// Tepi kiri kotak yang sudah diskalakan.
     pub x: f32,
-    /// Lebar kotak yang sudah diskalakan.
     pub w: f32,
     pub scale: f32,
 }
@@ -51,7 +39,6 @@ pub struct Placed {
 #[derive(Clone, Debug)]
 pub struct Layout {
     pub cells: Vec<Placed>,
-    /// Lebar isi (tanpa padding kartu).
     pub total: f32,
 }
 
@@ -69,7 +56,6 @@ fn base_width(slots: &[Slot], m: &Metrics) -> f32 {
     w
 }
 
-/// Bentuk kosinus: 1 di bawah kursor, 0 di jarak `reach`, mulus di kedua ujung.
 fn falloff(distance: f32, reach: f32) -> f32 {
     let t = (distance / reach).clamp(0.0, 1.0);
     0.5 * (1.0 + (std::f32::consts::PI * t).cos())
@@ -79,7 +65,6 @@ pub fn layout(slots: &[Slot], cursor_x: Option<f32>, area_w: f32, m: &Metrics) -
     let base_total = base_width(slots, m);
     let base_left = (area_w - base_total) / 2.0;
 
-    // skala tiap slot dari jarak ke kursor, memakai pusat tanpa magnifikasi
     let mut scales = Vec::with_capacity(slots.len());
     let mut x = base_left;
     for s in slots {
@@ -113,7 +98,6 @@ pub fn layout(slots: &[Slot], cursor_x: Option<f32>, area_w: f32, m: &Metrics) -
     Layout { cells, total }
 }
 
-/// Indeks slot `Item` di bawah `x` (celah antar ikon dibagi dua ke tetangga terdekat).
 pub fn hit(slots: &[Slot], l: &Layout, x: f32, m: &Metrics) -> Option<usize> {
     let half = m.gap / 2.0;
     for (i, c) in l.cells.iter().enumerate() {

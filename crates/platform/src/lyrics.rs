@@ -1,9 +1,3 @@
-//! Pencari lirik untuk notch, di thread sendiri. Urutan sumber:
-//! 1. berkas `.lrc` milik pengguna di folder lirik ABRA ("Artis - Judul.lrc" atau "Judul.lrc"),
-//! 2. cache lokal hasil pencarian sebelumnya (`cache\<kunci>.lrc`, atau `.none` = sudah dicari dan tidak ada),
-//! 3. LRCLIB (lrclib.net) bila diizinkan pengguna. Yang dikirim hanya judul, artis, album, dan durasi lagu, dengan
-//!    User-Agent umum "ABRA/<versi>". Ini satu-satunya akses jaringan ABRA.
-
 use nacre_core::notch::lrclib::{self, Track};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -12,9 +6,7 @@ use windows::Foundation::Uri;
 use windows::Web::Http::HttpClient;
 use windows_core::HSTRING;
 
-/// Hasil "tidak ada" di cache berlaku selama ini sebelum dicari ulang (lirik baru bisa ditambahkan ke LRCLIB).
 const NONE_TTL: Duration = Duration::from_secs(3 * 24 * 3600);
-/// Batas waktu satu permintaan jaringan.
 const TIMEOUT: Duration = Duration::from_secs(8);
 
 pub struct Request {
@@ -24,18 +16,13 @@ pub struct Request {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Source {
-    /// Berkas .lrc pengguna.
     Local,
-    /// Dari LRCLIB (langsung atau lewat cache).
     Lrclib,
-    /// Tidak ditemukan / tidak dicari.
     None,
 }
 
 pub struct Answer {
-    /// `lrclib::cache_key` dari lagu yang diminta (untuk mencocokkan dengan lagu yang sedang diputar).
     pub key: String,
-    /// Teks LRC/biasa; `Some("")` = instrumental.
     pub text: Option<String>,
     pub source: Source,
 }
@@ -45,12 +32,10 @@ pub struct Lyrics {
     pub answers: Receiver<Answer>,
 }
 
-/// Nama berkas aman dari teks bebas.
 fn file_safe(s: &str) -> String {
     s.chars().map(|c| if r#"\/:*?"<>|"#.contains(c) || c.is_control() { '_' } else { c }).collect::<String>().trim().to_string()
 }
 
-/// Cari "Artis - Judul.lrc" lalu "Judul.lrc" di `dir` (tidak peka huruf besar/kecil).
 fn local_file(dir: &Path, t: &Track) -> Option<String> {
     let mut want = Vec::new();
     if !t.artist.is_empty() {
@@ -68,8 +53,6 @@ fn local_file(dir: &Path, t: &Track) -> Option<String> {
     None
 }
 
-/// Tunggu operasi WinRT selesai, paling lama `limit`; dibatalkan bila lewat. `status` = kode AsyncStatus
-/// (0 berjalan, 1 selesai, 2 dibatalkan, 3 gagal).
 fn finish(status: impl Fn() -> Option<i32>, cancel: impl Fn(), limit: Duration) -> bool {
     let start = Instant::now();
     loop {
@@ -86,7 +69,6 @@ fn finish(status: impl Fn() -> Option<i32>, cancel: impl Fn(), limit: Duration) 
     }
 }
 
-/// GET sederhana: (kode status, isi) atau None bila gagal/terlalu lama.
 fn http_get(url: &str) -> Option<(i32, String)> {
     let client = HttpClient::new().ok()?;
     if let Ok(h) = client.DefaultRequestHeaders() {
@@ -107,8 +89,6 @@ fn http_get(url: &str) -> Option<(i32, String)> {
     Some((status, read.GetResults().ok()?.to_string()))
 }
 
-/// Tanya LRCLIB: pencocokan tepat dulu (bila album dan durasi diketahui), lalu pencarian.
-/// `Ok(None)` = LRCLIB menjawab tidak ada; `Err` = jaringan gagal (jangan dicatat di cache).
 fn ask_lrclib(t: &Track) -> Result<Option<lrclib::Found>, ()> {
     if let Some(url) = lrclib::get_url(t) {
         match http_get(&url) {
@@ -170,7 +150,6 @@ fn lookup(dir: &Path, req: &Request) -> Answer {
     }
 }
 
-/// Mulai pekerja lirik. `dir` = folder lirik ABRA (dibuat bila belum ada); `notify` dipanggil tiap ada jawaban.
 pub fn spawn(dir: PathBuf, notify: impl Fn() + Send + 'static) -> Lyrics {
     let (req_tx, req_rx) = channel::<Request>();
     let (ans_tx, ans_rx) = channel::<Answer>();
@@ -178,7 +157,6 @@ pub fn spawn(dir: PathBuf, notify: impl Fn() + Send + 'static) -> Lyrics {
     std::thread::spawn(move || {
         let com = unsafe { windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED).is_ok() };
         while let Ok(mut req) = req_rx.recv() {
-            // lagu berganti cepat: hanya permintaan terakhir yang dikerjakan
             while let Ok(newer) = req_rx.try_recv() {
                 req = newer;
             }

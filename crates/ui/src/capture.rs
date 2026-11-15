@@ -1,7 +1,3 @@
-//! Tangkapan jendela hidup lewat Windows.Graphics.Capture: tiap jendela menjadi `CompositionDrawingSurface` yang
-//! diperbarui terus (video, animasi, kursor teks) dan bisa dipakai sebagai kuas sprite (miring, bersudut bulat, dsb.).
-//! Frame diambil dengan polling dari thread UI (tanpa thread tambahan); salinan frame ke permukaan berjalan di GPU.
-
 use crate::gfx::Gfx;
 use windows::Graphics::Capture::{Direct3D11CaptureFramePool, GraphicsCaptureItem, GraphicsCaptureSession};
 use windows::Graphics::DirectX::Direct3D11::IDirect3DDevice;
@@ -24,7 +20,6 @@ pub struct Capture {
     device: IDirect3DDevice,
     size: SizeInt32,
     pub surface: CompositionDrawingSurface,
-    /// Sudah menerima minimal satu frame (permukaan berisi gambar).
     pub has_frame: bool,
 }
 
@@ -50,7 +45,6 @@ impl Capture {
         (self.size.Width, self.size.Height)
     }
 
-    /// Ambil frame terbaru (bila ada) dan salin ke `surface`. Mengembalikan true bila ada frame baru.
     pub fn poll(&mut self, gfx: &Gfx) -> bool {
         let mut last = None;
         while let Ok(f) = self.pool.TryGetNextFrame() {
@@ -62,7 +56,6 @@ impl Capture {
             return false;
         }
         if cs.Width != self.size.Width || cs.Height != self.size.Height {
-            // ukuran jendela berubah: sesuaikan kolam frame untuk frame berikutnya
             let _ = self.pool.Recreate(&self.device, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, cs);
             self.size = cs;
         }

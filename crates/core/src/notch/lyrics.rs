@@ -1,13 +1,5 @@
-//! Lirik: pengurai format LRC (baris bercap waktu `[mm:ss.xx]`) dan lirik biasa tanpa waktu, plus pencarian baris yang
-//! sedang dinyanyikan pada posisi lagu tertentu.
-//!
-//! Yang didukung: beberapa cap waktu per baris (`[00:12.30][01:40.00]teks`), pecahan 1–3 digit, bentuk `mm:ss:xx`,
-//! tag `[offset:±ms]`, tag metadata (`[ar:…]`, `[ti:…]`, dibuang), cap kata `<mm:ss.xx>` di dalam teks (dibuang),
-//! BOM, dan baris kosong bercap waktu (jeda instrumental, tampil kosong).
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Line {
-    /// Waktu mulai (ms dari awal lagu); 0 untuk lirik tanpa waktu.
     pub at_ms: i64,
     pub text: String,
 }
@@ -15,11 +7,9 @@ pub struct Line {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Lyrics {
     pub lines: Vec<Line>,
-    /// true bila setiap baris punya waktu (bisa diikuti posisi lagu).
     pub synced: bool,
 }
 
-/// Cap waktu `mm:ss`, `mm:ss.f`, `mm:ss.ff`, `mm:ss.fff`, atau `mm:ss:ff` → ms.
 fn stamp(tag: &str) -> Option<i64> {
     if tag.is_empty() || !tag.bytes().all(|b| b.is_ascii_digit() || b == b':' || b == b'.') {
         return None;
@@ -42,7 +32,6 @@ fn stamp(tag: &str) -> Option<i64> {
     Some(min * 60_000 + sec * 1000 + ms)
 }
 
-/// Buang cap waktu per kata `<mm:ss.xx>` dari teks.
 fn strip_word_stamps(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
@@ -99,14 +88,12 @@ pub fn parse(src: &str) -> Lyrics {
         }
     }
     if !timed.is_empty() {
-        // offset positif = lirik tampil lebih awal
         for l in &mut timed {
             l.at_ms = (l.at_ms - offset).max(0);
         }
         timed.sort_by_key(|l| l.at_ms);
         return Lyrics { lines: timed, synced: true };
     }
-    // lirik biasa: buang baris kosong di awal/akhir, rapatkan kosong berturut-turut
     let mut lines: Vec<Line> = Vec::new();
     for t in plain {
         if t.is_empty() && lines.last().is_none_or(|l| l.text.is_empty()) {
@@ -125,7 +112,6 @@ impl Lyrics {
         self.lines.iter().all(|l| l.text.is_empty())
     }
 
-    /// Indeks baris yang sedang berjalan pada `t_ms` (lirik tersinkron saja).
     pub fn index_at(&self, t_ms: i64) -> Option<usize> {
         if !self.synced {
             return None;
@@ -134,14 +120,12 @@ impl Lyrics {
         p.checked_sub(1)
     }
 
-    /// Teks baris yang sedang dinyanyikan; `None` sebelum baris pertama atau saat jeda instrumental.
     pub fn current(&self, t_ms: i64) -> Option<&str> {
         let i = self.index_at(t_ms)?;
         let t = self.lines[i].text.as_str();
         (!t.is_empty()).then_some(t)
     }
 
-    /// Kapan baris berikutnya dimulai (untuk menjadwalkan pembaruan tepat waktu, tanpa polling).
     pub fn next_change_ms(&self, t_ms: i64) -> Option<i64> {
         if !self.synced {
             return None;
@@ -150,7 +134,6 @@ impl Lyrics {
         self.lines.get(p).map(|l| l.at_ms)
     }
 
-    /// Kemajuan di dalam baris aktif (0..1), untuk efek isian karaoke. Baris terakhir dianggap 4 detik.
     pub fn progress(&self, t_ms: i64) -> f32 {
         let Some(i) = self.index_at(t_ms) else { return 0.0 };
         let start = self.lines[i].at_ms;
@@ -158,8 +141,6 @@ impl Lyrics {
         ((t_ms - start) as f32 / (end - start) as f32).clamp(0.0, 1.0)
     }
 
-    /// Baris di sekitar baris aktif untuk kartu lirik: (indeks baris, apakah aktif). Sebelum baris pertama, mulai dari
-    /// baris pertama tanpa yang aktif.
     pub fn window(&self, t_ms: i64, before: usize, after: usize) -> Vec<(usize, bool)> {
         let n = self.lines.len();
         if n == 0 {

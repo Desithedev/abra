@@ -1,7 +1,3 @@
-//! Hot Corners: kursor menyentuh sudut layar menjalankan aksi (Mission Control, Launchpad, Desktop, Stage Manager,
-//! Pusat Notifikasi, Kunci Layar). Strip 2 px di tiap sudut yang aksinya aktif (pola `strip.rs`, tanpa polling,
-//! tanpa hook global); aksi berjalan setelah kursor bertahan 250 ms dan bukan sedang menyeret (tombol mouse ditekan).
-
 use crate::prefs;
 use crate::strip::Strip;
 use nacre_core::settings::HotAction;
@@ -13,9 +9,9 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-const ENTER_BASE: u32 = WM_APP + 100; // + 2*i
-const LEAVE_BASE: u32 = WM_APP + 101; // + 2*i
-const T_DWELL: usize = 10; // + i
+const ENTER_BASE: u32 = WM_APP + 100;
+const LEAVE_BASE: u32 = WM_APP + 101;
+const T_DWELL: usize = 10;
 
 struct Corners {
     hwnd: HWND,
@@ -39,12 +35,10 @@ pub fn init() -> windows_core::Result<()> {
     Ok(())
 }
 
-/// Angkat strip sudut ke atas (menu bar/notch yang dibuat belakangan akan menutupinya).
 pub fn raise() {
     apply();
 }
 
-/// Sinkronkan strip dengan pengaturan: hanya sudut yang aksinya bukan "Tidak ada" yang punya strip.
 fn apply() {
     let hot = prefs::get().hot;
     let (sw, sh) = sys::screen_size();
@@ -100,7 +94,6 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         WM_TIMER if (T_DWELL..T_DWELL + 4).contains(&wp.0) => {
             let i = wp.0 - T_DWELL;
             let _ = KillTimer(Some(hwnd), wp.0);
-            // sedang menyeret/menekan tombol mouse: abaikan (mis. menyeret jendela ke tepi)
             let down = GetAsyncKeyState(VK_LBUTTON.0 as i32) < 0 || GetAsyncKeyState(VK_RBUTTON.0 as i32) < 0;
             if !down {
                 run(prefs::get().hot[i]);

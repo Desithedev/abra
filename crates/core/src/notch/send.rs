@@ -1,7 +1,3 @@
-//! "Kirim ke HP" (murni, dites): token sesi, alamat yang dipindai HP, halaman unduh HTML, dan label kemajuan.
-//! Servernya (platform) hanya melayani berkas yang ditaruh, di bawah `/<token>/`, selama sesi hidup.
-
-/// Token hex dari byte acak (20 karakter = 80 bit; cukup untuk sesi LAN 15 menit, dan QR tetap kecil).
 pub fn token(random: &[u8; 10]) -> String {
     random.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -10,7 +6,6 @@ pub fn url(ip: [u8; 4], port: u16, token: &str) -> String {
     format!("http://{}.{}.{}.{}:{port}/{token}/", ip[0], ip[1], ip[2], ip[3])
 }
 
-/// Alamat IPv4 privat (10/8, 172.16/12, 192.168/16): hanya jaringan lokal yang dilayani.
 pub fn is_private(ip: [u8; 4]) -> bool {
     ip[0] == 10 || (ip[0] == 172 && (16..=31).contains(&ip[1])) || (ip[0] == 192 && ip[1] == 168)
 }
@@ -30,7 +25,6 @@ pub fn escape_html(s: &str) -> String {
     o
 }
 
-/// Persen-encode UTF-8 untuk `filename*=` (RFC 5987).
 pub fn pct(s: &str) -> String {
     s.bytes()
         .map(|b| match b {
@@ -40,7 +34,6 @@ pub fn pct(s: &str) -> String {
         .collect()
 }
 
-/// Nama cadangan ASCII untuk `filename=` (karakter lain diganti "_").
 pub fn ascii_name(s: &str) -> String {
     let n: String = s.chars().map(|c| if c.is_ascii_graphic() && c != '"' && c != '\\' || c == ' ' { c } else { '_' }).collect();
     if n.trim().is_empty() {
@@ -50,7 +43,6 @@ pub fn ascii_name(s: &str) -> String {
     }
 }
 
-/// Ukuran ramah baca: "820 KB", "12,4 MB" / "12.4 MB".
 pub fn human_size(b: u64, en: bool) -> String {
     let f = b as f64;
     let (v, unit) = if f < 1000.0 * 1000.0 { (f / 1000.0, "KB") } else if f < 1e9 { (f / 1e6, "MB") } else { (f / 1e9, "GB") };
@@ -59,7 +51,6 @@ pub fn human_size(b: u64, en: bool) -> String {
     format!("{s} {unit}")
 }
 
-/// Halaman unduh untuk HP: gelap, satu tombol per berkas. Tanpa skrip dan tanpa sumber luar.
 pub fn page(token: &str, files: &[(String, u64)], en: bool) -> String {
     let (title, hint, dl) = if en {
         ("Sent from ABRA", "Tap a file to save it to this phone.", "Download")
@@ -87,7 +78,6 @@ main{{max-width:560px;margin:0 auto;padding:28px 18px}}h1{{font-size:22px;margin
     )
 }
 
-/// Kemajuan sesi: (byte unik terkirim, total) → pecahan 0..1.
 pub fn fraction(sent: u64, total: u64) -> f32 {
     if total == 0 {
         0.0

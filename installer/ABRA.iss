@@ -1,8 +1,5 @@
-; ABRA installer (Inno Setup 6). Per-user install, no administrator rights required.
-; Build:  powershell -File installer\build-installer.ps1   (needs Inno Setup 6: https://jrsoftware.org/isinfo.php)
-
 #ifndef AppVersion
-  #define AppVersion "0.3.0"
+  #define AppVersion "0.4.0"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\target\release"
@@ -43,7 +40,6 @@ Name: "startmenu"; Description: "Create a Start menu shortcut"
 [Files]
 Source: "{#SourceDir}\abra.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\abra-guard.exe"; DestDir: "{app}"; Flags: ignoreversion
-; Inter (SIL OFL) is loaded from the "fonts" folder next to abra.exe when SF Pro is not installed.
 Source: "..\assets\fonts\*"; DestDir: "{app}\fonts"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE.md"; DestDir: "{app}"; Flags: ignoreversion
@@ -53,15 +49,12 @@ Source: "..\docs\PANDUAN.md"; DestDir: "{app}"; Flags: ignoreversion
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: startmenu
 
 [Registry]
-; Same value the app writes itself (Settings > General > Launch at Windows login).
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "ABRA"; ValueData: """{app}\{#AppExe}"""; Flags: uninsdeletevalue; Tasks: autostart
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "Launch ABRA now"; Flags: nowait postinstall skipifsilent
 
 [Code]
-// Stop a running ABRA the safe way: kill abra.exe first, give abra-guard.exe a moment to restore the taskbar
-// (and any windows Stage Manager had parked), then stop the guard.
 procedure StopAbra();
 var
   rc: Integer;

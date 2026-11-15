@@ -1,7 +1,3 @@
-# Taskbar-safety regression test.
-# WARNING: it HIDES YOUR REAL TASKBAR for a few seconds per scenario and force-stops any running abra.exe / abra-guard.exe,
-# so quit ABRA first (or pass -KillRunning). It uses a temporary NACRE_CONFIG_DIR, so your settings are untouched.
-# (Verifikasi keselamatan taskbar: menyembunyikan taskbar asli sementara.)
 param([string]$Release = "$PSScriptRoot\..\..\target\release", [switch]$KillRunning)
 
 if ((Get-Process abra, abra-guard -ErrorAction SilentlyContinue) -and -not $KillRunning) {
@@ -46,7 +42,6 @@ Cleanup
 Write-Host "Baseline taskbar: $([Tb]::State())"
 if (-not [Tb]::Restored()) { Write-Host "PERINGATAN: taskbar tidak dalam keadaan normal sebelum uji: $([Tb]::State())" }
 
-# T1: keluar normal memulihkan taskbar
 $d = Fresh "t1"
 $p = Start-Process $exe -ArgumentList "--hide-taskbar", "--exit-after", "6" -PassThru
 $hid = Wait-Until { -not [Tb]::Restored() } 4
@@ -63,7 +58,6 @@ Start-Sleep 1
 Add-Result "T1e guard berhenti" (-not (Get-Process abra-guard -ErrorAction SilentlyContinue)) ""
 Cleanup
 
-# T2: proses utama dibunuh paksa -> guard memulihkan
 $d = Fresh "t2"
 $p = Start-Process $exe -ArgumentList "--hide-taskbar" -PassThru
 $hid = Wait-Until { -not [Tb]::Restored() } 4
@@ -75,7 +69,6 @@ $gone = Wait-Until { -not (Test-Path "$d\taskbar_hidden.flag") } 3
 Add-Result "T2c marker dihapus oleh guard" $gone ""
 Cleanup
 
-# T3: kill utama DAN guard -> start berikutnya memulihkan
 $d = Fresh "t3"
 $p = Start-Process $exe -ArgumentList "--hide-taskbar" -PassThru
 $hid = Wait-Until { -not [Tb]::Restored() } 4
@@ -90,7 +83,6 @@ Add-Result "T3b start berikutnya memulihkan" $back ([Tb]::State())
 $p2.WaitForExit()
 Cleanup
 
-# T4: marker rusak -> tetap menampilkan taskbar (tebakan aman)
 $d = Fresh "t4"
 $p = Start-Process $exe -ArgumentList "--hide-taskbar" -PassThru
 $hid = Wait-Until { -not [Tb]::Restored() } 4
@@ -103,7 +95,6 @@ Add-Result "T4 marker rusak tetap memulihkan" ($hid -and $back) ([Tb]::State())
 $p2.WaitForExit()
 Cleanup
 
-# T5: instance kedua tidak membuat proses baru
 $d = Fresh "t5"
 $p = Start-Process $exe -ArgumentList "--exit-after", "8" -PassThru
 Start-Sleep 3
@@ -121,4 +112,3 @@ $fail = @($results | Where-Object { -not $_.Pass }).Count
 Write-Host "Ringkasan: $($results.Count - $fail)/$($results.Count) lulus"
 Write-Host "State akhir taskbar: $([Tb]::State())"
 exit $fail
-

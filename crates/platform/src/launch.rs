@@ -1,5 +1,3 @@
-//! Membuka aplikasi dan menu Start.
-
 use windows::core::{w, HSTRING};
 use windows::Win32::Foundation::{LPARAM, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -11,15 +9,27 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_SYSCOMMAND,
 };
 
-/// Jalankan `path` lewat shell (exe, shortcut, URI). Bagian setelah `?` (kunci internal host UWP) dibuang.
-pub fn open(path: &str) {
-    let path = path.split('?').next().unwrap_or(path);
-    unsafe {
-        ShellExecuteW(None, w!("open"), &HSTRING::from(path), None, None, SW_SHOWNORMAL);
+fn off_thread(job: impl FnOnce() + Send + 'static) {
+    let spawned = std::thread::Builder::new().name("abra-launch".into()).spawn(move || {
+        use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE};
+        let com = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) }.is_ok();
+        job();
+        if com {
+            unsafe { CoUninitialize() };
+        }
+    });
+    if let Err(e) = spawned {
+        crate::log::line("launch", &format!("thread gagal: {e}"));
     }
 }
 
-/// Menu Start dihosting `StartMenuExperienceHost` (lama) atau `SearchHost` (Windows 11 24H2+).
+pub fn open(path: &str) {
+    let path = path.split('?').next().unwrap_or(path).to_string();
+    off_thread(move || unsafe {
+        ShellExecuteW(None, w!("open"), &HSTRING::from(path.as_str()), None, None, SW_SHOWNORMAL);
+    });
+}
+
 pub fn is_start_open() -> bool {
     let mut pid = 0u32;
     unsafe {
@@ -45,9 +55,6 @@ fn tap(vk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY) {
     }
 }
 
-/// Buka/tutup Start. Dibuka dengan meminta Explorer langsung (andal walau ada app elevated di depan);
-/// ditutup dengan Escape. `was_open_at_press`: Start menutup dirinya saat tombol *ditekan*, jadi saat klik
-/// tiba ia sudah tertutup; dalam kasus itu jangan dibuka lagi.
 pub fn toggle_start(was_open_at_press: bool) {
     if is_start_open() {
         tap(VK_ESCAPE);
@@ -60,16 +67,14 @@ pub fn toggle_start(was_open_at_press: bool) {
     }
 }
 
-/// Jalankan `file` dengan `params` tanpa jendela konsol (mis. `shutdown.exe /r /t 0`).
 pub fn run(file: &str, params: &str) {
     let file = system_tool(file);
-    unsafe {
-        ShellExecuteW(None, w!("open"), &HSTRING::from(file.as_str()), &HSTRING::from(params), None, windows::Win32::UI::WindowsAndMessaging::SW_HIDE);
-    }
+    let params = params.to_string();
+    off_thread(move || unsafe {
+        ShellExecuteW(None, w!("open"), &HSTRING::from(file.as_str()), &HSTRING::from(params.as_str()), None, windows::Win32::UI::WindowsAndMessaging::SW_HIDE);
+    });
 }
 
-/// Nama biner polos (mis. `rundll32.exe`) dijadikan jalur absolut di System32 agar tidak bisa dibajak lewat PATH
-/// atau folder kerja. Bila berkasnya tidak ada di sana, nama aslinya dipakai.
 fn system_tool(file: &str) -> String {
     if file.contains(['\\', '/', ':']) {
         return file.to_string();

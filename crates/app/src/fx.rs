@@ -1,14 +1,6 @@
-//! Animasi jendela ala macOS untuk jendela app lain: minimize (menyusut ke ikon dock), tutup (menyusut + pudar),
-//! dan buka dari dock (membesar dari ikon). Cara kerja:
-//! - Jendela yang mendapat fokus ditandai "transisi DWM dimatikan" (agar animasi bawaan Windows tidak bentrok) dan
-//!   isinya ditangkap berkala (hanya jendela di depan, setengah resolusi) sebagai permukaan Composition.
-//! - Saat jendela itu diminimalkan/dihancurkan, tangkapan terakhir dianimasikan di jendela overlay transparan
-//!   (menembus klik) yang hanya tampil selama animasi.
-//! - Restore dari dock: overlay membesar dari ikon, jendela asli dipulihkan tepat sebelum selesai.
-//! Semua transisi DWM yang kita matikan dinyalakan lagi saat keluar atau saat animasi dimatikan.
-
 use crate::prefs;
-use nacre_platform::wins::{focus, snapshot, tracker};
+use nacre_platform::wins::park::{self, Parked};
+use nacre_platform::wins::{enumerate, focus, snapshot, tracker};
 use nacre_platform::{log, sys};
 use nacre_ui::gfx::Gfx;
 use nacre_ui::host::{attach, Host, Surface};
@@ -34,8 +26,43 @@ const T_HIDE: usize = 3;
 const T_RESTORE: usize = 4;
 
 static FX_HWND: AtomicIsize = AtomicIsize::new(0);
-/// Jendela yang transisi DWM-nya kita matikan; dipulihkan saat keluar.
 static FLAGGED: Mutex<Vec<isize>> = Mutex::new(Vec::new());
+static OPEN_PARKED: Mutex<Option<Parked>> = Mutex::new(None);
+const T_OPEN_POLL: usize = 7;
+const T_OPEN_END: usize = 8;
+const OPEN_WAIT_MS: u128 = 320;
+
+struct Opening {
+    hwnd: isize,
+    target: (i32, i32, i32, i32),
+    since: std::time::Instant,
+    playing: bool,
+}
+
+fn open_file() -> std::path::PathBuf {
+    crate::paths::config_dir().join("opening.txt")
+}
+
+fn hold_parked(p: Option<Parked>) {
+    let mut g = OPEN_PARKED.lock().unwrap_or_else(|e| e.into_inner());
+    *g = p;
+    match p {
+        Some(p) => park::save(&open_file(), &[p]),
+        None => {
+            let _ = std::fs::remove_file(open_file());
+        }
+    }
+}
+
+fn release_parked() {
+    let p = OPEN_PARKED.lock().unwrap_or_else(|e| e.into_inner()).take();
+    if let Some(p) = p {
+        if park::is_parked(p.hwnd) {
+            park::unpark(&p);
+        }
+    }
+    let _ = std::fs::remove_file(open_file());
+}
 
 #[derive(Clone)]
 struct Snap {
@@ -51,20 +78,20 @@ struct Fx {
     surface: Surface,
     screen: (i32, i32),
     snap: Option<Snap>,
-    /// Tangkapan jendela yang sedang diminimalkan (untuk animasi restore dari dock); maksimal 4.
     parked: Vec<Snap>,
     current: isize,
     sprite: Option<SpriteVisual>,
-    /// Akar irisan genie (minimize/restore).
     genie: Option<ContainerVisual>,
     pending_restore: Option<(isize, isize)>,
     seen: HashSet<isize>,
+    opened: HashSet<isize>,
+    opening: Option<Opening>,
     shadow: Option<ShadowWin>,
     shadow_target: isize,
     shadow_key: (i32, i32, i32),
+    shadow_rect: (i32, i32, i32, i32),
 }
 
-/// Jendela bayangan: layar transparan menembus klik yang diletakkan tepat di bawah jendela aktif.
 struct ShadowWin {
     hwnd: HWND,
     surface: Surface,
@@ -72,6 +99,7 @@ struct ShadowWin {
 }
 
 const T_SHADOW: usize = 5;
+const T_SHADOW_WATCH: usize = 6;
 const SHADOW_MARGIN: i32 = 44;
 
 thread_local! {
@@ -86,13 +114,10 @@ fn enabled() -> bool {
     prefs::get().anim
 }
 
-/// Efek minimize Genie (bawaan) atau Skala.
 fn genie_on() -> bool {
     prefs::get().min_effect == 0
 }
 
-/// Jeda sebelum animasi mulai: overlay baru ditampilkan perlu satu-dua frame sebelum terlihat. Tanpa jeda ini awal
-/// animasi terlewat sehingga gerakannya terasa patah. Selama jeda, tangkapan diam di posisi awalnya.
 const START_DELAY: u32 = 40;
 
 fn noop() {}
@@ -106,8 +131,11 @@ fn hook(event: u32, hwnd: isize) {
     }
 }
 
-/// Siapkan overlay dan pasang pendengar peristiwa jendela.
 pub fn init(host: &Host) -> windows_core::Result<()> {
+    let n = park::restore_file(&open_file());
+    if n > 0 {
+        log::line("fx", &format!("{n} jendela yang sedang dibuka sesi lalu dikembalikan"));
+    }
     unsafe {
         let hi: HINSTANCE = GetModuleHandleW(None)?.into();
         let class = w!("AbraFx");
@@ -123,7 +151,7 @@ pub fn init(host: &Host) -> windows_core::Result<()> {
         )?;
             let _ = SetLayeredWindowAttributes(hwnd, windows::Win32::Foundation::COLORREF(0), 255, LWA_ALPHA);
         let surface = attach(&host.compositor, hwnd, (screen.0 as f32, screen.1 as f32))?;
-        let gfx = Gfx::new(&host.compositor)?;
+        let gfx = Gfx::shared(&host.compositor)?;
         FX_HWND.store(hwnd.0 as isize, Ordering::Relaxed);
         FX.with(|c| {
             *c.borrow_mut() = Some(Fx {
@@ -139,17 +167,19 @@ pub fn init(host: &Host) -> windows_core::Result<()> {
                 genie: None,
                 pending_restore: None,
                 seen: HashSet::new(),
+                opened: HashSet::new(),
+                opening: None,
                 shadow: None,
                 shadow_target: 0,
                 shadow_key: (0, 0, 0),
+                shadow_rect: (0, 0, 0, 0),
             })
         });
         prefs::listen(hwnd);
-        tracker::install(noop); // pastikan hook WinEvent terpasang walau tanpa dock
+        tracker::install(noop);
         tracker::install_fx(hook);
         if enabled() {
             SetTimer(Some(hwnd), T_REFRESH, 4000, None);
-            // Jendela yang sudah di depan saat ABRA dimulai.
             let fg = focus::foreground();
             if eligible(fg) {
                 flag(fg);
@@ -168,16 +198,14 @@ pub fn init(host: &Host) -> windows_core::Result<()> {
     Ok(())
 }
 
-/// Nyalakan kembali transisi DWM semua jendela yang kita matikan (jalur keluar dan saat animasi dimatikan).
 pub fn restore_all() {
+    release_parked();
     let list: Vec<isize> = std::mem::take(&mut *FLAGGED.lock().unwrap_or_else(|e| e.into_inner()));
     for h in list {
         snapshot::set_transitions_disabled(h, false);
     }
 }
 
-/// Bitmap bayangan lembut (setengah-resolusi, alfa ter-premultiply hitam) untuk jendela w×h di tengah kanvas
-/// berbingkai `m` px; bayangan bergeser turun `dy` px. Gelap di dekat tepi, memudar halus ke luar.
 fn shadow_bitmap(w: i32, h: i32, m: i32, dy: f32, radius: f32, k: i32) -> (u32, u32, Vec<u8>) {
     let (fw, fh) = (w + 2 * m, h + 2 * m);
     let (bw, bh) = (((fw / k).max(2)) as u32, ((fh / k).max(2)) as u32);
@@ -191,11 +219,11 @@ fn shadow_bitmap(w: i32, h: i32, m: i32, dy: f32, radius: f32, k: i32) -> (u32, 
         for x in 0..bw {
             let (px, py) = ((x as f32 + 0.5) * k as f32, (y as f32 + 0.5) * k as f32);
             let (qx, qy) = ((px - cx).abs() - (hx - r), (py - cy).abs() - (hy - r));
-            let d = (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt() + qx.max(qy).min(0.0) - r; // > 0 di luar
+            let d = (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt() + qx.max(qy).min(0.0) - r;
             let t = (d / blur).clamp(0.0, 1.0);
             let a = peak * (1.0 - t) * (1.0 - t) * (1.0 - t);
             let i = ((y * bw + x) * 4) as usize;
-            out[i + 3] = (a * 255.0).round() as u8; // hitam ter-premultiply: RGB = 0
+            out[i + 3] = (a * 255.0).round() as u8;
         }
     }
     (bw, bh, out)
@@ -214,7 +242,25 @@ fn flag(h: isize) {
     }
 }
 
-/// Jendela app biasa (berjudul, bukan tool window/popup) milik proses lain.
+fn openable(h: isize, screen: (i32, i32)) -> bool {
+    if !eligible(h) || enumerate::cloaked(h) || park::is_parked(h) {
+        return false;
+    }
+    unsafe {
+        let hw = HWND(h as *mut _);
+        if GetAncestor(hw, GA_ROOT) != hw || GetWindow(hw, GW_OWNER).is_ok_and(|o| !o.0.is_null()) {
+            return false;
+        }
+        if IsZoomed(hw).as_bool() || IsIconic(hw).as_bool() {
+            return false;
+        }
+    }
+    match snapshot::frame_rect(h) {
+        Some((x, y, w, hh)) => w >= 120 && hh >= 80 && !(w >= screen.0 && hh >= screen.1) && x > -2000 && y > -2000,
+        None => false,
+    }
+}
+
 fn eligible(h: isize) -> bool {
     unsafe {
         let hw = HWND(h as *mut _);
@@ -232,7 +278,6 @@ fn eligible(h: isize) -> bool {
     }
 }
 
-/// Dipanggil dock: apakah restore beranimasi dimulai (jendela asli dipulihkan di tengah/akhir animasi).
 pub fn restore(target: isize, icon: (i32, i32, i32, i32), dock: isize) -> bool {
     if !enabled() {
         return false;
@@ -260,16 +305,17 @@ enum Kind {
     Minimize,
     Restore,
     Close,
+    Open,
 }
 
 impl Kind {
-    /// Durasi animasi. Genie sedikit lebih panjang agar alirannya terbaca (seperti macOS), Skala lebih singkat.
     fn ms(self) -> u32 {
         let g = genie_on();
         match self {
             Kind::Minimize => if g { 540 } else { 380 },
             Kind::Restore => if g { 470 } else { 340 },
-            Kind::Close => 190,
+            Kind::Close => 270,
+            Kind::Open => 300,
         }
     }
 }
@@ -306,10 +352,8 @@ impl Fx {
         obj.StartAnimation(&HSTRING::from(prop), &a)
     }
 
-    /// Mainkan animasi `kind` dari/ke persegi `from`→`to` (px layar) memakai tangkapan `surface`.
-    /// Untuk Minimize/Close: `from` = jendela, `to` = ikon. Untuk Restore: `from` = ikon, `to` = jendela.
     fn play(&mut self, surface: CompositionDrawingSurface, a: (i32, i32, i32, i32), b: (i32, i32, i32, i32), kind: Kind) {
-        if kind != Kind::Close && genie_on() {
+        if matches!(kind, Kind::Minimize | Kind::Restore) && genie_on() {
             let (win, icon) = if kind == Kind::Restore { (b, a) } else { (a, b) };
             match self.play_genie(surface, win, icon, kind == Kind::Restore) {
                 Ok(()) => {
@@ -325,7 +369,6 @@ impl Fx {
             return;
         }
         let mut go = || -> windows_core::Result<()> {
-            // Pembagian tugas: `win` adalah persegi jendela, `icon` persegi ikon.
             let (win, icon) = match kind {
                 Kind::Restore => (b, a),
                 _ => (a, b),
@@ -344,7 +387,6 @@ impl Fx {
             self.surface.root.Children()?.InsertAtTop(&sprite)?;
             let obj: CompositionObject = sprite.cast()?;
             let at_win = Vector3 { X: wx, Y: wy, Z: 0.0 };
-            // Offset agar pusat sprite berada di pusat ikon.
             let at_icon = Vector3 { X: ix + iw / 2.0 - ww / 2.0, Y: iy + ih / 2.0 - wh / 2.0, Z: 0.0 };
             let (sx, sy) = (iw / ww, ih / wh);
             let one = Vector3 { X: 1.0, Y: 1.0, Z: 1.0 };
@@ -353,7 +395,6 @@ impl Fx {
                 Kind::Minimize => {
                     sprite.SetOffset(at_win)?;
                     sprite.SetScale(one)?;
-                    // Corong ala genie: tinggi turun duluan, lebar menyempit belakangan; isi bergerak ke ikon.
                     self.vec3(&obj, "Offset", at_win, &[(1.0, at_icon, (0.45, 0.0), (0.2, 1.0))], ms)?;
                     self.vec3(
                         &obj,
@@ -387,12 +428,20 @@ impl Fx {
                 Kind::Close => {
                     sprite.SetOffset(at_win)?;
                     sprite.SetScale(one)?;
-                    self.vec3(&obj, "Scale", one, &[(1.0, Vector3 { X: 0.9, Y: 0.9, Z: 1.0 }, (0.4, 0.0), (0.6, 1.0))], ms)?;
-                    self.scalar(&obj, "Opacity", &[(0.0, 1.0), (1.0, 0.0)], ms)?;
+                    self.vec3(&obj, "Scale", one, &[(1.0, Vector3 { X: 0.06, Y: 0.06, Z: 1.0 }, (0.33, 0.55), (0.45, 1.0))], ms)?;
+                    self.scalar(&obj, "Opacity", &[(0.0, 1.0), (0.55, 0.92), (1.0, 0.0)], ms)?;
+                }
+                Kind::Open => {
+                    let from = Vector3 { X: 0.86, Y: 0.86, Z: 1.0 };
+                    sprite.SetOffset(at_win)?;
+                    sprite.SetScale(from)?;
+                    sprite.SetOpacity(0.0)?;
+                    self.vec3(&obj, "Scale", from, &[(1.0, one, (0.16, 1.0), (0.3, 1.0))], ms)?;
+                    self.scalar(&obj, "Opacity", &[(0.0, 0.0), (0.45, 1.0), (1.0, 1.0)], ms)?;
                 }
             }
             self.sprite = Some(sprite);
-            log::line("fx", &format!("animasi {} ({ms} ms) dari {a:?} ke {b:?}", match kind { Kind::Minimize => "minimize", Kind::Restore => "restore", Kind::Close => "tutup" }));
+            log::line("fx", &format!("animasi {} ({ms} ms) dari {a:?} ke {b:?}", match kind { Kind::Minimize => "minimize", Kind::Restore => "restore", Kind::Close => "tutup", Kind::Open => "buka" }));
             unsafe {
                 let _ = SetWindowPos(self.hwnd, Some(HWND_TOPMOST), 0, 0, self.screen.0, self.screen.1, SWP_NOACTIVATE);
                 let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
@@ -405,9 +454,6 @@ impl Fx {
         }
     }
 
-    /// Genie: jendela dipecah jadi irisan horizontal; tiap irisan menempuh jalur corong ke (atau dari) ikon. Geometri
-    /// dari `nacre_core::genie` (diuji); di sini hanya diubah menjadi animasi compositor dengan banyak titik kunci
-    /// supaya gerakannya mulus di 60 fps, dan dimulai setelah jeda singkat agar frame awal tidak terlewat.
     fn play_genie(&mut self, surface: CompositionDrawingSurface, win: (i32, i32, i32, i32), icon: (i32, i32, i32, i32), reverse: bool) -> windows_core::Result<()> {
         use nacre_core::genie::{self, Rect as GRect};
         if let Some(old) = self.genie.take() {
@@ -421,7 +467,6 @@ impl Fx {
         let n = ((w.h / 5.0) as usize).clamp(48, 120);
         let sh = w.h / n as f32;
         let ms = if reverse { Kind::Restore.ms() } else { Kind::Minimize.ms() };
-        // ±1 titik kunci per 12 ms: interpolasi linear antar titik tidak lagi terasa patah
         let samples = ((ms / 12) as usize).clamp(24, 48);
         let root = self.comp.CreateContainerVisual()?;
         self.surface.root.Children()?.InsertAtTop(&root)?;
@@ -431,7 +476,6 @@ impl Fx {
             let s = self.comp.CreateSpriteVisual()?;
             let b = self.comp.CreateSurfaceBrushWithSurface(&surface)?;
             b.SetStretch(CompositionStretch::Fill)?;
-            // Tiap irisan menampilkan baris ke-i dari tangkapan penuh.
             b.SetTransformMatrix(Matrix3x2 { M11: 1.0, M12: 0.0, M21: 0.0, M22: n as f32, M31: 0.0, M32: -(i as f32) * sh })?;
             s.SetBrush(&b)?;
             s.SetSize(Vector2 { X: w.w, Y: sh })?;
@@ -458,7 +502,6 @@ impl Fx {
             obj.StartAnimation(&HSTRING::from("Offset"), &ao)?;
             obj.StartAnimation(&HSTRING::from("Scale"), &asc)?;
         }
-        // Pudar di ujung (minimize) atau muncul cepat (restore).
         let fade = self.comp.CreateScalarKeyFrameAnimation()?;
         if reverse {
             fade.InsertKeyFrame(0.0, 0.0)?;
@@ -478,13 +521,91 @@ impl Fx {
         Ok(())
     }
 
-    fn capture_current(&mut self) {
-        let h = self.current;
-        if h == 0 || !enabled() || !eligible(h) || focus::is_minimized(h) {
+    fn begin_open(&mut self, h: isize) {
+        if self.opened.contains(&h) || self.opening.as_ref().is_some_and(|o| o.hwnd == h) {
             return;
         }
-        // Setengah resolusi untuk jendela besar: cukup untuk ~300 ms animasi dan hemat memori.
-        let Some(shot) = snapshot::capture(h, 2) else { return };
+        if !openable(h, self.screen) {
+            return;
+        }
+        self.opened.insert(h);
+        if self.opened.len() > 600 {
+            self.opened.retain(|x| focus::is_alive(*x));
+        }
+        self.end_open();
+        let Some(target) = snapshot::frame_rect(h) else { return };
+        flag(h);
+        let Some(p) = park::park(h) else { return };
+        if !park::is_parked(h) {
+            park::unpark(&p);
+            return;
+        }
+        hold_parked(Some(p));
+        self.opening = Some(Opening { hwnd: h, target, since: std::time::Instant::now(), playing: false });
+        unsafe {
+            SetTimer(Some(self.hwnd), T_OPEN_POLL, 16, None);
+        }
+    }
+
+    fn poll_open(&mut self) {
+        let Some((h, target, waited, playing)) = self.opening.as_ref().map(|o| (o.hwnd, o.target, o.since.elapsed().as_millis(), o.playing)) else {
+            unsafe {
+                let _ = KillTimer(Some(self.hwnd), T_OPEN_POLL);
+            }
+            return;
+        };
+        if playing {
+            return;
+        }
+        if !focus::is_alive(h) || !park::is_parked(h) {
+            self.opening = None;
+            hold_parked(None);
+            unsafe {
+                let _ = KillTimer(Some(self.hwnd), T_OPEN_POLL);
+            }
+            return;
+        }
+        let shot = snapshot::capture(h, 1).filter(|s| !crate::stage::blank(&s.bmp));
+        match shot {
+            Some(shot) => {
+                unsafe {
+                    let _ = KillTimer(Some(self.hwnd), T_OPEN_POLL);
+                }
+                match self.gfx.surface_from_bgra(shot.bmp.w, shot.bmp.h, &shot.bmp.bgra) {
+                    Ok(surface) => {
+                        if let Some(o) = self.opening.as_mut() {
+                            o.playing = true;
+                        }
+                        self.play(surface.clone(), target, target, Kind::Open);
+                        self.snap = Some(Snap { hwnd: h, rect: target, surface });
+                        unsafe {
+                            SetTimer(Some(self.hwnd), T_OPEN_END, START_DELAY + Kind::Open.ms() - 16, None);
+                        }
+                    }
+                    Err(_) => self.end_open(),
+                }
+            }
+            None if waited > OPEN_WAIT_MS => self.end_open(),
+            None => {}
+        }
+    }
+
+    fn end_open(&mut self) {
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), T_OPEN_POLL);
+            let _ = KillTimer(Some(self.hwnd), T_OPEN_END);
+        }
+        if self.opening.take().is_some() {
+            release_parked();
+        }
+    }
+
+    fn capture_current(&mut self) {
+        let h = self.current;
+        if h == 0 || !enabled() || !eligible(h) || focus::is_minimized(h) || park::is_parked(h) {
+            return;
+        }
+        let Some(shot) = snapshot::capture(h, 1) else { return };
         if let Ok(surface) = self.gfx.surface_from_bgra(shot.bmp.w, shot.bmp.h, &shot.bmp.bgra) {
             log::line("fx", &format!("tangkap hwnd={h} {}x{} (px {}x{})", shot.rect.2, shot.rect.3, shot.bmp.w, shot.bmp.h));
             self.snap = Some(Snap { hwnd: h, rect: shot.rect, surface });
@@ -501,6 +622,7 @@ impl Fx {
             return;
         }
         match event {
+            tracker::EV_SHOW | tracker::EV_UNCLOAKED => self.begin_open(h),
             tracker::EV_FOREGROUND => {
                 if eligible(h) {
                     flag(h);
@@ -515,16 +637,16 @@ impl Fx {
                 SetTimer(Some(self.hwnd), T_CAPTURE, 350, None);
             },
             tracker::EV_MINIMIZE_START => {
-                // Hanya bila belum ada animasi restore yang berjalan untuk jendela ini.
                 if let Some(s) = &self.snap {
                     if s.hwnd == h && self.pending_restore.is_none() {
                         let (surface, rect) = (s.surface.clone(), s.rect);
+                        crate::dock::reveal_for(START_DELAY + Kind::Minimize.ms() + 450);
                         let icon = self.icon_rect(h);
                         let keep = s.clone();
                         self.play(surface, rect, icon, Kind::Minimize);
                         self.parked.retain(|p| p.hwnd != h);
                         self.parked.push(keep);
-                        if self.parked.len() > 4 {
+                        if self.parked.len() > 2 {
                             self.parked.remove(0);
                         }
                     }
@@ -532,6 +654,11 @@ impl Fx {
             }
             tracker::EV_DESTROY => {
                 self.parked.retain(|p| p.hwnd != h);
+                self.opened.remove(&h);
+                if self.opening.as_ref().is_some_and(|o| o.hwnd == h) {
+                    self.opening = None;
+                    hold_parked(None);
+                }
                 if let Some(s) = &self.snap {
                     if s.hwnd == h && !focus::is_alive(h) {
                         let (surface, rect) = (s.surface.clone(), s.rect);
@@ -547,14 +674,40 @@ impl Fx {
         }
     }
 
-    // ---------- sudut dan bayangan jendela ----------
-
     fn hide_shadow(&mut self) {
         self.shadow_target = 0;
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), T_SHADOW_WATCH);
+        }
         if let Some(s) = &self.shadow {
             unsafe {
                 let _ = ShowWindow(s.hwnd, SW_HIDE);
             }
+        }
+    }
+
+    fn watch_shadow(&mut self) {
+        let t = self.shadow_target;
+        if t == 0 {
+            self.hide_shadow();
+            return;
+        }
+        let fg = focus::foreground();
+        if fg != t {
+            if eligible(fg) {
+                self.update_shadow(fg, true);
+            } else {
+                self.hide_shadow();
+            }
+            return;
+        }
+        let gone = unsafe { IsIconic(HWND(t as *mut _)).as_bool() } || enumerate::cloaked(t);
+        if gone {
+            self.hide_shadow();
+            return;
+        }
+        if snapshot::frame_rect(t) != Some(self.shadow_rect) {
+            self.update_shadow(t, true);
         }
     }
 
@@ -606,7 +759,6 @@ impl Fx {
         Ok(())
     }
 
-    /// Letakkan bayangan di bawah `h`. `full` = buat ulang bitmap bila ukuran berubah; selain itu hanya memindahkan.
     fn update_shadow(&mut self, h: isize, full: bool) {
         let p = prefs::get();
         if !p.win_shadow || h == 0 || !eligible(h) {
@@ -645,7 +797,6 @@ impl Fx {
                 this.shadow_key = key;
             }
             unsafe {
-                // Tepat di bawah jendela target dalam urutan-Z.
                 let below = GetWindow(HWND(h as *mut _), GW_HWNDNEXT).unwrap_or(HWND_BOTTOM);
                 let _ = SetWindowPos(sh.hwnd, Some(below), x - m, y - m, fw, fh, SWP_NOACTIVATE | SWP_SHOWWINDOW);
             }
@@ -653,6 +804,10 @@ impl Fx {
         };
         if go(self).is_ok() {
             self.shadow_target = h;
+            self.shadow_rect = (x, y, w, ht);
+            unsafe {
+                SetTimer(Some(self.hwnd), T_SHADOW_WATCH, 250, None);
+            }
         }
     }
 
@@ -692,6 +847,7 @@ impl Fx {
                 }
             } else {
                 let _ = KillTimer(Some(self.hwnd), T_REFRESH);
+                self.end_open();
                 self.snap = None;
                 self.hide_overlay();
                 restore_all();
@@ -714,7 +870,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         WM_TIMER => {
             let id = wp.0;
             match id {
-                T_HIDE | T_CAPTURE | T_RESTORE | T_SHADOW => {
+                T_HIDE | T_CAPTURE | T_RESTORE | T_SHADOW | T_OPEN_END => {
                     let _ = KillTimer(Some(hwnd), id);
                 }
                 _ => {}
@@ -726,6 +882,9 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                         fx.update_shadow(t, true);
                     }
                 }
+                T_SHADOW_WATCH => fx.watch_shadow(),
+                T_OPEN_POLL => fx.poll_open(),
+                T_OPEN_END => fx.end_open(),
                 T_CAPTURE | T_REFRESH => fx.capture_current(),
                 T_HIDE => {
                     fx.hide_overlay();
@@ -745,11 +904,10 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
     }
 }
 
-
 unsafe extern "system" fn shadow_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     match msg {
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
-        WM_NCHITTEST => LRESULT(-1), // HTTRANSPARENT: klik menembus
+        WM_NCHITTEST => LRESULT(-1),
         _ => DefWindowProcW(hwnd, msg, wp, lp),
     }
 }

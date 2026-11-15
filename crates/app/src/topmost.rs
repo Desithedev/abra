@@ -1,7 +1,3 @@
-//! Menjaga dock, menu bar, notch, dan jendela ABRA lainnya tetap di atas semua jendela (termasuk app layar penuh).
-//! Jendela layar penuh/aktif bisa mengambil posisi teratas dalam grup TOPMOST, jadi setiap perubahan foreground
-//! kita tegaskan ulang `HWND_TOPMOST` bagi jendela ABRA yang terlihat (urutan relatifnya dipertahankan).
-
 use nacre_platform::wins::tracker;
 use std::sync::atomic::{AtomicIsize, Ordering};
 use windows::core::w;
@@ -29,7 +25,15 @@ fn hook(ev: u32, _hwnd: isize) {
     }
 }
 
-/// Apakah `hwnd` milik proses ABRA sendiri.
+pub fn request_raise() {
+    let h = CTL.load(Ordering::Relaxed);
+    if h != 0 {
+        unsafe {
+            let _ = PostMessageW(Some(HWND(h as *mut _)), WM_RAISE, WPARAM(0), LPARAM(0));
+        }
+    }
+}
+
 pub fn is_own_window(hwnd: isize) -> bool {
     let mut pid = 0u32;
     unsafe {
@@ -61,26 +65,36 @@ unsafe extern "system" fn collect(h: HWND, lp: LPARAM) -> BOOL {
     BOOL(1)
 }
 
-/// Tegaskan TOPMOST bagi semua jendela ABRA yang terlihat, dari paling bawah ke paling atas agar urutan relatifnya sama.
+const BASE_LAYERS: [&str; 5] = ["NacreEdgeStrip", "NacreDock", "AbraMenuBar", "AbraNotchShadow", "AbraNotch"];
+
+fn class_of(h: HWND) -> String {
+    let mut buf = [0u16; 64];
+    let n = unsafe { GetClassNameW(h, &mut buf) };
+    String::from_utf16_lossy(&buf[..n.max(0) as usize])
+}
+
+fn raise(h: isize) {
+    unsafe {
+        let _ = SetWindowPos(HWND(h as *mut _), Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    }
+}
+
 pub fn raise_all() {
     let mut v: Vec<isize> = Vec::new();
     unsafe {
         let _ = EnumWindows(Some(collect), LPARAM(&mut v as *mut _ as isize));
-        for h in v.iter().rev() {
-            let _ = SetWindowPos(HWND(*h as *mut _), Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    }
+    let classes: Vec<String> = v.iter().map(|h| class_of(HWND(*h as *mut _))).collect();
+    for layer in BASE_LAYERS {
+        for (h, c) in v.iter().zip(&classes) {
+            if c == layer {
+                raise(*h);
+            }
         }
     }
-}
-
-/// Naikkan jendela "chrome" (dock, menu bar, notch) di atas jendela ABRA lain, mis. di atas Launchpad layar penuh.
-pub fn raise_chrome() {
-    unsafe {
-        for class in [w!("NacreDock"), w!("AbraMenuBar"), w!("NacreIsland")] {
-            if let Ok(h) = FindWindowW(class, None) {
-                if IsWindowVisible(h).as_bool() {
-                    let _ = SetWindowPos(h, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-                }
-            }
+    for (h, c) in v.iter().zip(&classes).rev() {
+        if !BASE_LAYERS.contains(&c.as_str()) {
+            raise(*h);
         }
     }
 }

@@ -1,6 +1,3 @@
-//! Pencarian berkas sederhana untuk mode Berkas di Spotlight: menelusuri folder pribadi pengguna (Desktop, Dokumen, Unduhan,
-//! Gambar, Video, Musik, dan OneDrive) dengan batas kedalaman, jumlah entri, dan waktu. Bukan indeks seluruh disk.
-
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -11,7 +8,6 @@ pub struct Hit {
     pub is_dir: bool,
 }
 
-/// Folder akar pencarian.
 pub fn roots() -> Vec<PathBuf> {
     let mut v = Vec::new();
     if let Some(home) = std::env::var_os("USERPROFILE").map(PathBuf::from) {
@@ -34,13 +30,11 @@ fn skip_dir(name: &str) -> bool {
     name.starts_with('.') || matches!(name, "node_modules" | "target" | "AppData" | "$RECYCLE.BIN" | "System Volume Information")
 }
 
-/// Semua kata `query` (huruf kecil) harus ada pada `name` (huruf kecil).
 fn matches(words: &[String], name: &str) -> bool {
     let n = name.to_lowercase();
     words.iter().all(|w| n.contains(w.as_str()))
 }
 
-/// Cari di `roots`; `limit` hasil terbaik (nama diawali query lebih dulu, lalu nama lebih pendek).
 pub fn search_in(roots: &[PathBuf], query: &str, budget: Duration, limit: usize, max_depth: usize) -> Vec<Hit> {
     let words: Vec<String> = query.split_whitespace().map(|w| w.to_lowercase()).collect();
     if words.is_empty() {
@@ -81,7 +75,6 @@ pub fn search(query: &str) -> Vec<Hit> {
     search_in(&roots(), query, Duration::from_millis(450), 20, 5)
 }
 
-/// Apakah `p` ada (untuk tes dan pembersihan).
 #[allow(dead_code)]
 fn exists(p: &Path) -> bool {
     p.exists()

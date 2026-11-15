@@ -1,7 +1,3 @@
-//! Control Center ala macOS Tahoe: grid modul Liquid Glass (Wi-Fi, Bluetooth, Now Playing, tombol bulat, slider
-//! Layar/Suara) di kanan atas, dengan mode Edit (badge "−", slot kosong, galeri "Cari Kontrol", tambah/hapus/tata ulang).
-//! Dibuat saat dibuka dan dihancurkan saat ditutup; susunan disimpan di `cc_layout.txt`.
-
 use crate::popup::Popup;
 use crate::{motion, paths, prefs, services};
 use crate::dock::menu::{Item as MItem, Menu, MENU_CLOSE, MENU_PICK};
@@ -22,14 +18,24 @@ use windows::UI::Composition::{CompositionDrawingSurface, CompositionStretch, Co
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
-use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, VK_BACK, VK_ESCAPE};
+use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_BACK, VK_ESCAPE};
 use windows::Win32::UI::WindowsAndMessaging::*;
+const WM_MOUSELEAVE: u32 = 0x02A3;
 use windows_core::Interface;
 use windows_numerics::{Vector2, Vector3};
 
 const WM_CLOSE_CC: u32 = WM_APP + 130;
+static PAD: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+fn pad() -> f32 {
+    f32::from_bits(PAD.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+fn pxy(lp: LPARAM) -> (f32, f32) {
+    let (x, y) = xy(lp);
+    (x - pad(), y - pad())
+}
 const WM_RADIO: u32 = WM_APP + 131;
-/// Id tombol piringan ikon modul (Wi-Fi/Bluetooth: membalik radio).
 const BTN_DISC: u8 = 20;
 const WM_MEDIA: u32 = WM_APP + 132;
 const WM_VALUES: u32 = WM_APP + 133;
@@ -71,14 +77,14 @@ fn glyph_of(k: Kind) -> &'static str {
 struct Mod {
     placed: Placed,
     rect: Rect,
-    /// Slider: area jalur dan sprite isian.
     track: Option<Rect>,
     fill: Option<SpriteVisual>,
-    /// Slider: pil kenop kaca permanen di ujung isian (lapisan luar + inti).
     thumb: Vec<SpriteVisual>,
-    /// Now Playing: tombol prev/play/next.
     btns: Vec<(Rect, u8)>,
     badge: Rect,
+    grip: Rect,
+    vertical: bool,
+    cont: Option<ContainerVisual>,
 }
 
 struct Panel {
@@ -93,8 +99,21 @@ struct Panel {
     drag: Option<(usize, f32, f32)>,
     slider: Option<usize>,
     w: f32,
-    /// Chip "app sedang memakai mikrofon/kamera" di atas modul (true = hanya kamera).
     chip: Option<(Rect, bool)>,
+    hover: Option<usize>,
+    preview: Vec<Kind>,
+    shift: HashMap<Kind, (f32, f32)>,
+    lift: (f32, f32),
+    resize: Option<(usize, Size)>,
+    ghost: Option<ContainerVisual>,
+}
+
+fn grid_rect(p: &Placed, cell: f32, gap: f32, top: f32) -> Rect {
+    (p.col as f32 * (cell + gap), top + p.row as f32 * (cell + gap), p.w as f32 * cell + (p.w - 1) as f32 * gap, p.h as f32 * cell + (p.h - 1) as f32 * gap)
+}
+
+fn center_of(r: Rect) -> Vector3 {
+    Vector3 { X: r.0 + r.2 / 2.0, Y: r.1 + r.3 / 2.0, Z: 0.0 }
 }
 
 struct Gallery {
@@ -108,6 +127,9 @@ struct Gallery {
     scroll: f32,
     content_h: f32,
     panels: Vec<GlassPanel>,
+    conts: Vec<(Rect, ContainerVisual, f32)>,
+    hover: Option<usize>,
+    tracking: bool,
 }
 
 struct Cc {
@@ -116,7 +138,6 @@ struct Cc {
     gfx: Option<Gfx>,
     layout: Vec<Kind>,
     sizes: HashMap<Kind, Size>,
-    /// Menu ukuran (klik kanan di mode Edit) dan modul yang sedang dipilih.
     menu: Option<Menu>,
     menu_kind: Option<Kind>,
     edit: bool,
@@ -127,21 +148,19 @@ struct Cc {
     bt: Option<bool>,
     ssid: Option<String>,
     media: Option<media::Media>,
-    track: Option<(String, String, bool, bool)>, // judul, artis, ada media, memutar
+    track: Option<(String, String, bool, bool)>,
     art: Option<Bitmap>,
     cache: HashMap<String, (CompositionDrawingSurface, i32, i32)>,
     top: i32,
-    /// Build berikutnya memainkan animasi masuk (hanya saat panel baru dibuka).
     intro: bool,
-    /// Modul yang menunggu animasi masuk: (kontainer, titik tumpu, jeda ms). Dimulai setelah jendela tampil.
     intro_items: Vec<(ContainerVisual, Vector3, u32)>,
-    /// Animasi tutup sedang berjalan; jendela dihancurkan oleh timer.
     closing: bool,
+    pending_remove: Option<Kind>,
 }
 
 const T_CLOSE: usize = 1;
-/// Memulai animasi masuk sedikit setelah jendela tampil, supaya tidak habis sebelum frame pertama (bug buka pertama).
 const T_INTRO: usize = 2;
+const T_REMOVE: usize = 3;
 
 thread_local! {
     static CC: RefCell<Option<Cc>> = const { RefCell::new(None) };
@@ -186,13 +205,13 @@ pub fn init(comp: &Compositor) -> windows_core::Result<()> {
                 intro: false,
                 intro_items: Vec::new(),
                 closing: false,
+                pending_remove: None,
             })
         });
     }
     Ok(())
 }
 
-/// Buka/tutup panel; `top` = tepi bawah menu bar (px layar).
 pub fn toggle(top: i32) {
     let open = with(|c| c.panel.is_some() && !c.closing).unwrap_or(false);
     if open {
@@ -213,7 +232,6 @@ pub fn close() {
     with(|c| c.close());
 }
 
-/// Khusus uji (`NACRE_TEST_NETMENU=cc`): buka pemilih dari modul Wi-Fi seperti diklik.
 pub fn test_open_picker() {
     with(|c| {
         let i = c.panel.as_ref().and_then(|p| p.mods.iter().position(|m| m.placed.kind == Kind::Wifi));
@@ -223,7 +241,10 @@ pub fn test_open_picker() {
     });
 }
 
-/// Minta keadaan radio terbaru (sakelar dibalik dari menu Wi-Fi/Bluetooth).
+pub fn test_enter_edit() {
+    with(|c| c.enter_edit());
+}
+
 pub fn refresh_radios() {
     with(|c| {
         if let Some(r) = &c.radios {
@@ -254,7 +275,7 @@ impl Cc {
         self.top = top;
         self.edit = false;
         if self.gfx.is_none() {
-            self.gfx = Gfx::new(&self.comp).ok();
+            self.gfx = Gfx::shared(&self.comp).ok();
         }
         let ctl = self.ctl.0 as isize;
         if self.radios.is_none() {
@@ -272,9 +293,6 @@ impl Cc {
         self.build();
         self.intro = false;
         if let Some(p) = &self.panel {
-            // Tampilkan dulu dalam keadaan tak terlihat, lalu mulai animasi sebentar lagi. Membuka pertama kali memakan
-            // waktu (jendela dan permukaan baru, font, kaca); bila animasi dimulai sebelum frame pertama tampil, ia sudah
-            // habis saat panel akhirnya terlihat sehingga tampak muncul begitu saja.
             let _ = p.popup.root().SetOpacity(0.0);
             p.popup.show();
         }
@@ -283,7 +301,6 @@ impl Cc {
         }
     }
 
-    /// Mulai animasi masuk panel dan modul (dipanggil timer `T_INTRO`).
     fn start_intro(&mut self) {
         unsafe {
             let _ = KillTimer(Some(self.ctl), T_INTRO);
@@ -293,14 +310,12 @@ impl Cc {
             return;
         }
         let Some(p) = self.panel.as_ref() else { return };
-        // panel "tumbuh" dari ikon Control Center (kanan atas) dengan pantulan kecil
-        let _ = motion::pop_in(&self.comp, p.popup.root(), Vector3 { X: p.w - 24.0 * p.dpi, Y: 0.0, Z: 0.0 }, 0.45, 1.025, 0, motion::CC_OPEN_MS);
+        let _ = motion::pop_in(&self.comp, p.popup.root(), Vector3 { X: pad() + p.w - 24.0 * p.dpi, Y: pad(), Z: 0.0 }, 0.45, 1.025, 0, motion::CC_OPEN_MS);
         for (v, center, delay) in items {
             let _ = motion::pop_in(&self.comp, &v, center, 0.7, 1.04, delay, 360);
         }
     }
 
-    /// Mulai animasi tutup; jendela dihancurkan oleh timer (`finish_close`).
     fn close(&mut self) {
         if self.closing || self.panel.is_none() {
             return;
@@ -319,7 +334,7 @@ impl Cc {
             }
         }
         let Some(p) = self.panel.as_ref() else { return };
-        if motion::pop_out(&self.comp, p.popup.root(), Vector3 { X: p.w - 24.0 * p.dpi, Y: 0.0, Z: 0.0 }, 0.55, motion::CC_CLOSE_MS).is_ok() {
+        if motion::pop_out(&self.comp, p.popup.root(), Vector3 { X: pad() + p.w - 24.0 * p.dpi, Y: pad(), Z: 0.0 }, 0.55, motion::CC_CLOSE_MS).is_ok() {
             self.closing = true;
             unsafe {
                 SetTimer(Some(self.ctl), T_CLOSE, motion::CC_CLOSE_MS + 20, None);
@@ -341,12 +356,10 @@ impl Cc {
             unsafe {
                 let _ = DestroyWindow(h);
             }
+            self.cache.clear();
+            nacre_platform::sys::trim_later(5000);
         }
     }
-
-    // -----------------------------------------------------------------------------------------------------------
-    // gambar bantu
-    // -----------------------------------------------------------------------------------------------------------
 
     fn text_surf(&mut self, text: &str, px: i32, weight: i32, rgb: [u8; 3], maxw: i32) -> Option<(CompositionDrawingSurface, i32, i32)> {
         let key = format!("t|{px}|{weight}|{rgb:?}|{maxw}|{text}");
@@ -401,7 +414,6 @@ impl Cc {
         Some(v)
     }
 
-    /// Simbol vektor (set yang sama dengan menu bar) berpusat pada tinta di (`cx`,`cy`).
     fn symbol(&mut self, parent: &ContainerVisual, s: Sym, px: i32, rgb: [u8; 3], cx: f32, cy: f32, op: f32) {
         let n = px.max(8) as u32;
         let key = format!("sym|{s:?}|{n}|{rgb:?}");
@@ -473,10 +485,6 @@ impl Cc {
         Some(p)
     }
 
-    // -----------------------------------------------------------------------------------------------------------
-    // status modul
-    // -----------------------------------------------------------------------------------------------------------
-
     fn is_on(&self, k: Kind) -> bool {
         match k {
             Kind::Wifi => self.wifi == Some(true),
@@ -512,12 +520,7 @@ impl Cc {
         }
     }
 
-    // -----------------------------------------------------------------------------------------------------------
-    // panel
-    // -----------------------------------------------------------------------------------------------------------
-
     fn build(&mut self) {
-        // hancurkan isi lama (popup dipertahankan bila sudah ada)
         let old = self.panel.take();
         let dpi;
         let popup = match old {
@@ -532,7 +535,7 @@ impl Cc {
             None => {
                 let base = GlassParams::dark((10.0, 10.0), 0.0);
                 let Ok(popup) = Popup::new(&self.comp, w!("AbraControlCenter"), Some(panel_proc), WINDOW_EX_STYLE(0), base) else { return };
-                dpi = unsafe { GetDpiForWindow(popup.hwnd) }.max(96) as f32 / 96.0;
+                dpi = unsafe { GetDpiForWindow(popup.hwnd) }.max(96) as f32 / 96.0 * prefs::ui_scale();
                 popup
             }
         };
@@ -543,16 +546,17 @@ impl Cc {
         let rows = if self.edit { rows + 2 } else { rows };
         let (gw, gh) = (4.0 * cell + 3.0 * gap, rows as f32 * cell + (rows.max(1) - 1) as f32 * gap);
         let btn_h = 34.0 * dpi;
-        // Tahoe: app yang sedang memakai mikrofon/kamera tampil sebagai chip di atas modul
         let inuse = if self.edit { Vec::new() } else { nacre_platform::privacy::active() };
         let top = if inuse.is_empty() { 0.0 } else { 36.0 * dpi };
-        // tombol Edit Kontrol berada 14 dp di bawah grid; sisakan 4 dp agar tepi bawah kapsulnya tidak terpotong jendela
         let (pw, ph) = (gw, top + gh + 14.0 * dpi + btn_h + 4.0 * dpi);
         let (sw, _) = nacre_platform::sys::screen_size();
         let x = (sw as f32 - pw - 10.0 * dpi) as i32;
         let y = self.top + (6.0 * dpi) as i32;
-        let _ = popup.set_rect(x, y, pw.ceil() as i32, ph.ceil() as i32);
+        let m = (8.0 * dpi).round();
+        PAD.store(m.to_bits(), std::sync::atomic::Ordering::Relaxed);
+        let _ = popup.set_rect(x - m as i32, y - m as i32, (pw + 2.0 * m).ceil() as i32, (ph + 2.0 * m).ceil() as i32);
         let _ = popup.panel.set_rect(0.0, 0.0, 0.0, 0.0);
+        let _ = popup.content.SetOffset(Vector3 { X: m, Y: m, Z: 0.0 });
         let content = popup.content.clone();
 
         let mut mods = Vec::new();
@@ -560,15 +564,13 @@ impl Cc {
         let mut groups: Vec<(ContainerVisual, Rect)> = Vec::new();
         let mut occupied: Vec<(usize, usize)> = Vec::new();
         for p in &placed {
-            let r: Rect = (p.col as f32 * (cell + gap), top + p.row as f32 * (cell + gap), p.w as f32 * cell + (p.w - 1) as f32 * gap, p.h as f32 * cell + (p.h - 1) as f32 * gap);
+            let r: Rect = grid_rect(p, cell, gap, top);
             for dy in 0..p.h {
                 for dx in 0..p.w {
                     occupied.push((p.col + dx, p.row + dy));
                 }
             }
-            // Tahoe: 1×1 bulat, 2×1 kapsul, sedangkan kartu 2×2 dan slider lebar memakai sudut yang sama (±0,34 sel)
-            let radius = if p.w == 1 && p.h == 1 { r.2 / 2.0 } else if p.h == 2 || p.w >= 3 { CARD_R * cell } else { r.3 / 2.0 };
-            // tiap modul punya kontainer sendiri agar bisa dianimasikan bertahap saat panel dibuka
+            let radius = if p.w == 1 && p.h == 1 { r.2 / 2.0 } else if p.h >= 2 || p.w >= 3 { CARD_R * cell } else { r.3 / 2.0 };
             let mc = self.comp.CreateContainerVisual().ok();
             if let Some(mc) = &mc {
                 let _ = content.Children().and_then(|k| k.InsertAtTop(mc));
@@ -578,10 +580,10 @@ impl Cc {
             if let Some(g) = self.glass(parent, r, radius) {
                 panels.push(g);
             }
-            let m = self.draw_module(parent, p, r, dpi, radius);
+            let mut m = self.draw_module(parent, p, r, dpi, radius);
+            m.cont = mc.clone();
             mods.push(m);
         }
-        // slot kosong (mode edit): lingkaran transparan seperti referensi
         let mut slots = Vec::new();
         if self.edit {
             for row in 0..rows {
@@ -595,7 +597,6 @@ impl Cc {
                 }
             }
         }
-        // tombol Edit Kontrol / Selesai
         let label = if self.edit { prefs::tr("Selesai") } else { prefs::tr("Edit Kontrol…") };
         let bw = 128.0 * dpi;
         let bx = (pw - bw) / 2.0;
@@ -614,8 +615,6 @@ impl Cc {
         let chip = self.draw_chip(&content, &inuse, pw, dpi, &mut groups, &mut panels);
         self.intro_items.clear();
         if self.intro {
-            // stagger: modul paling dekat ikon (kanan atas) muncul lebih dulu. Animasinya baru dimulai oleh `start_intro`
-            // (setelah jendela tampil); sampai saat itu modul disembunyikan agar tidak berkedip penuh.
             let icon = (pw - 24.0 * dpi, 0.0f32);
             let mut order: Vec<usize> = (0..groups.len()).collect();
             let dist = |r: &Rect| ((r.0 + r.2 / 2.0 - icon.0).powi(2) + (r.1 + r.3 / 2.0 - icon.1).powi(2)).sqrt();
@@ -630,7 +629,7 @@ impl Cc {
 
         let hwnd = popup.hwnd;
         let rect = popup.rect;
-        self.panel = Some(Panel { popup, dpi, cell, gap, mods, slots, edit_btn, panels, drag: None, slider: None, w: pw, chip });
+        self.panel = Some(Panel { popup, dpi, cell, gap, mods, slots, edit_btn, panels, drag: None, slider: None, w: pw, chip, hover: None, preview: Vec::new(), shift: HashMap::new(), lift: (0.0, 0.0), resize: None, ghost: None });
         if self.edit {
             nacre_platform::input::end_dismiss();
         } else {
@@ -638,7 +637,6 @@ impl Cc {
         }
     }
 
-    /// Chip kaca kanan atas: titik oranye (mikrofon) / hijau (kamera) + nama app, seperti indikator privasi Tahoe.
     fn draw_chip(&mut self, content: &ContainerVisual, inuse: &[nacre_platform::privacy::InUse], pw: f32, dpi: f32, groups: &mut Vec<(ContainerVisual, Rect)>, panels: &mut Vec<GlassPanel>) -> Option<(Rect, bool)> {
         if inuse.is_empty() {
             return None;
@@ -679,19 +677,54 @@ impl Cc {
         let k = p.kind;
         let on = self.is_on(k);
         let px = |v: f32| (v * dpi) as i32;
-        let mut m = Mod { placed: *p, rect: r, track: None, fill: None, thumb: vec![], btns: vec![], badge: (r.0 - 6.0 * dpi, r.1 - 6.0 * dpi, 24.0 * dpi, 24.0 * dpi) };
-        let _ = radius;
+        let rad = radius.min(r.2 / 2.0).min(r.3 / 2.0);
+        let (gt, grc) = (17.0 * dpi, rad + 2.5 * dpi);
+        let (gcx, gcy) = (r.0 + r.2 - rad, r.1 + r.3 - rad);
+        let grip_box: Rect = (gcx - gt, gcy - gt, grc + 2.0 * gt, grc + 2.0 * gt);
+        let mut m = Mod { placed: *p, rect: r, track: None, fill: None, thumb: vec![], btns: vec![], badge: (r.0 - 6.0 * dpi, r.1 - 6.0 * dpi, 24.0 * dpi, 24.0 * dpi), grip: grip_box, vertical: false, cont: None };
+        let small = p.w == 1 && p.h == 1;
         match k {
+            Kind::Display | Kind::Sound if small => {
+                let sym = if k == Kind::Display { Sym::Sun } else { Sym::SpeakerWave };
+                self.symbol(c, sym, px(20.0), WHITE, r.0 + r.2 / 2.0, r.1 + r.3 / 2.0, 0.95);
+                m.btns.push((r, 10));
+            }
+            Kind::Display | Kind::Sound if p.w == 1 => {
+                let tw = 12.0 * dpi;
+                let (top, bot) = (r.1 + 16.0 * dpi, r.1 + r.3 - 40.0 * dpi);
+                let tx = r.0 + (r.2 - tw) / 2.0;
+                let th = (bot - top).max(20.0 * dpi);
+                let _ = self.rrect(c, (tx, top, tw, th), tw / 2.0, Color { A: 45, R: 255, G: 255, B: 255 });
+                let frac = if k == Kind::Display { brightness::latest().map(|v| v as f32 / 100.0).unwrap_or(0.5) } else { audio::latest().level };
+                let (kw, kh) = (KNOB.1 * dpi, KNOB.0 * dpi);
+                let ky = (top + th * (1.0 - frac)).clamp(top + kh / 2.0, top + th - kh / 2.0);
+                let fill = self.rrect(c, (tx, ky, tw, (top + th - ky).max(tw)), tw / 2.0, Color { A: 240, R: 255, G: 255, B: 255 });
+                let sym = if k == Kind::Display { Sym::Sun } else { Sym::SpeakerWave };
+                self.symbol(c, sym, px(17.0), WHITE, r.0 + r.2 / 2.0, r.1 + r.3 - 21.0 * dpi, 0.85);
+                let mut thumb = Vec::new();
+                let sh = 1.0 * dpi;
+                let [s0, s1, s2] = DROP_IDLE;
+                for (inset, col) in [(-sh, s0), (0.0, s1), (1.5 * dpi, s2)] {
+                    let (w, h) = (kw - 2.0 * inset, kh - 2.0 * inset);
+                    if let Some(v) = self.rrect(c, (r.0 + r.2 / 2.0 - w / 2.0, ky - h / 2.0, w, h), w / 2.0, col) {
+                        thumb.push(v);
+                    }
+                }
+                m.thumb = thumb;
+                m.track = Some((tx - 14.0 * dpi, top, tw + 28.0 * dpi, th));
+                m.fill = fill;
+                m.vertical = true;
+            }
             Kind::Display | Kind::Sound => {
-                // Proporsi diukur dari Control Center Tahoe (tinggi kartu = 1 sel): judul 15,5 px dengan jarak lega dari
-                // sudut, jalur 10 dp berpusat di 65% tinggi, kenop pil 42×28, tombol keluaran Ø36 di kanan Sound.
                 let title = prefs::tr(k.title());
-                self.text(c, title, px(15.5), 600, WHITE, r.0 + 20.0 * dpi, r.1 + 12.0 * dpi, r.2 - 40.0 * dpi, 0.95);
+                let titled = p.w >= 3 || p.h >= 2;
+                if titled {
+                    self.text(c, title, px(15.5), 600, WHITE, r.0 + 20.0 * dpi, r.1 + 12.0 * dpi, r.2 - 40.0 * dpi, 0.95);
+                }
                 let th = 10.0 * dpi;
-                // Sound: tombol bulat keluaran audio di kanan (memilih speaker/headphone)
                 let out = if k == Kind::Sound && r.2 > 250.0 * dpi { 36.0 * dpi } else { 0.0 };
                 let right = if out > 0.0 { 108.0 * dpi } else { 40.0 * dpi };
-                let cy = r.1 + r.3 * 0.65;
+                let cy = if p.h >= 2 { r.1 + r.3 - 36.0 * dpi } else if titled { r.1 + r.3 * 0.65 } else { r.1 + r.3 / 2.0 };
                 let (tx, ty) = (r.0 + 42.0 * dpi, cy - th / 2.0);
                 let tw = r.2 - 42.0 * dpi - right;
                 let _ = self.rrect(c, (tx, ty, tw, th), th / 2.0, Color { A: 45, R: 255, G: 255, B: 255 });
@@ -706,10 +739,9 @@ impl Cc {
                 if out > 0.0 {
                     let b: Rect = (r.0 + r.2 - 39.0 * dpi - out / 2.0, cy - out / 2.0, out, out);
                     let _ = self.rrect(c, b, out / 2.0, Color { A: 45, R: 255, G: 255, B: 255 });
-                    self.symbol(c, Sym::AirPlay, px(19.0), WHITE, b.0 + out / 2.0, cy, 0.9);
+                    self.symbol(c, Sym::Headphones, px(19.0), WHITE, b.0 + out / 2.0, cy, 0.9);
                     m.btns.push((b, 10));
                 }
-                // kenop "tetes air": bayangan tipis, pil putih padat, dan inti kaca (tampak saat diseret)
                 let mut thumb = Vec::new();
                 let sh = 1.0 * dpi;
                 let [s0, s1, s2] = DROP_IDLE;
@@ -725,45 +757,71 @@ impl Cc {
             }
             Kind::NowPlaying => {
                 let (title, artist, has, playing) = self.track.clone().unwrap_or_default();
+                let pad = 14.0 * dpi;
+                let play = if playing { Sym::Pause } else { Sym::Play };
                 if !has {
-                    self.glyph(c, "\u{E8D6}", px(26.0), WHITE, r.0 + r.2 / 2.0, r.1 + r.3 / 2.0 - 10.0 * dpi, 0.6);
-                    self.text(c, prefs::tr("Tidak diputar"), px(12.0), 500, WHITE, r.0 + 16.0 * dpi, r.1 + r.3 / 2.0 + 14.0 * dpi, r.2 - 20.0 * dpi, 0.7);
-                } else {
-                    let art = (r.2 * 0.24).min(40.0 * dpi);
-                    if let (Some(a), Some(gfx)) = (self.art.clone(), self.gfx.as_ref()) {
-                        if let Ok(s) = gfx.surface_from_bgra(a.w, a.h, &a.bgra) {
-                            if let Ok(b) = self.comp.CreateSurfaceBrushWithSurface(&s) {
-                                let _ = b.SetStretch(CompositionStretch::UniformToFill);
-                                if let Ok(v) = self.comp.CreateSpriteVisual() {
-                                    let _ = v.SetBrush(&b);
-                                    let _ = v.SetSize(Vector2 { X: art, Y: art });
-                                    let _ = v.SetOffset(Vector3 { X: r.0 + 14.0 * dpi, Y: r.1 + 14.0 * dpi, Z: 0.0 });
-                                    if let Ok(g) = self.comp.CreateRoundedRectangleGeometry() {
-                                        let _ = g.SetSize(Vector2 { X: art, Y: art });
-                                        let _ = g.SetCornerRadius(Vector2 { X: 10.0 * dpi, Y: 10.0 * dpi });
-                                        if let Ok(cl) = self.comp.CreateGeometricClip() {
-                                            let _ = cl.SetGeometry(&g);
-                                            let _ = v.SetClip(&cl);
-                                        }
-                                    }
-                                    let _ = c.Children().and_then(|k| k.InsertAtTop(&v));
-                                }
-                            }
-                        }
+                    let (cx, cy) = (r.0 + r.2 / 2.0, r.1 + r.3 / 2.0);
+                    self.glyph(c, "\u{E8D6}", px(if small { 20.0 } else { 26.0 }), WHITE, cx, if small || p.h == 1 { cy } else { cy - 10.0 * dpi }, 0.6);
+                    if !small && p.h >= 2 {
+                        self.text(c, prefs::tr("Tidak diputar"), px(12.0), 500, WHITE, r.0 + 16.0 * dpi, cy + 14.0 * dpi, r.2 - 20.0 * dpi, 0.7);
                     }
+                } else if small {
+                    let (cx, cy) = (r.0 + r.2 / 2.0, r.1 + r.3 / 2.0);
+                    self.symbol(c, play, px(22.0), WHITE, cx, cy, 1.0);
+                    m.btns.push((r, 1));
+                } else if p.h == 1 {
+                    let art = r.3 - 2.0 * pad;
+                    self.art_at(c, r.0 + pad, r.1 + pad, art, dpi);
+                    let ctrl: Vec<(Sym, u8)> = if p.w >= 3 { vec![(Sym::Backward, 0), (play, 1), (Sym::Forward, 2)] } else { vec![(play, 1)] };
+                    let bw = 38.0 * dpi;
+                    let cy = r.1 + r.3 / 2.0;
+                    let x_end = r.0 + r.2 - pad;
+                    for (j, (sy, id)) in ctrl.iter().enumerate() {
+                        let cx = x_end - bw * (ctrl.len() - j) as f32 + bw / 2.0;
+                        self.symbol(c, *sy, px(if *id == 1 { 20.0 } else { 16.0 }), WHITE, cx, cy, 1.0);
+                        m.btns.push(((cx - bw / 2.0, cy - bw / 2.0, bw, bw), *id));
+                    }
+                    let tx = r.0 + pad + art + 10.0 * dpi;
+                    let tw = x_end - bw * ctrl.len() as f32 - tx - 6.0 * dpi;
+                    if tw > 30.0 * dpi {
+                        self.text(c, &title, px(13.0), 600, WHITE, tx, cy - 18.0 * dpi, tw, 1.0);
+                        self.text(c, &artist, px(12.0), 400, WHITE, tx, cy + 1.0 * dpi, tw, 0.65);
+                    }
+                } else if p.w == 1 {
+                    let art = r.2 - 2.0 * pad;
+                    self.art_at(c, r.0 + pad, r.1 + pad, art, dpi);
+                    let cy = r.1 + r.3 - 30.0 * dpi;
+                    self.symbol(c, play, px(20.0), WHITE, r.0 + r.2 / 2.0, cy, 1.0);
+                    m.btns.push(((r.0, cy - 20.0 * dpi, r.2, 40.0 * dpi), 1));
+                } else if p.w >= 3 {
+                    let art = (r.3 - 2.0 * pad).min(r.2 * 0.45);
+                    self.art_at(c, r.0 + pad, r.1 + pad, art, dpi);
+                    let tx = r.0 + pad + art + 14.0 * dpi;
+                    let tw = r.0 + r.2 - pad - tx;
+                    self.text(c, &title, px(15.0), 600, WHITE, tx, r.1 + pad + 4.0 * dpi, tw, 1.0);
+                    self.text(c, &artist, px(13.0), 400, WHITE, tx, r.1 + pad + 26.0 * dpi, tw, 0.65);
+                    let cy = r.1 + r.3 - pad - 22.0 * dpi;
+                    let syms = [Sym::Backward, play, Sym::Forward];
+                    for (i, sy) in syms.iter().enumerate() {
+                        let cx = tx + tw * (0.18 + i as f32 * 0.32);
+                        self.symbol(c, *sy, px(if i == 1 { 24.0 } else { 19.0 }), WHITE, cx, cy, 1.0);
+                        m.btns.push(((cx - 22.0 * dpi, cy - 22.0 * dpi, 44.0 * dpi, 44.0 * dpi), i as u8));
+                    }
+                } else {
+                    let art = (r.3 - 120.0 * dpi).min(r.2 - 2.0 * pad).max(40.0 * dpi).min(r.2 * 0.24 * p.h as f32);
+                    self.art_at(c, r.0 + pad, r.1 + pad, art, dpi);
                     self.text(c, &title, px(13.0), 600, WHITE, r.0 + 16.0 * dpi, r.1 + 18.0 * dpi + art, r.2 - 28.0 * dpi, 1.0);
                     self.text(c, &artist, px(12.0), 400, WHITE, r.0 + 16.0 * dpi, r.1 + 38.0 * dpi + art, r.2 - 28.0 * dpi, 0.65);
                     let cy = r.1 + r.3 - 24.0 * dpi;
                     let cxs = [r.0 + r.2 * 0.22, r.0 + r.2 * 0.5, r.0 + r.2 * 0.78];
-                    let syms = [Sym::Backward, if playing { Sym::Pause } else { Sym::Play }, Sym::Forward];
+                    let syms = [Sym::Backward, play, Sym::Forward];
                     for (i, (cx, sy)) in cxs.iter().zip(syms).enumerate() {
                         self.symbol(c, sy, px(if i == 1 { 20.0 } else { 17.0 }), WHITE, *cx, cy, 1.0);
                         m.btns.push(((cx - 20.0 * dpi, cy - 20.0 * dpi, 40.0 * dpi, 40.0 * dpi), i as u8));
                     }
                 }
             }
-            _ if p.h == 2 => {
-                // besar 2×2: piringan ikon di kiri atas, judul dan status di bawah
+            _ if p.h >= 2 => {
                 let d = 46.0 * dpi;
                 let disc: Rect = (r.0 + 12.0 * dpi, r.1 + 12.0 * dpi, d, d);
                 let (bg, fg) = if on { (Color { A: 245, R: 255, G: 255, B: 255 }, prefs::accent()) } else { (Color { A: 70, R: 0, G: 0, B: 0 }, WHITE) };
@@ -778,15 +836,12 @@ impl Cc {
                 }
             }
             _ if p.w == 1 && p.h == 1 => {
-                // tombol bulat: aktif = piringan biru berisi glyph putih
                 if on {
                     let _ = self.rrect(c, r, r.2 / 2.0, prefs::accent_c(245));
                 }
                 self.glyph(c, glyph_of(k), px(20.0), WHITE, r.0 + r.2 / 2.0, r.1 + r.3 / 2.0, 1.0);
             }
             _ => {
-                // kapsul 2×1: piringan ikon di kiri + judul + status
-                // piringan ikon sekitar 58% tinggi kapsul (seperti contoh), bukan hampir penuh
                 let d = r.3 * 0.58;
                 let off = (r.3 - d) / 2.0;
                 let disc: Rect = (r.0 + off, r.1 + off, d, d);
@@ -805,25 +860,178 @@ impl Cc {
             }
         }
         if self.edit {
-            // badge "−" di kiri atas
             let b = m.badge;
-            let _ = self.rrect(c, b, b.2 / 2.0, Color { A: 235, R: 70, G: 70, B: 74 });
-            let _ = self.rrect(c, (b.0 + 6.0 * dpi, b.1 + b.3 / 2.0 - 1.0 * dpi, b.2 - 12.0 * dpi, 2.0 * dpi), dpi, Color { A: 255, R: 255, G: 255, B: 255 });
+            let _ = self.rrect(c, b, b.2 / 2.0, Color { A: 150, R: 70, G: 70, B: 74 });
+            let _ = self.rrect(c, b, b.2 / 2.0, Color { A: 46, R: 255, G: 255, B: 255 });
+            self.glass_ring(c, b, dpi);
+            let _ = self.rrect(c, (b.0 + 6.0 * dpi, b.1 + b.3 / 2.0 - 1.0 * dpi, b.2 - 12.0 * dpi, 2.2 * dpi), dpi, Color { A: 255, R: 255, G: 255, B: 255 });
+            let (bw, bh) = (grip_box.2.ceil() as u32, grip_box.3.ceil() as u32);
+            let data = nacre_core::logo::render_grip(bw, bh, (gt, gt), grc, gt, 14.0, 76.0);
+            if let Some(Ok(sf)) = self.gfx.as_ref().map(|g| g.surface_from_bgra(bw, bh, &data)) {
+                self.put(c, &sf, grip_box.0, grip_box.1, bw as f32, bh as f32, 1.0);
+            }
         }
         m
     }
 
-    // -----------------------------------------------------------------------------------------------------------
-    // aksi
-    // -----------------------------------------------------------------------------------------------------------
+    fn glass_ring(&self, c: &ContainerVisual, b: Rect, dpi: f32) {
+        let n = b.2.round().max(4.0) as u32;
+        let data = nacre_core::widgets::ring(n, 1.4 * dpi, 1.0, [255, 255, 255], [0, 0, 0, 0]);
+        if let Some(Ok(sf)) = self.gfx.as_ref().map(|g| g.surface_from_bgra(n, n, &data)) {
+            self.put(c, &sf, b.0, b.1, n as f32, n as f32, 0.6);
+        }
+    }
 
-    fn set_slider(&mut self, i: usize, x: f32, commit: bool) {
+    fn art_at(&self, c: &ContainerVisual, x: f32, y: f32, art: f32, dpi: f32) {
+        let Some(a) = self.art.clone() else {
+            let _ = self.rrect(c, (x, y, art, art), (art * 0.18).min(12.0 * dpi), Color { A: 60, R: 255, G: 255, B: 255 });
+            return;
+        };
+        let Some(gfx) = self.gfx.as_ref() else { return };
+        let go = || -> windows_core::Result<()> {
+            let s = gfx.surface_from_bgra(a.w, a.h, &a.bgra)?;
+            let b = self.comp.CreateSurfaceBrushWithSurface(&s)?;
+            b.SetStretch(CompositionStretch::UniformToFill)?;
+            let v = self.comp.CreateSpriteVisual()?;
+            v.SetBrush(&b)?;
+            v.SetSize(Vector2 { X: art, Y: art })?;
+            v.SetOffset(Vector3 { X: x, Y: y, Z: 0.0 })?;
+            let g = self.comp.CreateRoundedRectangleGeometry()?;
+            g.SetSize(Vector2 { X: art, Y: art })?;
+            let rad = (art * 0.18).min(14.0 * dpi);
+            g.SetCornerRadius(Vector2 { X: rad, Y: rad })?;
+            let cl = self.comp.CreateGeometricClip()?;
+            cl.SetGeometry(&g)?;
+            v.SetClip(&cl)?;
+            c.Children()?.InsertAtTop(&v)
+        };
+        let _ = go();
+    }
+
+    fn start_resize(&mut self, i: usize) {
+        let sizes = self.sizes.clone();
+        let layout = self.layout.clone();
+        let Some(p) = self.panel.as_mut() else { return };
+        let Some(m) = p.mods.get(i) else { return };
+        let k = m.placed.kind;
+        let cur = k.clamp(m.placed.w, m.placed.h);
+        let _ = sizes;
+        p.resize = Some((i, cur));
+        p.preview = layout;
+        p.shift.clear();
+        self.show_ghost(i, cur);
+    }
+
+    fn show_ghost(&mut self, i: usize, size: Size) {
+        let comp = self.comp.clone();
+        let Some(p) = self.panel.as_ref() else { return };
+        let (cell, gap, dpi) = (p.cell, p.gap, p.dpi);
+        let Some(m) = p.mods.get(i) else { return };
+        let origin = (m.rect.0 + p.shift.get(&m.placed.kind).map(|s| s.0).unwrap_or(0.0), m.rect.1 + p.shift.get(&m.placed.kind).map(|s| s.1).unwrap_or(0.0));
+        let (w, h) = (size.w as f32 * cell + (size.w - 1) as f32 * gap, size.h as f32 * cell + (size.h - 1) as f32 * gap);
+        let radius = if size.w == 1 && size.h == 1 { w / 2.0 } else if size.h >= 2 || size.w >= 3 { CARD_R * cell } else { h / 2.0 };
+        let content = p.popup.content.clone();
+        let old = p.ghost.clone();
+        if let Some(g) = old {
+            if let Ok(k) = content.Children() {
+                let _ = k.Remove(&g);
+            }
+        }
+        let Ok(g) = self.comp.CreateContainerVisual() else { return };
+        let _ = self.rrect(&g, (origin.0, origin.1, w, h), radius, Color { A: 60, R: 255, G: 255, B: 255 });
+        let t = 2.0 * dpi;
+        let _ = self.rrect(&g, (origin.0 + t, origin.1 + t, w - 2.0 * t, h - 2.0 * t), (radius - t).max(0.0), Color { A: 30, R: 0, G: 0, B: 0 });
+        let _ = content.Children().and_then(|k| k.InsertAtTop(&g));
+        let center = Vector3 { X: origin.0 + w / 2.0, Y: origin.1 + h / 2.0, Z: 0.0 };
+        let _ = g.SetCenterPoint(center);
+        let _ = g.SetScale(Vector3 { X: 0.93, Y: 0.93, Z: 1.0 });
+        let _ = motion::hover_pop(&comp, &g, center, 1.0);
+        if let Some(p) = self.panel.as_mut() {
+            p.ghost = Some(g);
+        }
+    }
+
+    fn resize_move(&mut self, x: f32, y: f32) {
+        let comp = self.comp.clone();
+        let Some(p) = self.panel.as_ref() else { return };
+        let Some((i, cur)) = p.resize else { return };
+        let Some(m) = p.mods.get(i) else { return };
+        let k = m.placed.kind;
+        let (cell, gap) = (p.cell, p.gap);
+        let origin = (m.rect.0 + p.shift.get(&k).map(|s| s.0).unwrap_or(0.0), m.rect.1 + p.shift.get(&k).map(|s| s.1).unwrap_or(0.0));
+        let want = k.clamp(controls::cells_for(x - origin.0, cell, gap), controls::cells_for(y - origin.1, cell, gap));
+        if want == cur {
+            return;
+        }
+        let mut sizes = self.sizes.clone();
+        sizes.insert(k, want);
+        let preview = p.preview.clone();
+        let (placed, _) = controls::layout_sized(&preview, &|kk| *sizes.get(&kk).unwrap_or(&kk.default_size()));
+        let mut moves = Vec::new();
+        for mm in &p.mods {
+            let kk = mm.placed.kind;
+            let Some(q) = placed.iter().find(|q| q.kind == kk) else { continue };
+            let r = grid_rect(q, cell, gap, 0.0);
+            let to = (r.0 - mm.rect.0, r.1 - mm.rect.1);
+            let from = p.shift.get(&kk).copied().unwrap_or((0.0, 0.0));
+            if (to.0 - from.0).abs() > 0.5 || (to.1 - from.1).abs() > 0.5 {
+                moves.push((kk, mm.cont.clone(), from, to));
+            }
+        }
+        if let Some(p) = self.panel.as_mut() {
+            p.resize = Some((i, want));
+            for (kk, cont, from, to) in moves {
+                if let Some(c) = cont {
+                    let _ = motion::slide_pop(&comp, &c, Vector3 { X: from.0, Y: from.1, Z: 0.0 }, Vector3 { X: to.0, Y: to.1, Z: 0.0 });
+                }
+                p.shift.insert(kk, to);
+            }
+        }
+        self.show_ghost(i, want);
+    }
+
+    fn end_resize(&mut self) {
+        let from = self.origins();
+        let Some(p) = self.panel.as_mut() else { return };
+        let Some((i, want)) = p.resize.take() else { return };
+        let k = p.mods[i].placed.kind;
+        p.preview.clear();
+        p.shift.clear();
+        p.ghost = None;
+        if want != k.clamp(p.mods[i].placed.w, p.mods[i].placed.h) {
+            self.sizes.insert(k, want);
+            self.save_layout();
+        }
+        self.build_flip(from, Some(k), None);
+    }
+
+    fn set_hover(&mut self, hit: Option<usize>) {
+        let comp = self.comp.clone();
+        let Some(p) = self.panel.as_mut() else { return };
+        if p.hover == hit {
+            return;
+        }
+        for (i, on) in [(p.hover, false), (hit, true)] {
+            let Some(m) = i.and_then(|i| p.mods.get(i)) else { continue };
+            let Some(c) = &m.cont else { continue };
+            let r = m.rect;
+            let to = if !on { 1.0 } else if m.placed.w == 1 && m.placed.h == 1 { motion::HOVER_BUTTON } else { motion::HOVER_ROW };
+            let _ = motion::hover_pop(&comp, c, Vector3 { X: r.0 + r.2 / 2.0, Y: r.1 + r.3 / 2.0, Z: 0.0 }, to);
+        }
+        p.hover = hit;
+    }
+
+    fn set_slider(&mut self, i: usize, x: f32, y: f32, commit: bool) {
         let Some(p) = self.panel.as_ref() else { return };
         let Some(m) = p.mods.get(i) else { return };
         let Some(t) = m.track else { return };
-        let frac = ((x - t.0) / t.2).clamp(0.0, 1.0);
+        let frac = if m.vertical { (1.0 - (y - t.1) / t.3).clamp(0.0, 1.0) } else { ((x - t.0) / t.2).clamp(0.0, 1.0) };
         if let Some(f) = &m.fill {
-            place_slider(f, &m.thumb, t, frac, p.dpi);
+            if m.vertical {
+                place_slider_v(f, &m.thumb, t, frac, p.dpi);
+            } else {
+                place_slider(f, &m.thumb, t, frac, p.dpi);
+            }
         }
         let kind = m.placed.kind;
         if commit {
@@ -834,7 +1042,6 @@ impl Cc {
         }
     }
 
-    /// Menu ukuran Kecil/Sedang/Besar untuk modul `i` (klik kanan di mode Edit).
     fn open_size_menu(&mut self, i: usize, x: f32, y: f32) {
         let Some(p) = self.panel.as_ref() else { return };
         let kind = p.mods[i].placed.kind;
@@ -854,7 +1061,7 @@ impl Cc {
         let items = vec![mk(1, "Kecil", Size::S), mk(2, "Sedang", Size::M), mk(3, "Besar", Size::L)];
         self.menu_kind = Some(kind);
         if let Some(m) = self.menu.as_mut() {
-            let _ = m.show(&self.comp, gfx, items, rect.0 + x as i32, rect.1 + y as i32);
+            let _ = m.show(&self.comp, gfx, items, rect.0 + (x + pad()) as i32, rect.1 + (y + pad()) as i32);
         }
     }
 
@@ -868,13 +1075,159 @@ impl Cc {
             2 => Size::M,
             _ => Size::L,
         };
+        let from = self.origins();
         self.sizes.insert(kind, s);
-        self.build();
+        self.build_flip(from, Some(kind), None);
         self.save_layout();
     }
 
-    /// Pemilih Wi-Fi/Bluetooth dari modul `i`: Control Center menutup dan jendela pemilih muncul di pojok kanan atas
-    /// (tepi kanan dan atas sama dengan panel) dengan animasi Control Center.
+    fn origins(&self) -> HashMap<Kind, (f32, f32)> {
+        let Some(p) = self.panel.as_ref() else { return HashMap::new() };
+        let dragged = p.drag.map(|(i, _, _)| p.mods[i].placed.kind);
+        p.mods
+            .iter()
+            .map(|m| {
+                let k = m.placed.kind;
+                let (dx, dy) = if Some(k) == dragged { p.lift } else { p.shift.get(&k).copied().unwrap_or((0.0, 0.0)) };
+                (k, (m.rect.0 + dx, m.rect.1 + dy))
+            })
+            .collect()
+    }
+
+    fn build_flip(&mut self, from: HashMap<Kind, (f32, f32)>, pop: Option<Kind>, lifted: Option<Kind>) {
+        self.build();
+        let comp = self.comp.clone();
+        let Some(p) = self.panel.as_ref() else { return };
+        for m in &p.mods {
+            let Some(c) = &m.cont else { continue };
+            let k = m.placed.kind;
+            let center = center_of(m.rect);
+            if Some(k) == pop || (!from.is_empty() && !from.contains_key(&k)) {
+                let _ = motion::pop_in(&comp, c, center, 0.5, 1.06, 0, 360);
+                continue;
+            }
+            if let Some(o) = from.get(&k) {
+                let (dx, dy) = (o.0 - m.rect.0, o.1 - m.rect.1);
+                if dx.abs() > 0.5 || dy.abs() > 0.5 {
+                    let _ = motion::slide_pop(&comp, c, Vector3 { X: dx, Y: dy, Z: 0.0 }, Vector3 { X: 0.0, Y: 0.0, Z: 0.0 });
+                }
+            }
+            if Some(k) == lifted {
+                let _ = c.SetCenterPoint(center);
+                let _ = c.SetScale(Vector3 { X: 1.08, Y: 1.08, Z: 1.0 });
+                let _ = motion::hover_pop(&comp, c, center, 1.0);
+            }
+        }
+    }
+
+    fn pop_all(&self) {
+        let Some(p) = self.panel.as_ref() else { return };
+        for (rank, m) in p.mods.iter().enumerate() {
+            if let Some(c) = &m.cont {
+                let _ = c.SetOpacity(0.0);
+                let _ = motion::pop_in(&self.comp, c, center_of(m.rect), 0.86, 1.05, rank as u32 * 14, 340);
+            }
+        }
+    }
+
+    fn start_drag(&mut self, i: usize, x: f32, y: f32) {
+        let comp = self.comp.clone();
+        let layout = self.layout.clone();
+        let Some(p) = self.panel.as_mut() else { return };
+        p.drag = Some((i, x, y));
+        p.lift = (0.0, 0.0);
+        p.preview = layout;
+        p.shift.clear();
+        let content = p.popup.content.clone();
+        if let Some(m) = p.mods.get(i) {
+            if let Some(c) = &m.cont {
+                if let Ok(k) = content.Children() {
+                    let _ = k.Remove(c);
+                    let _ = k.InsertAtTop(c);
+                }
+                let _ = motion::hover_pop(&comp, c, center_of(m.rect), 1.08);
+            }
+        }
+    }
+
+    fn drag_move(&mut self, x: f32, y: f32) {
+        let comp = self.comp.clone();
+        let sizes = self.sizes.clone();
+        let size_of = |k: Kind| *sizes.get(&k).unwrap_or(&k.default_size());
+        let Some(p) = self.panel.as_mut() else { return };
+        let Some((i, x0, y0)) = p.drag else { return };
+        let Some(kind) = p.mods.get(i).map(|m| m.placed.kind) else { return };
+        p.lift = (x - x0, y - y0);
+        if let Some(c) = &p.mods[i].cont {
+            if let Ok(o) = c.cast::<windows::UI::Composition::CompositionObject>() {
+                let _ = o.StopAnimation(&windows_core::HSTRING::from("Offset"));
+            }
+            let _ = c.SetOffset(Vector3 { X: p.lift.0, Y: p.lift.1, Z: 0.0 });
+        }
+        let (cell, gap) = (p.cell, p.gap);
+        let (placed, _) = controls::layout_sized(&p.preview, &size_of);
+        let Some(over) = placed.iter().filter(|q| q.kind != kind).find(|q| hit(grid_rect(q, cell, gap, 0.0), x, y)).map(|q| q.kind) else { return };
+        let (Some(a), Some(b)) = (p.preview.iter().position(|k| *k == kind), p.preview.iter().position(|k| *k == over)) else { return };
+        let k = p.preview.remove(a);
+        p.preview.insert(b, k);
+        let (placed, _) = controls::layout_sized(&p.preview, &size_of);
+        for m in &p.mods {
+            let k = m.placed.kind;
+            if k == kind {
+                continue;
+            }
+            let Some(q) = placed.iter().find(|q| q.kind == k) else { continue };
+            let r = grid_rect(q, cell, gap, 0.0);
+            let to = (r.0 - m.rect.0, r.1 - m.rect.1);
+            let cur = p.shift.get(&k).copied().unwrap_or((0.0, 0.0));
+            if (to.0 - cur.0).abs() > 0.5 || (to.1 - cur.1).abs() > 0.5 {
+                if let Some(c) = &m.cont {
+                    let _ = motion::slide_pop(&comp, c, Vector3 { X: cur.0, Y: cur.1, Z: 0.0 }, Vector3 { X: to.0, Y: to.1, Z: 0.0 });
+                }
+                p.shift.insert(k, to);
+            }
+        }
+    }
+
+    fn end_drag(&mut self) {
+        let from = self.origins();
+        let Some(p) = self.panel.as_mut() else { return };
+        let Some((i, _, _)) = p.drag.take() else { return };
+        let kind = p.mods[i].placed.kind;
+        let preview = std::mem::take(&mut p.preview);
+        p.shift.clear();
+        if !preview.is_empty() && preview != self.layout {
+            self.layout = preview;
+            self.save_layout();
+        }
+        self.build_flip(from, None, Some(kind));
+    }
+
+    fn finish_remove(&mut self) {
+        unsafe {
+            let _ = KillTimer(Some(self.ctl), T_REMOVE);
+        }
+        let Some(kind) = self.pending_remove.take() else { return };
+        let from = self.origins();
+        self.layout.retain(|k| *k != kind);
+        self.build_flip(from, None, None);
+        self.refresh_gallery();
+    }
+
+    fn set_gallery_hover(&mut self, i: Option<usize>) {
+        let comp = self.comp.clone();
+        let Some(g) = self.gallery.as_mut() else { return };
+        if g.hover == i {
+            return;
+        }
+        for (k, on) in [(g.hover, false), (i, true)] {
+            if let Some((r, c, to)) = k.and_then(|k| g.conts.get(k)) {
+                let _ = motion::hover_pop(&comp, c, center_of(*r), if on { *to } else { 1.0 });
+            }
+        }
+        g.hover = i;
+    }
+
     fn open_picker(&mut self, i: usize) {
         let Some(p) = self.panel.as_ref() else { return };
         let Some(m) = p.mods.get(i) else { return };
@@ -885,7 +1238,8 @@ impl Cc {
         };
         let (rect, dpi) = (p.popup.rect, p.dpi);
         self.close();
-        crate::netmenu::show(&self.comp, which, crate::netmenu::Anchor::Corner(rect.0 + rect.2, rect.1), dpi);
+        let m = pad() as i32;
+        crate::netmenu::show(&self.comp, which, crate::netmenu::Anchor::Corner(rect.0 + rect.2 - m, rect.1 + m), dpi);
     }
 
     fn click(&mut self, i: usize, x: f32, y: f32) {
@@ -900,7 +1254,6 @@ impl Cc {
         };
         let small = m.placed.w == 1 && m.placed.h == 1;
         match kind {
-            // piringan ikon (atau modul bulat kecil) membalik radio; sisa modul membuka pemilih jaringan/perangkat
             Kind::Wifi | Kind::Bluetooth if !small && btn != Some(BTN_DISC) => self.open_picker(i),
             Kind::Wifi => send(RadioCmd::Set(RK::Wifi, !(self.wifi == Some(true))), self),
             Kind::Bluetooth => send(RadioCmd::Set(RK::Bluetooth, !(self.bt == Some(true))), self),
@@ -927,7 +1280,6 @@ impl Cc {
                 if btn == Some(10) {
                     self.close();
                     if kind == Kind::Sound {
-                        // Win+Ctrl+V: pemilih keluaran suara bawaan Windows 11 (padanan menu keluaran Tahoe)
                         keys::chord(&[0x5B, 0x11, 0x56]);
                     } else {
                         launch::open("ms-settings:display");
@@ -958,6 +1310,7 @@ impl Cc {
     fn enter_edit(&mut self) {
         self.edit = true;
         self.build();
+        self.pop_all();
         self.open_gallery();
     }
 
@@ -972,16 +1325,27 @@ impl Cc {
             }
         }
         self.build();
+        self.pop_all();
     }
 
     fn remove(&mut self, kind: Kind) {
-        self.layout.retain(|k| *k != kind);
-        self.build();
-        self.refresh_gallery();
+        if self.pending_remove.is_some() {
+            self.finish_remove();
+        }
+        if let Some(m) = self.panel.as_ref().and_then(|p| p.mods.iter().find(|m| m.placed.kind == kind)) {
+            if let Some(c) = &m.cont {
+                let _ = motion::pop_out(&self.comp, c, center_of(m.rect), 0.4, 180);
+            }
+        }
+        self.pending_remove = Some(kind);
+        unsafe {
+            SetTimer(Some(self.ctl), T_REMOVE, 190, None);
+        }
     }
 
     fn add(&mut self, kind: Kind) {
         if !self.layout.contains(&kind) {
+            let from = self.origins();
             self.layout.push(kind);
             if kind == Kind::NowPlaying && self.media.is_none() {
                 let ctl = self.ctl.0 as isize;
@@ -989,7 +1353,7 @@ impl Cc {
                     let _ = PostMessageW(Some(HWND(ctl as *mut _)), WM_MEDIA, WPARAM(0), LPARAM(0));
                 }));
             }
-            self.build();
+            self.build_flip(from, Some(kind), None);
             self.refresh_gallery();
         }
     }
@@ -1004,10 +1368,6 @@ impl Cc {
         self.build();
     }
 
-    // -----------------------------------------------------------------------------------------------------------
-    // galeri "Cari Kontrol"
-    // -----------------------------------------------------------------------------------------------------------
-
     fn open_gallery(&mut self) {
         let Some(p) = self.panel.as_ref() else { return };
         let dpi = p.dpi;
@@ -1016,14 +1376,13 @@ impl Cc {
         let Ok(mut popup) = Popup::new_with(&self.comp, w!("AbraCcGallery"), Some(gallery_proc), WINDOW_EX_STYLE(0), prefs::apply(base, &look), true) else { return };
         let (gw, gh) = (620.0 * dpi, 560.0 * dpi);
         let rect = p.popup.rect;
-        let x = (rect.0 as f32 - gw - 16.0 * dpi).max(10.0 * dpi);
-        let _ = popup.set_rect(x as i32, rect.1, gw as i32, gh as i32);
+        let x = (rect.0 as f32 + pad() - gw - 16.0 * dpi).max(10.0 * dpi);
+        let _ = popup.set_rect(x as i32, rect.1 + pad() as i32, gw as i32, gh as i32);
         let _ = popup.panel.set_radius(26.0 * dpi);
-        self.gallery = Some(Gallery { popup, dpi, cat: None, query: String::new(), cards: vec![], cats: vec![], done: (0.0, 0.0, 0.0, 0.0), scroll: 0.0, content_h: 0.0, panels: vec![] });
+        self.gallery = Some(Gallery { popup, dpi, cat: None, query: String::new(), cards: vec![], cats: vec![], done: (0.0, 0.0, 0.0, 0.0), scroll: 0.0, content_h: 0.0, panels: vec![], conts: vec![], hover: None, tracking: false });
         self.refresh_gallery();
         if let Some(g) = &self.gallery {
             g.popup.show();
-            // galeri meluncur dari sisi panel Control Center
             let _ = motion::pop_in(&self.comp, g.popup.root(), Vector3 { X: g.popup.rect.2 as f32, Y: 0.0, Z: 0.0 }, 0.82, 1.02, 0, 340);
         }
     }
@@ -1038,21 +1397,23 @@ impl Cc {
         }
         let side = 190.0 * dpi;
         let mut cats = Vec::new();
-        // kolom cari
+        let mut conts: Vec<(Rect, ContainerVisual, f32)> = Vec::new();
         let sb: Rect = (16.0 * dpi, 16.0 * dpi, side - 8.0 * dpi, 36.0 * dpi);
         let _ = self.rrect(&content, sb, 10.0 * dpi, Color { A: 60, R: 255, G: 255, B: 255 });
         let q = if query.is_empty() { prefs::tr("Cari Kontrol").to_string() } else { g.query.clone() };
         self.text(&content, &q, (13.0 * dpi) as i32, 400, WHITE, sb.0 + 12.0 * dpi, sb.1 + 9.0 * dpi, sb.2 - 20.0 * dpi, if query.is_empty() { 0.55 } else { 1.0 });
-        // kategori
         let mut y = 66.0 * dpi;
         let mut entries: Vec<(Option<Category>, &str)> = vec![(None, "Semua Kontrol")];
         entries.extend(Category::ALL.iter().map(|c| (Some(*c), c.title())));
         for (c, title) in entries {
             let r: Rect = (12.0 * dpi, y, side, 36.0 * dpi);
+            let Ok(row) = self.comp.CreateContainerVisual() else { continue };
+            let _ = content.Children().and_then(|k| k.InsertAtTop(&row));
+            conts.push((r, row.clone(), motion::HOVER_ROW));
+            let content = row;
             if c == cat {
                 let _ = self.rrect(&content, r, 10.0 * dpi, Color { A: 70, R: 255, G: 255, B: 255 });
             }
-            // ikon berwarna kecil seperti sidebar Tahoe
             let (gl, col): (&str, [u8; 3]) = match c {
                 None => ("\u{E71D}", [99, 99, 108]),
                 Some(Category::Connectivity) => ("\u{E701}", [10, 132, 255]),
@@ -1069,7 +1430,6 @@ impl Cc {
             cats.push((c, r));
             y += 38.0 * dpi;
         }
-        // kartu
         let mut cards = Vec::new();
         let list: Vec<Kind> = controls::ALL
             .iter()
@@ -1080,7 +1440,6 @@ impl Cc {
         let (cx0, mut cy) = (side + 36.0 * dpi, 20.0 * dpi - scroll);
         let (cw, ch, cg) = (130.0 * dpi, 112.0 * dpi, 14.0 * dpi);
         let total_y0 = 20.0 * dpi;
-        // dikelompokkan per kategori dengan judul seksi dan garis pemisah (seperti galeri Tahoe)
         for c in Category::ALL {
             if cat.map(|x| x != c).unwrap_or(false) {
                 continue;
@@ -1100,6 +1459,10 @@ impl Cc {
                     continue;
                 }
                 let present = self.layout.contains(k);
+                let Ok(card) = self.comp.CreateContainerVisual() else { continue };
+                let _ = content.Children().and_then(|k| k.InsertAtTop(&card));
+                conts.push((r, card.clone(), 1.06));
+                let content = card;
                 let _ = self.rrect(&content, r, 20.0 * dpi, Color { A: if present { 30 } else { 85 }, R: 255, G: 255, B: 255 });
                 let disc: Rect = (r.0 + r.2 / 2.0 - 22.0 * dpi, r.1 + 18.0 * dpi, 44.0 * dpi, 44.0 * dpi);
                 let _ = self.rrect(&content, disc, 22.0 * dpi, Color { A: if present { 60 } else { 150 }, R: 0, G: 0, B: 0 });
@@ -1117,31 +1480,38 @@ impl Cc {
         if let Some(g) = self.gallery.as_mut() {
             g.content_h = content_h;
         }
-        // keterangan + tombol Selesai
-        self.text(&content, prefs::tr("Klik kontrol untuk menambahkannya ke Control Center."), (12.0 * dpi) as i32, 400, WHITE, side + 36.0 * dpi, gh - 34.0 * dpi, gw - side - 180.0 * dpi, 0.55);
+        self.text(&content, prefs::tr("Klik kontrol untuk menambahkannya ke Quick Panel."), (12.0 * dpi) as i32, 400, WHITE, side + 36.0 * dpi, gh - 34.0 * dpi, gw - side - 180.0 * dpi, 0.55);
         let done: Rect = (gw - 100.0 * dpi, gh - 46.0 * dpi, 84.0 * dpi, 32.0 * dpi);
-        let _ = self.rrect(&content, done, 16.0 * dpi, prefs::accent_c(255));
-        self.text(&content, prefs::tr("Selesai"), (13.0 * dpi) as i32, 600, WHITE, done.0 + 18.0 * dpi, done.1 + 7.0 * dpi, 70.0 * dpi, 1.0);
+        if let Ok(dc) = self.comp.CreateContainerVisual() {
+            let _ = content.Children().and_then(|k| k.InsertAtTop(&dc));
+            let _ = self.rrect(&dc, done, 16.0 * dpi, prefs::accent_c(255));
+            self.text(&dc, prefs::tr("Selesai"), (13.0 * dpi) as i32, 600, WHITE, done.0 + 18.0 * dpi, done.1 + 7.0 * dpi, 70.0 * dpi, 1.0);
+            conts.push((done, dc, motion::HOVER_BUTTON));
+        }
         if let Some(g) = self.gallery.as_mut() {
             g.cards = cards;
             g.cats = cats;
             g.done = done;
+            g.conts = conts;
+            g.hover = None;
         }
     }
 
     fn update_values(&mut self) {
-        // perbarui isian slider tanpa membangun ulang
         let Some(p) = self.panel.as_ref() else { return };
         for m in &p.mods {
             if let (Some(t), Some(f)) = (m.track, &m.fill) {
                 let frac = if m.placed.kind == Kind::Display { brightness::latest().map(|v| v as f32 / 100.0).unwrap_or(0.5) } else { audio::latest().level };
-                place_slider(f, &m.thumb, t, frac, p.dpi);
+                if m.vertical {
+                    place_slider_v(f, &m.thumb, t, frac, p.dpi);
+                } else {
+                    place_slider(f, &m.thumb, t, frac, p.dpi);
+                }
             }
         }
     }
 }
 
-/// Posisikan isian dan pil kenop kaca slider untuk nilai `frac` (kenop selalu berada di dalam jalur).
 fn place_slider(fill: &SpriteVisual, thumb: &[SpriteVisual], t: Rect, frac: f32, dpi: f32) {
     let th = t.3 - 20.0 * dpi;
     let (kw, kh) = (KNOB.0 * dpi, KNOB.1 * dpi);
@@ -1154,17 +1524,25 @@ fn place_slider(fill: &SpriteVisual, thumb: &[SpriteVisual], t: Rect, frac: f32,
     }
 }
 
-/// Ukuran kenop slider (dp).
+fn place_slider_v(fill: &SpriteVisual, thumb: &[SpriteVisual], t: Rect, frac: f32, dpi: f32) {
+    let tw = t.2 - 28.0 * dpi;
+    let (kw, kh) = (KNOB.1 * dpi, KNOB.0 * dpi);
+    let ky = (t.1 + t.3 * (1.0 - frac)).clamp(t.1 + kh / 2.0, t.1 + t.3 - kh / 2.0);
+    let cx = t.0 + t.2 / 2.0;
+    let _ = fill.SetOffset(Vector3 { X: cx - tw / 2.0, Y: ky, Z: 0.0 });
+    let _ = fill.SetSize(Vector2 { X: tw, Y: (t.1 + t.3 - ky).max(tw) });
+    for (j, s) in thumb.iter().enumerate() {
+        let inset = [-1.0, 0.0, 1.5].get(j).copied().unwrap_or(0.0) * dpi;
+        let _ = s.SetOffset(Vector3 { X: cx - kw / 2.0 + inset, Y: ky - kh / 2.0 + inset, Z: 0.0 });
+    }
+}
+
 const KNOB: (f32, f32) = (42.0, 28.0);
-/// Radius sudut kartu 2×2 dan slider lebar, relatif terhadap ukuran sel.
 const CARD_R: f32 = 0.34;
 
-/// Warna kenop diam: bayangan, pil putih padat, inti (tak terlihat).
 const DROP_IDLE: [Color; 3] = [Color { A: 45, R: 0, G: 0, B: 0 }, Color { A: 250, R: 255, G: 255, B: 255 }, Color { A: 0, R: 255, G: 255, B: 255 }];
-/// Warna kenop diseret: kaca bening dengan tepi terang dan inti hampir transparan.
 const DROP_ACTIVE: [Color; 3] = [Color { A: 0, R: 0, G: 0, B: 0 }, Color { A: 125, R: 255, G: 255, B: 255 }, Color { A: 40, R: 255, G: 255, B: 255 }];
 
-/// Kenop "tetes air" Tahoe: putih padat saat diam, berubah jadi kaca bening dan membesar saat diseret.
 fn raindrop(comp: &Compositor, thumb: &[SpriteVisual], active: bool) {
     let (cols, from, to) = if active { (DROP_ACTIVE, 1.0, 1.22) } else { (DROP_IDLE, 1.22, 1.0) };
     for (j, v) in thumb.iter().enumerate() {
@@ -1223,6 +1601,10 @@ unsafe extern "system" fn ctl_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             with(|c| c.finish_close());
             LRESULT(0)
         }
+        WM_TIMER if wp.0 == T_REMOVE => {
+            with(|c| c.finish_remove());
+            LRESULT(0)
+        }
         WM_TIMER if wp.0 == T_INTRO => {
             with(|c| c.start_intro());
             LRESULT(0)
@@ -1243,7 +1625,7 @@ unsafe extern "system" fn panel_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARA
             LRESULT(0)
         }
         WM_LBUTTONDOWN => {
-            let (x, y) = xy(lp);
+            let (x, y) = pxy(lp);
             with(|c| {
                 if c.closing {
                     return;
@@ -1259,14 +1641,17 @@ unsafe extern "system" fn panel_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARA
                     return;
                 }
                 let edit = c.edit;
-                let Some(i) = p.mods.iter().position(|m| hit(m.rect, x, y) || (edit && hit(m.badge, x, y))) else { return };
+                let Some(i) = p.mods.iter().position(|m| hit(m.rect, x, y) || (edit && (hit(m.badge, x, y) || hit(m.grip, x, y)))) else { return };
                 let m = &p.mods[i];
                 if edit {
                     if hit(m.badge, x, y) {
                         let k = m.placed.kind;
                         c.remove(k);
-                    } else if let Some(p) = c.panel.as_mut() {
-                        p.drag = Some((i, x, y));
+                    } else if hit(m.grip, x, y) && c.pending_remove.is_none() {
+                        c.start_resize(i);
+                        SetCapture(hwnd);
+                    } else if c.pending_remove.is_none() {
+                        c.start_drag(i, x, y);
                         SetCapture(hwnd);
                     }
                 } else if m.track.map(|t| hit(t, x, y)).unwrap_or(false) {
@@ -1275,7 +1660,7 @@ unsafe extern "system" fn panel_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARA
                         raindrop(&c.comp, &p.mods[i].thumb, true);
                     }
                     SetCapture(hwnd);
-                    c.set_slider(i, x, true);
+                    c.set_slider(i, x, y, true);
                 } else {
                     c.click(i, x, y);
                 }
@@ -1283,14 +1668,30 @@ unsafe extern "system" fn panel_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARA
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
-            let (x, y) = xy(lp);
-            let _ = y;
+            let (x, y) = pxy(lp);
             with(|c| {
                 let slider = c.panel.as_ref().and_then(|p| p.slider);
                 if let Some(i) = slider {
-                    c.set_slider(i, x, true);
+                    c.set_slider(i, x, y, true);
+                    return;
                 }
+                if c.panel.as_ref().is_some_and(|p| p.resize.is_some()) {
+                    c.resize_move(x, y);
+                    return;
+                }
+                if c.panel.as_ref().is_some_and(|p| p.drag.is_some()) {
+                    c.drag_move(x, y);
+                    return;
+                }
+                let mut t = TRACKMOUSEEVENT { cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32, dwFlags: TME_LEAVE, hwndTrack: hwnd, dwHoverTime: 0 };
+                let _ = TrackMouseEvent(&mut t);
+                let hit = c.panel.as_ref().filter(|p| p.drag.is_none() && !c.edit && !c.closing).and_then(|p| p.mods.iter().position(|m| hit(m.rect, x, y)));
+                c.set_hover(hit);
             });
+            LRESULT(0)
+        }
+        WM_MOUSELEAVE => {
+            with(|c| c.set_hover(None));
             LRESULT(0)
         }
         m if m == MENU_PICK => {
@@ -1307,7 +1708,7 @@ unsafe extern "system" fn panel_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARA
             LRESULT(0)
         }
         WM_RBUTTONUP => {
-            let (x, y) = xy(lp);
+            let (x, y) = pxy(lp);
             with(|c| {
                 if c.closing {
                     return;
@@ -1317,17 +1718,16 @@ unsafe extern "system" fn panel_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARA
                 if c.edit {
                     c.open_size_menu(i, x, y);
                 } else if matches!(p.mods[i].placed.kind, Kind::Wifi | Kind::Bluetooth) {
-                    // klik kanan modul Wi-Fi/Bluetooth (juga yang bulat kecil): pemilih jaringan/perangkat
                     c.open_picker(i);
                 }
             });
             LRESULT(0)
         }
         WM_LBUTTONUP => {
-            let (x, y) = xy(lp);
+            let (x, y) = pxy(lp);
             with(|c| {
                 let (slider, drag) = match c.panel.as_mut() {
-                    Some(p) => (p.slider.take(), p.drag.take()),
+                    Some(p) => (p.slider.take(), p.drag),
                     None => (None, None),
                 };
                 if let (Some(i), Some(p)) = (slider, c.panel.as_ref()) {
@@ -1338,12 +1738,13 @@ unsafe extern "system" fn panel_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARA
                 if slider.is_some() || drag.is_some() {
                     let _ = ReleaseCapture();
                 }
-                if let Some((i, _, _)) = drag {
-                    let from = c.panel.as_ref().map(|p| p.mods[i].placed.kind);
-                    let over = c.panel.as_ref().and_then(|p| p.mods.iter().find(|m| hit(m.rect, x, y)).map(|m| m.placed.kind));
-                    if let (Some(f), Some(o)) = (from, over) {
-                        c.move_to(f, o);
-                    }
+                if drag.is_some() {
+                    let _ = (x, y);
+                    c.end_drag();
+                }
+                if c.panel.as_ref().is_some_and(|p| p.resize.is_some()) {
+                    let _ = ReleaseCapture();
+                    c.end_resize();
                 }
             });
             LRESULT(0)
@@ -1354,6 +1755,28 @@ unsafe extern "system" fn panel_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARA
 
 unsafe extern "system" fn gallery_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     match msg {
+        WM_MOUSEMOVE => {
+            let (x, y) = xy(lp);
+            with(|c| {
+                let Some(g) = c.gallery.as_mut() else { return };
+                if !g.tracking {
+                    let mut t = TRACKMOUSEEVENT { cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32, dwFlags: TME_LEAVE, hwndTrack: hwnd, dwHoverTime: 0 };
+                    g.tracking = TrackMouseEvent(&mut t).is_ok();
+                }
+                let i = g.conts.iter().position(|(r, _, _)| hit(*r, x, y));
+                c.set_gallery_hover(i);
+            });
+            LRESULT(0)
+        }
+        WM_MOUSELEAVE => {
+            with(|c| {
+                if let Some(g) = c.gallery.as_mut() {
+                    g.tracking = false;
+                }
+                c.set_gallery_hover(None);
+            });
+            LRESULT(0)
+        }
         WM_LBUTTONUP => {
             let (x, y) = xy(lp);
             with(|c| {

@@ -1,28 +1,17 @@
-//! Konstanta dan pembantu animasi bersama (durasi dan kurva yang disamakan dengan rekaman referensi macOS Tahoe).
-
 use windows::Foundation::TimeSpan;
 use windows::UI::Composition::{AnimationDelayBehavior, CompositionEasingFunction, CompositionObject, Compositor, ContainerVisual};
 use windows_core::{Interface, Result, HSTRING};
 use windows_numerics::{Vector2, Vector3};
 
-/// Kartu strip ⇄ jendela panggung.
-pub const STAGE_SWAP_MS: u32 = 280;
-/// Strip masuk/keluar dari tepi kiri.
+pub const STAGE_SWAP_MS: u32 = 340;
 pub const STRIP_SLIDE_MS: u32 = 240;
-/// Hover kartu strip.
 pub const CARD_HOVER_MS: u32 = 160;
-/// Sorotan pengalih app berpindah.
 pub const SWITCHER_MOVE_MS: u32 = 90;
-/// Panel Control Center muncul.
 pub const CC_OPEN_MS: u32 = 420;
-/// Panel Control Center menyusut ke ikon.
 pub const CC_CLOSE_MS: u32 = 170;
-/// Jeda antar modul saat panel terbuka (efek kaca "mencair" bertahap).
 pub const CC_STAGGER_MS: u32 = 22;
-/// Mission Control menyebar.
 pub const MISSION_MS: u32 = 260;
 
-/// Durasi animasi Stage Manager setelah dikalikan pengaturan kecepatan (100 = normal, lebih besar = lebih cepat).
 pub fn stage_ms(base: u32) -> u32 {
     (base as u64 * 100 / crate::prefs::get().stage_speed.max(10) as u64).max(40) as u32
 }
@@ -31,13 +20,10 @@ fn dur(ms: u32) -> TimeSpan {
     TimeSpan { Duration: ms as i64 * 10_000 }
 }
 
-/// Kurva "ease-out kuat" ala Apple (cepat di awal, mendarat lembut).
 pub fn ease(comp: &Compositor) -> Result<CompositionEasingFunction> {
     comp.CreateCubicBezierEasingFunction(Vector2 { X: 0.2, Y: 0.0 }, Vector2 { X: 0.0, Y: 1.0 })?.cast()
 }
 
-/// Muncul ala "cairan kaca": membesar dari `from` melewati `over` (pantulan kecil) ke 1, sambil memudar masuk.
-/// `center` = titik tumpu skala (mis. ikon Control Center); `delay_ms` untuk stagger antar modul.
 pub fn pop_in(comp: &Compositor, v: &ContainerVisual, center: Vector3, from: f32, over: f32, delay_ms: u32, ms: u32) -> Result<()> {
     v.SetCenterPoint(center)?;
     let e = ease(comp)?;
@@ -65,7 +51,6 @@ pub fn pop_in(comp: &Compositor, v: &ContainerVisual, center: Vector3, from: f32
     obj.StartAnimation(&HSTRING::from("Opacity"), &o)
 }
 
-/// Kebalikan `pop_in`: mengecil ke `center` dan memudar (tanpa pantulan).
 pub fn pop_out(comp: &Compositor, v: &ContainerVisual, center: Vector3, to: f32, ms: u32) -> Result<()> {
     v.SetCenterPoint(center)?;
     let e = ease(comp)?;
@@ -91,7 +76,6 @@ pub fn scalar(comp: &Compositor, obj: &impl Interface, prop: &str, from: f32, to
     obj.cast::<CompositionObject>()?.StartAnimation(&HSTRING::from(prop), &a)
 }
 
-/// Warna kuas berpindah halus dari nilainya sekarang ke `to`.
 pub fn color(comp: &Compositor, brush: &impl Interface, to: windows::UI::Color, ms: u32) -> Result<()> {
     let a = comp.CreateColorKeyFrameAnimation()?;
     a.InsertKeyFrameWithEasingFunction(1.0, to, &ease(comp)?)?;
@@ -106,4 +90,37 @@ pub fn vec3(comp: &Compositor, obj: &impl Interface, prop: &str, from: Vector3, 
     a.InsertKeyFrameWithEasingFunction(1.0, to, &e)?;
     a.SetDuration(dur(ms))?;
     obj.cast::<CompositionObject>()?.StartAnimation(&HSTRING::from(prop), &a)
+}
+
+pub const HOVER_POP_MS: u32 = 280;
+pub const HOVER_ROW: f32 = 1.03;
+pub const HOVER_BUTTON: f32 = 1.08;
+
+pub fn fit_pop(want: f32, half: f32, room: f32) -> f32 {
+    if half <= 0.0 {
+        return want;
+    }
+    want.min(1.0 + (room - 1.0).max(0.0) / (1.3 * half))
+}
+
+pub fn pop_ease(comp: &Compositor) -> Result<CompositionEasingFunction> {
+    comp.CreateCubicBezierEasingFunction(Vector2 { X: 0.3, Y: 2.0 }, Vector2 { X: 0.32, Y: 1.0 })?.cast()
+}
+
+pub fn slide_pop(comp: &Compositor, v: &impl Interface, from: Vector3, to: Vector3) -> Result<()> {
+    let e: CompositionEasingFunction = comp.CreateCubicBezierEasingFunction(Vector2 { X: 0.3, Y: 1.45 }, Vector2 { X: 0.35, Y: 1.0 })?.cast()?;
+    let a = comp.CreateVector3KeyFrameAnimation()?;
+    a.InsertKeyFrame(0.0, from)?;
+    a.InsertKeyFrameWithEasingFunction(1.0, to, &e)?;
+    a.SetDuration(dur(HOVER_POP_MS + 40))?;
+    v.cast::<CompositionObject>()?.StartAnimation(&HSTRING::from("Offset"), &a)
+}
+
+pub fn hover_pop(comp: &Compositor, v: &impl Interface, center: Vector3, to: f32) -> Result<()> {
+    let vis: windows::UI::Composition::Visual = v.cast()?;
+    vis.SetCenterPoint(center)?;
+    let a = comp.CreateVector3KeyFrameAnimation()?;
+    a.InsertKeyFrameWithEasingFunction(1.0, Vector3 { X: to, Y: to, Z: 1.0 }, &pop_ease(comp)?)?;
+    a.SetDuration(dur(HOVER_POP_MS))?;
+    vis.cast::<CompositionObject>()?.StartAnimation(&HSTRING::from("Scale"), &a)
 }

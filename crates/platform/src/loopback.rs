@@ -1,6 +1,3 @@
-//! Tangkap audio keluaran sistem (WASAPI loopback) untuk visualizer. Hanya hidup selama dipanggil `start`;
-//! berhenti total (thread, handle COM, perangkat) saat `Loopback` dilepas, yaitu saat musik tidak main.
-
 use nacre_core::island::bands::{Analyzer, BANDS};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
@@ -12,7 +9,6 @@ use windows::Win32::Media::Audio::{
 };
 use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_ALL, COINIT_MULTITHREADED};
 
-/// Pita terbaru (bit f32), dibaca thread UI setelah `notify`.
 static OUT: [AtomicU32; BANDS] = [const { AtomicU32::new(0) }; BANDS];
 static PENDING: AtomicBool = AtomicBool::new(false);
 
@@ -32,8 +28,6 @@ pub struct Loopback {
 
 impl Drop for Loopback {
     fn drop(&mut self) {
-        // Hanya beri tanda berhenti; thread keluar sendiri (≤100 ms). Dulu thread UI menunggu (join) di sini, dan bila
-        // driver audio sedang tersendat (mis. headphone Bluetooth tersambung ulang) seluruh ABRA ikut membeku.
         self.stop.store(true, Ordering::Relaxed);
         drop(self.handle.take());
     }
@@ -54,7 +48,6 @@ unsafe fn sample_kind(fmt: *const WAVEFORMATEX) -> Option<Sample> {
         (3, 32) => Some(Sample::F32),
         (1, 16) => Some(Sample::I16),
         (1, 32) => Some(Sample::I32),
-        // WAVE_FORMAT_EXTENSIBLE: subformat menentukan float atau PCM
         (0xFFFE, _) if f.cbSize >= 22 => {
             let ext = &*(fmt as *const WAVEFORMATEXTENSIBLE);
             let sub = ext.SubFormat.data1;
@@ -82,7 +75,6 @@ fn device_id(d: &IMMDevice) -> String {
     }
 }
 
-/// Satu sesi tangkap pada perangkat keluaran bawaan. `Err` = bangun ulang (perangkat berganti/gagal).
 fn session(stop: &AtomicBool, notify: &(dyn Fn() + Send), analyzer: &mut Analyzer) -> Result<(), &'static str> {
     unsafe {
         let enumerator: IMMDeviceEnumerator =
@@ -107,7 +99,6 @@ fn session(stop: &AtomicBool, notify: &(dyn Fn() + Send), analyzer: &mut Analyze
             std::thread::sleep(Duration::from_millis(32));
             if last_check.elapsed() >= Duration::from_secs(2) {
                 last_check = Instant::now();
-                // perangkat bawaan berganti → bangun ulang sesi
                 if let Ok(d) = enumerator.GetDefaultAudioEndpoint(eRender, eConsole) {
                     if device_id(&d) != id {
                         let _ = client.Stop();
@@ -143,7 +134,6 @@ fn session(stop: &AtomicBool, notify: &(dyn Fn() + Send), analyzer: &mut Analyze
                     for (i, v) in b.iter().enumerate() {
                         OUT[i].store(v.to_bits(), Ordering::Relaxed);
                     }
-                    // satu pesan tertunda sudah cukup; UI membaca nilai terbaru
                     if !PENDING.swap(true, Ordering::Relaxed) {
                         notify();
                     }
@@ -164,7 +154,6 @@ pub fn start(notify: impl Fn() + Send + 'static) -> Loopback {
         while !flag.load(Ordering::Relaxed) {
             if let Err(why) = session(&flag, &notify, &mut analyzer) {
                 crate::log::line("loopback", why);
-                // beri Windows waktu memperbarui endpoint sebelum mencoba lagi
                 for _ in 0..25 {
                     if flag.load(Ordering::Relaxed) {
                         break;

@@ -1,5 +1,3 @@
-//! Dekode gambar (JPEG/PNG/…) ke BGRA ter-premultiply lewat WIC. COM harus sudah diinisialisasi di thread ini.
-
 use crate::icons::Bitmap;
 use windows::Win32::Graphics::Imaging::{
     CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICImagingFactory, WICBitmapDitherTypeNone,
@@ -8,7 +6,6 @@ use windows::Win32::Graphics::Imaging::{
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 use windows::Win32::UI::Shell::SHCreateMemStream;
 
-/// Dekode `bytes` lalu skala ke `px`×`px` (peregangan; artwork media umumnya persegi).
 pub fn decode_square(bytes: &[u8], px: u32) -> Option<Bitmap> {
     unsafe {
         let factory: IWICImagingFactory = CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).ok()?;
@@ -28,8 +25,6 @@ pub fn decode_square(bytes: &[u8], px: u32) -> Option<Bitmap> {
     }
 }
 
-/// Dekode berkas gambar (PNG/JPG/ICO/BMP/…) ke kanvas persegi `px`×`px`: diskalakan muat dengan menjaga
-/// rasio, dipusatkan, sisanya transparan. Ikon kustom dock memakai ini.
 pub fn decode_file_fit(path: &str, px: u32) -> Option<Bitmap> {
     unsafe {
         let factory: IWICImagingFactory = CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).ok()?;

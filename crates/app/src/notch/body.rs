@@ -1,6 +1,3 @@
-//! Badan notch: kaca (atau hitam pekat) yang menempel di tepi atas layar dengan dua "telinga" cekung, wadah isi yang
-//! dipotong tepat sebatas badan, dan wadah "ghost" untuk isi lama yang sedang memudar.
-
 use super::{ears, spring};
 use nacre_core::settings::Material;
 use nacre_platform::log;
@@ -11,10 +8,8 @@ use windows::UI::Composition::{CompositionBrush, CompositionDrawingSurface, Comp
 use windows_core::Interface;
 use windows_numerics::{Vector2, Vector3};
 
-/// Warna notch hitam (sedikit di atas hitam murni agar tetap terasa seperti material).
 pub const ONYX: (u8, u8, u8) = (10, 10, 12);
 
-/// Parameter kaca notch menurut material pilihan. Teks notch selalu putih, jadi selalu varian gelap.
 pub fn glass_params(radius: f32) -> GlassParams {
     let look = crate::prefs::look(crate::prefs::Role::Notch);
     let mut g = crate::prefs::apply(GlassParams::dark((10.0, 10.0), radius), &look);
@@ -22,11 +17,8 @@ pub fn glass_params(radius: f32) -> GlassParams {
         g.tint = Color { A: 255, R: ONYX.0, G: ONYX.1, B: ONYX.2 };
         g.solid = Color { A: 245, R: ONYX.0, G: ONYX.1, B: ONYX.2 };
     } else {
-        // alas tint minimum agar teks putih tetap terbaca di atas wallpaper terang
         g.tint.A = g.tint.A.max(96);
     }
-    // badan dan telinga satu kesatuan: tanpa garis tepi atau kilau (garis akan memotong sambungan dengan telinga);
-    // kesan timbul datang dari bayangan tipis di bawahnya
     g.rim = Color { A: 0, R: 255, G: 255, B: 255 };
     g.highlight = 0.0;
     g
@@ -46,10 +38,9 @@ pub struct Body {
     pub content: ContainerVisual,
     pub ghost: ContainerVisual,
     clip: InsetClip,
-    /// Sisi telinga (px).
     pub ear: f32,
-    /// Bagian badan yang disembunyikan di atas layar agar sudut atasnya tidak terlihat (px).
     pub top_over: f32,
+    pub island: f32,
 }
 
 impl Body {
@@ -92,19 +83,18 @@ impl Body {
             clip,
             ear,
             top_over: 32.0 * dpi,
+            island: 0.0,
         };
         body.paint_ears(tier);
         Ok(body)
     }
 
-    /// Ukuran jendela berubah (resolusi/DPI): wadah isi mengikuti.
     pub fn resize(&self, win: (i32, i32)) {
         for c in [&self.content, &self.ghost] {
             let _ = c.SetSize(Vector2 { X: win.0 as f32, Y: win.1 as f32 });
         }
     }
 
-    /// DPI berubah: buat ulang topeng telinga.
     pub fn remake_ears(&mut self, gfx: &Gfx, dpi: f32, tier: Tier) {
         self.ear = (13.0 * dpi).ceil();
         self.top_over = 32.0 * dpi;
@@ -119,7 +109,6 @@ impl Body {
         self.paint_ears(tier);
     }
 
-    /// Telinga memakai material yang sama dengan badan: hitam pekat, atau blur backdrop + tint dipotong bentuk telinga.
     pub fn paint_ears(&self, tier: Tier) {
         let go = || -> windows_core::Result<()> {
             let g = glass_params(15.0);
@@ -152,10 +141,12 @@ impl Body {
         }
     }
 
-    /// Pindahkan badan ke `x0` dengan ukuran (`w`,`h`) dan radius bawah `radius`. `springy` = Some((rasio, periode))
-    /// untuk animasi pegas di compositor, None untuk langsung.
     pub fn set_geometry(&self, win: (i32, i32), x0: f32, w: f32, h: f32, radius: f32, springy: Option<(f32, u32)>) {
-        let (e, over) = (self.ear, self.top_over);
+        let island = self.island > 0.0;
+        let (e, over) = (self.ear, if island { 0.0 } else { self.top_over });
+        for v in &self.ears {
+            let _ = v.SetOpacity(if island { 0.0 } else { 1.0 });
+        }
         let insets = (x0, (win.0 as f32 - (x0 + w)).max(0.0), (win.1 as f32 - h).max(0.0));
         match springy {
             None => {
@@ -181,9 +172,21 @@ impl Body {
         }
     }
 
-    /// Geser seluruh notch (menyingkir ke atas saat disembunyikan).
     pub fn stage_y(&self, y: f32, ratio: f32, period: u32) {
         let o: CompositionObject = self.stage.cast().unwrap();
-        spring(&self.comp, &o, "Offset.Y", y, ratio, period);
+        spring(&self.comp, &o, "Offset.Y", y + self.island, ratio, period);
+    }
+
+    pub fn set_island(&mut self, gap: f32, shown: bool) {
+        if (gap - self.island).abs() < 0.5 {
+            return;
+        }
+        self.island = gap;
+        if shown {
+            if let Ok(o) = self.stage.cast::<CompositionObject>() {
+                let _ = o.StopAnimation(&windows_core::HSTRING::from("Offset.Y"));
+            }
+            let _ = self.stage.SetOffset(Vector3 { X: 0.0, Y: gap, Z: 0.0 });
+        }
     }
 }

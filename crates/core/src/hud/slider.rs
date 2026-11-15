@@ -1,7 +1,3 @@
-﻿//! Pemetaan posisi pointer ↔ nilai slider (0..1), horizontal atau vertikal.
-
-/// Nilai dari posisi `pos` pada lintasan yang mulai di `start` sepanjang `len`.
-/// `inverted`: nilai besar di ujung `start` (slider vertikal: atas = penuh).
 pub fn value_at(pos: f32, start: f32, len: f32, inverted: bool) -> f32 {
     if len <= 0.0 {
         return 0.0;
@@ -14,13 +10,11 @@ pub fn value_at(pos: f32, start: f32, len: f32, inverted: bool) -> f32 {
     }
 }
 
-/// Kebalikan: posisi untuk nilai `v`.
 pub fn pos_of(v: f32, start: f32, len: f32, inverted: bool) -> f32 {
     let v = v.clamp(0.0, 1.0);
     start + len * if inverted { 1.0 - v } else { v }
 }
 
-/// Persen bulat untuk tampilan.
 pub fn percent(v: f32) -> u32 {
     (v.clamp(0.0, 1.0) * 100.0).round() as u32
 }

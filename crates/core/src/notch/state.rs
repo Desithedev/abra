@@ -1,12 +1,6 @@
-//! Keadaan notch: kejadian (kursor masuk/keluar, diam sebentar, klik, menyeret berkas) mengubah [`Mode`]; data yang
-//! sedang berlangsung (lagu, lirik, timer, baterai, Rak) menentukan [`Activity`] ringkas; keduanya menjadi [`Look`] dan
-//! ukuran target. Semua ukuran adalah angka ABRA sendiri, dalam dp.
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tab {
-    /// Musik, lirik, minggu ini.
     Play,
-    /// Berkas yang ditaruh ke notch.
     Shelf,
     Timer,
 }
@@ -14,7 +8,6 @@ pub enum Tab {
 impl Tab {
     pub const ALL: [Tab; 3] = [Tab::Play, Tab::Shelf, Tab::Timer];
 
-    /// Label sumber (Indonesia; diterjemahkan oleh i18n).
     pub fn title(self) -> &'static str {
         match self {
             Tab::Play => "Putar",
@@ -24,21 +17,17 @@ impl Tab {
     }
 }
 
-/// Cara membuka panel besar.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OpenOn {
-    /// Kursor diam di atas notch selama [`motion::DWELL_MS`].
     Hover,
     Click,
 }
 
-/// Mode interaksi; hanya berubah lewat [`step`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     Rest,
     Peek,
     Open(Tab),
-    /// Berkas sedang diseret di atas notch: zona taruh tampil.
     Drop,
 }
 
@@ -46,9 +35,7 @@ pub enum Mode {
 pub enum Event {
     Enter,
     Leave,
-    /// Kursor sudah diam di atas notch cukup lama.
     Dwell,
-    /// Klik pada notch yang belum terbuka.
     Click,
     SelectTab(Tab),
     DragEnter,
@@ -57,7 +44,6 @@ pub enum Event {
     Escape,
 }
 
-/// Mode berikutnya. `hovering` = kursor masih di atas notch (dipakai saat zona taruh atau panel ditutup tanpa keluar).
 pub fn step(mode: Mode, ev: Event, open_on: OpenOn, hovering: bool) -> Mode {
     let rest = if hovering { Mode::Peek } else { Mode::Rest };
     match (mode, ev) {
@@ -76,59 +62,40 @@ pub fn step(mode: Mode, ev: Event, open_on: OpenOn, hovering: bool) -> Mode {
     }
 }
 
-/// Aktivitas yang tampil di notch tertutup.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Activity {
-    /// Timer berjalan dan tinggal satu menit atau kurang.
     TimerEnding,
-    /// Ada unduhan berjalan (Store, Steam, peramban) atau baru selesai.
     Download,
-    /// Notch diam "musik & lirik": selama ada lagu (diputar atau dijeda), sampul + badge app di kiri dan lirik ala Apple
-    /// Music di kanan.
     Player,
-    /// Lagu diputar dan ada baris lirik tersinkron saat ini.
     Lyrics,
     Music,
-    /// Baterai baru saja mulai diisi (tampil beberapa detik).
     Charging,
     Timer,
-    /// Ada berkas di Rak.
     Shelf,
-    /// Notch diam: sapaan dan info (jam, tanggal, baterai) bergantian.
     Glance,
 }
 
-/// Data yang sedang berlangsung, dikumpulkan kontroler.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Live {
     pub media: bool,
     pub playing: bool,
-    /// Ada baris lirik tersinkron yang sedang dinyanyikan.
     pub lyric_line: bool,
-    /// Lirik ringkas diizinkan di Pengaturan.
     pub lyrics_on: bool,
-    /// Sisa timer yang berjalan (detik).
     pub timer_left_s: Option<i64>,
     pub charging_fresh: bool,
     pub shelf: usize,
-    /// Pengaturan "Saat diam" = sapaan & info.
     pub glance: bool,
-    /// Ada unduhan berjalan atau baru selesai (dan aktivitas unduhan diizinkan).
     pub download: bool,
-    /// Pengaturan "Saat notch diam" = musik & lirik.
     pub wide_music: bool,
 }
 
-/// Aktivitas dengan prioritas tertinggi, atau `None` (notch diam).
 pub fn activity(l: &Live) -> Option<Activity> {
     if l.timer_left_s.is_some_and(|s| s <= 60) {
         return Some(Activity::TimerEnding);
     }
-    // unduhan sementara dan informatif: di atas musik
     if l.download {
         return Some(Activity::Download);
     }
-    // notch diam "musik & lirik": pemutar lebar terus tampil selama ada lagu, juga saat dijeda
     if l.media && l.wide_music {
         return Some(Activity::Player);
     }
@@ -153,7 +120,6 @@ pub fn activity(l: &Live) -> Option<Activity> {
     None
 }
 
-/// Apa yang digambar.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum View {
     Rest,
@@ -165,7 +131,6 @@ pub enum View {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Look {
     pub view: View,
-    /// Kursor di atas notch tertutup: sedikit membesar dan bayangan menebal.
     pub peek: bool,
 }
 
@@ -183,23 +148,17 @@ pub fn look(mode: Mode, act: Option<Activity>) -> Look {
 pub struct Size {
     pub w: f32,
     pub h: f32,
-    /// Radius sudut bawah.
     pub radius: f32,
 }
 
-/// Tambahan ukuran saat diintip (dp).
 pub const PEEK_GROW: (f32, f32) = (16.0, 4.0);
 
-/// Ukuran target dalam px perangkat.
 pub fn size(l: Look, dpi: f32) -> Size {
     let (mut w, mut h, mut r): (f32, f32, f32) = match l.view {
         View::Rest => (184.0, 30.0, 15.0),
-        // lirik di tengah notch, satu baris: sampul kiri, lirik tengah, visualizer kanan
         View::Compact(Activity::Lyrics) => (420.0, 32.0, 16.0),
         View::Compact(Activity::Glance) => (220.0, 30.0, 15.0),
-        // sedikit lebih tinggi: busur pengukur dengan angka di celah bawahnya
         View::Compact(Activity::Download) => (300.0, 36.0, 18.0),
-        // melebar dan sedikit turun: sampul 72 dp + lirik tiga baris
         View::Compact(Activity::Player) => (540.0, 100.0, 30.0),
         View::Compact(_) => (292.0, 30.0, 15.0),
         View::Open(Tab::Play) => (600.0, 214.0, 28.0),
@@ -214,45 +173,33 @@ pub fn size(l: Look, dpi: f32) -> Size {
     Size { w: w * dpi, h: h * dpi, radius: r * dpi }
 }
 
-/// Bayangan tipis di bawah notch (dp dan opasitas). Saat diintip atau terbuka bayangan sedikit lebih tebal.
 pub fn shadow(l: Look) -> (f32, f32, f32) {
     let strong = l.peek || matches!(l.view, View::Open(_) | View::Drop);
     if strong {
-        (20.0, 5.0, 0.34)
+        (18.0, 4.0, 0.34)
     } else {
-        (14.0, 3.0, 0.28)
+        (18.0, 4.0, 0.24)
     }
 }
 
-/// Angka animasi ABRA untuk notch. Pegas memakai "periode" Composition; diukur di layar, gerakan sampai ±99 % target
-/// butuh kira-kira 3,8 × periode (rasio 0,8), jadi periode 68 ms ≈ buka 260 ms dengan sedikit pantulan.
 pub mod motion {
-    /// Kursor harus diam selama ini sebelum panel terbuka (mode Hover).
     pub const DWELL_MS: u32 = 300;
-    /// Membesar/mengecil saat diintip.
     pub const PEEK_RATIO: f32 = 0.9;
     pub const PEEK_PERIOD_MS: u32 = 34;
-    /// Membuka panel atau zona taruh: sedikit memantul.
     pub const OPEN_RATIO: f32 = 0.78;
     pub const OPEN_PERIOD_MS: u32 = 68;
-    /// Menutup: tanpa pantulan.
     pub const CLOSE_RATIO: f32 = 1.0;
     pub const CLOSE_PERIOD_MS: u32 = 45;
-    /// Berganti tab atau aktivitas ringkas.
     pub const SWAP_RATIO: f32 = 0.84;
     pub const SWAP_PERIOD_MS: u32 = 55;
-    /// Isi panel muncul setelah jeda ini: opasitas 0 → 1, skala 0,96 → 1, geser y −6 → 0.
     pub const CONTENT_DELAY_MS: u32 = 60;
     pub const CONTENT_FADE_MS: u32 = 170;
     pub const CONTENT_SCALE_FROM: f32 = 0.96;
     pub const CONTENT_RISE_DP: f32 = 6.0;
-    /// Isi lama memudar saat menutup / berganti.
     pub const CLOSE_FADE_MS: u32 = 90;
     pub const SWAP_FADE_MS: u32 = 120;
-    /// Baris lirik berganti: geser ke atas dan pudar.
     pub const LYRIC_SWAP_MS: u32 = 220;
     pub const LYRIC_RISE_DP: f32 = 8.0;
-    /// Kursor boleh keluar sebentar dari panel terbuka sebelum menutup.
     pub const LEAVE_GRACE_MS: u32 = 260;
 }
 
@@ -336,7 +283,6 @@ mod tests {
         assert!(lyr.w > music.w && lyr.h >= music.h && lyr.h < 40.0, "lirik ringkas: satu baris yang lebih lebar");
         let open = size(look(Mode::Open(Tab::Play), Some(Activity::Music)), 1.0);
         assert_eq!((open.w, open.h, open.radius), (600.0, 214.0, 28.0));
-        // panel terbuka tidak ikut membesar oleh intip; semua tab selebar sama agar berpindah tab tidak melompat
         for t in Tab::ALL {
             assert_eq!(size(look(Mode::Open(t), None), 1.0).w, 600.0);
         }
@@ -345,9 +291,10 @@ mod tests {
     }
 
     #[test]
-    fn shadow_is_thin_at_rest_and_deeper_when_active() {
+    fn shadow_keeps_its_shape_and_only_deepens_when_active() {
         let (b0, y0, o0) = shadow(look(Mode::Rest, None));
         let (b1, y1, o1) = shadow(look(Mode::Open(Tab::Play), None));
-        assert!(o0 < 0.3 && b1 > b0 && y1 > y0 && o1 > o0);
+        assert!(o0 < 0.3 && o1 > o0);
+        assert_eq!((b0, y0), (b1, y1));
     }
 }

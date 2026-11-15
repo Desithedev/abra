@@ -1,5 +1,3 @@
-﻿//! Timer hitung mundur (Pomodoro). Waktu dioper dari luar (ms monoton) supaya mudah diuji.
-
 pub const MAX_SECONDS: i64 = 180 * 60;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -12,7 +10,6 @@ pub enum Phase {
 
 #[derive(Clone, Copy, Debug)]
 pub struct Timer {
-    /// Durasi yang dipilih (detik); dipakai ulang saat reset.
     pub duration: i64,
     remaining_ms: i64,
     deadline_ms: i64,
@@ -29,7 +26,6 @@ impl Timer {
         *self = Timer::new(secs);
     }
 
-    /// Tambah/kurangi durasi hanya saat tidak berjalan.
     pub fn adjust(&mut self, delta_secs: i64) {
         if matches!(self.phase, Phase::Idle | Phase::Finished) {
             self.set_duration(self.duration + delta_secs);
@@ -57,7 +53,6 @@ impl Timer {
         *self = Timer::new(self.duration);
     }
 
-    /// Mengembalikan `true` tepat sekali saat hitungan mencapai nol.
     pub fn tick(&mut self, now_ms: i64) -> bool {
         if self.phase == Phase::Running && now_ms >= self.deadline_ms {
             self.remaining_ms = 0;
@@ -67,7 +62,6 @@ impl Timer {
         false
     }
 
-    /// Sisa detik, dibulatkan ke atas (00:01 tetap tampil sampai benar-benar nol).
     pub fn remaining_secs(&self, now_ms: i64) -> i64 {
         let ms = if self.phase == Phase::Running { (self.deadline_ms - now_ms).max(0) } else { self.remaining_ms };
         (ms + 999) / 1000

@@ -1,6 +1,3 @@
-//! Model Spotlight ala macOS Tahoe: mode (Cari, Apps, Berkas, Aksi, Papan Klip), daftar Aksi dengan quick keys, dan
-//! pengurutan hasil. Murni (tanpa Win32) dan diuji.
-
 use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -13,7 +10,6 @@ pub enum Mode {
 }
 
 impl Mode {
-    /// Pintasan Ctrl+angka seperti ⌘1…⌘4 di Tahoe.
     pub fn from_digit(d: u32) -> Option<Mode> {
         match d {
             1 => Some(Mode::Apps),
@@ -34,10 +30,9 @@ impl Mode {
         }
     }
 
-    /// Judul panel (kunci terjemahan Indonesia).
     pub fn title(self) -> &'static str {
         match self {
-            Mode::Search => "Cari Spotlight",
+            Mode::Search => "Quick Search",
             Mode::Apps => "Aplikasi",
             Mode::Files => "Berkas Saya",
             Mode::Actions => "Aksi",
@@ -49,13 +44,10 @@ impl Mode {
 pub struct ActionDef {
     pub id: &'static str,
     pub title: &'static str,
-    /// App/sumber yang tampil di baris kedua.
     pub app: &'static str,
-    /// Quick key bawaan ("" = belum ada).
     pub default_key: &'static str,
 }
 
-/// Aksi yang masuk akal di Windows (urutan = urutan Saran).
 pub const ACTIONS: &[ActionDef] = &[
     ActionDef { id: "note", title: "Buat Catatan", app: "Notepad", default_key: "nn" },
     ActionDef { id: "timer", title: "Mulai Timer", app: "Jam", default_key: "tm" },
@@ -64,15 +56,14 @@ pub const ACTIONS: &[ActionDef] = &[
     ActionDef { id: "lock", title: "Kunci Layar", app: "Sistem", default_key: "lk" },
     ActionDef { id: "desktop", title: "Tampilkan Desktop", app: "Sistem", default_key: "" },
     ActionDef { id: "dark", title: "Ganti Mode Gelap", app: "ABRA", default_key: "dm" },
-    ActionDef { id: "stage", title: "Nyalakan/Matikan Stage Manager", app: "ABRA", default_key: "sm" },
-    ActionDef { id: "mission", title: "Mission Control", app: "ABRA", default_key: "mc" },
+    ActionDef { id: "stage", title: "Nyalakan/Matikan Scene", app: "ABRA", default_key: "sm" },
+    ActionDef { id: "mission", title: "Overview", app: "ABRA", default_key: "mc" },
     ActionDef { id: "calc", title: "Buka Kalkulator", app: "Kalkulator", default_key: "ca" },
     ActionDef { id: "taskmgr", title: "Buka Task Manager", app: "Sistem", default_key: "" },
     ActionDef { id: "settings", title: "Buka Pengaturan Windows", app: "Pengaturan", default_key: "st" },
     ActionDef { id: "clearclip", title: "Hapus Riwayat Papan Klip", app: "ABRA", default_key: "" },
 ];
 
-/// Baca `actions.txt`: satu baris `id=key`.
 pub fn parse_quick_keys(text: &str) -> HashMap<String, String> {
     let mut m = HashMap::new();
     for line in text.lines() {
@@ -91,13 +82,10 @@ pub fn quick_keys_to_text(m: &HashMap<String, String>) -> String {
     lines.join("\n")
 }
 
-/// Quick key efektif: pilihan pengguna, atau bawaan bila tidak ada (kosong = tanpa).
 pub fn key_of<'a>(a: &'a ActionDef, user: &'a HashMap<String, String>) -> &'a str {
     user.get(a.id).map(|s| s.as_str()).unwrap_or(a.default_key)
 }
 
-/// Urutkan aksi untuk `query`. Query kosong = semua (urutan Saran). Quick key yang cocok persis ada di paling atas,
-/// lalu judul/app yang diawali query, lalu yang memuatnya.
 pub fn rank_actions(query: &str, user: &HashMap<String, String>, titles: &dyn Fn(&ActionDef) -> String) -> Vec<usize> {
     let q = query.trim().to_lowercase();
     if q.is_empty() {

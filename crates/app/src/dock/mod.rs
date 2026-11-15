@@ -1,6 +1,3 @@
-//! Kontroler dock: window, input, model item, dan sinkronisasi ke visual Composition.
-//! Satu thread (UI). Logika keputusan ada di `nacre-core`; berkas ini hanya merangkai.
-
 mod custom_icons;
 pub mod menu;
 mod pins;
@@ -9,7 +6,7 @@ mod tooltip;
 mod view;
 
 use crate::paths;
-use nacre_core::dock::items::{key_of, merge, Item, Pin};
+use nacre_core::dock::items::{key_of, merge, package_family, Item, Pin};
 use nacre_core::dock::layout::{hit, layout, Layout, Metrics, Slot};
 use nacre_core::dock::reorder;
 use nacre_core::dock::ring::next_in_ring;
@@ -48,8 +45,6 @@ pub const WM_ICONS: u32 = WM_APP + 3;
 pub const WM_APPBAR_SYNC: u32 = WM_APP + 4;
 const STRIP_ENTER: u32 = WM_APP + 5;
 const STRIP_LEAVE: u32 = WM_APP + 6;
-/// Konstanta ini tidak diekspor oleh `windows` di modul yang kita impor; tanpa ini `match` akan
-/// menganggapnya variabel pengikat dan menelan semua pesan.
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const WM_SETTINGCHANGE: u32 = 0x001A;
 const WM_POWERBROADCAST: u32 = 0x0218;
@@ -66,7 +61,7 @@ const TIMER_START: usize = 108;
 const TIMER_REGION: usize = 109;
 const TIMER_RECONF: usize = 110;
 const TIMER_TRASH: usize = 111;
-/// Selang cek isi Recycle Bin untuk ikon kosong/berisi.
+const TIMER_REVEAL: usize = 112;
 const TRASH_POLL_MS: u32 = 4000;
 const WM_DISPLAYCHANGE: u32 = 0x007E;
 const WM_DPICHANGED: u32 = 0x02E0;
@@ -85,61 +80,47 @@ const CMD_ADD: usize = 8;
 const CMD_TRASH_OPEN: usize = 9;
 const CMD_TRASH_EMPTY: usize = 10;
 const CMD_STACK_FOLDER: usize = 11;
-/// Berkas stack Unduhan memakai id CMD_STACK + indeks.
+const CMD_FORGET: usize = 12;
 const CMD_STACK: usize = 100;
-/// Banyak app terakhir yang diingat dan yang ditampilkan di dock.
 const RECENTS_KEEP: usize = 8;
 const RECENTS_SHOW: usize = 3;
-/// Kunci khusus menu klik-kanan ikon Unduhan.
 const DOWNLOADS_KEY: &str = "\u{0}downloads";
 
-/// Kunci ikon Unduhan: path folder aslinya (ikon dimuat lewat jalur ikon biasa).
 fn downloads_key() -> String {
     nacre_platform::downloads::folder().map(|p| p.to_string_lossy().to_string()).unwrap_or_default()
 }
 
 pub struct Options {
-    /// Cadangkan strip layar (window lain tidak menimpa dock).
     pub appbar: bool,
     pub mode: Mode,
-    /// Paksa tier material; `None` = otomatis dari kondisi sistem.
     pub glass: Option<Tier>,
 }
 
 #[derive(Clone, Copy)]
 enum Entry {
     Start,
-    /// Tombol Launchpad (kisi titik berwarna) tepat setelah tombol Mulai, seperti macOS.
     Launchpad,
     App(usize),
     Sep,
-    /// Tempat sampah di ujung kanan seperti macOS (Recycle Bin).
     Trash,
-    /// Tumpukan Unduhan tepat sebelum tempat sampah.
     Downloads,
 }
 
-/// Nama penguraian shell untuk Recycle Bin (ikon dimuat lewat jalur ikon biasa).
 const TRASH_PATH: &str = "shell:RecycleBinFolder";
 
-/// Kunci ikon kustom tombol Mulai (bukan jalur berkas sungguhan; hanya dipakai sebagai kunci penimpa ikon).
 const START_KEY: &str = "abra:start";
-/// Kunci ikon kustom tombol Launchpad.
 const LAUNCHPAD_KEY: &str = "abra:launchpad";
 
 struct MenuInfo {
     item: Option<Item>,
     trash: bool,
-    /// Klik kanan pada tombol khusus (Mulai/Launchpad): kunci ikon kustomnya.
     special: Option<&'static str>,
 }
 
-/// Tombol kiri sedang ditahan pada sebuah slot (klik atau awal drag).
 struct Press {
     slot: usize,
     x: f32,
     y: f32,
-    /// Indeks item bila slot itu app yang dipin (boleh di-drag).
     pinned_item: Option<usize>,
 }
 
@@ -153,7 +134,6 @@ pub struct Dock {
     stage_anim: SpringScalarNaturalMotionAnimation,
     panel: GlassPanel,
     content: ContainerVisual,
-    /// Properti bersama untuk ekspresi compositor: posisi kursor (`cx`) dan pengaruh magnifikasi (`k`, 0..1).
     props: CompositionPropertySet,
     k_anim: SpringScalarNaturalMotionAnimation,
     exprs_ok: bool,
@@ -166,9 +146,7 @@ pub struct Dock {
     win_pos: (i32, i32),
     card_y: f32,
     card_h: f32,
-    /// Jarak kartu dari tepi bawah layar (px), dari pengaturan.
     margin: f32,
-    /// Dinonaktifkan dari Pengaturan: disembunyikan penuh dan tidak mencadangkan ruang.
     off: bool,
     icon_px: i32,
     icon_y: f32,
@@ -178,14 +156,11 @@ pub struct Dock {
 
     pins: Vec<Pin>,
     pins_path: PathBuf,
-    /// App terakhir dipakai yang bukan pin (terbaru di depan), disimpan di recents.txt.
     recents: Vec<Pin>,
     recents_path: PathBuf,
-    /// Berkas Unduhan yang sedang tampil di menu stack (id perintah CMD_STACK + indeks).
     stack_files: Vec<String>,
     items: Vec<Item>,
-    signature: Vec<(String, bool, usize)>,
-    /// Gaya ikon yang sedang dipakai (untuk memuat ulang ikon saat berubah).
+    signature: Vec<(String, bool, usize, String)>,
     icon_key: (nacre_core::settings::IconStyle, u8, bool, bool),
     seen: Vec<String>,
 
@@ -196,10 +171,8 @@ pub struct Dock {
 
     surfaces: HashMap<String, CompositionDrawingSurface>,
     requested: HashSet<String>,
-    /// Recycle Bin berisi (ikon tempat sampah versi kertas).
     trash_full: bool,
     worker: icons::Worker,
-    /// Nilai `dock_plates` yang sedang diterapkan.
     plates: bool,
 
     tracking: bool,
@@ -214,6 +187,7 @@ pub struct Dock {
 
     shown: bool,
     starting: bool,
+    revealing: bool,
     overlap: Overlap,
     grace: bool,
     edge_armed: bool,
@@ -236,7 +210,6 @@ fn with_dock<R>(hwnd: HWND, f: impl FnOnce(&mut Dock) -> R) -> Option<R> {
     if p.is_null() || BUSY.swap(true, Ordering::Acquire) {
         return None;
     }
-    // Pinjaman tunggal: pesan yang masuk saat kita sedang bekerja (SetWindowPos, dll.) dilewati.
     let r = f(unsafe { &mut *p });
     BUSY.store(false, Ordering::Release);
     Some(r)
@@ -254,8 +227,6 @@ fn kill(hwnd: HWND, id: usize) {
     }
 }
 
-/// Minta dock mendaftar ulang strip AppBar-nya (mis. setelah taskbar disembunyikan/dipulihkan,
-/// karena shell menempatkan strip kita di atas taskbar yang masih terlihat).
 pub fn request_appbar_resync() {
     let h = DOCK_HWND.load(Ordering::Relaxed);
     if h != 0 {
@@ -268,18 +239,24 @@ pub fn request_appbar_resync() {
 fn on_windows_changed() {
     let h = DOCK_HWND.load(Ordering::Relaxed);
     if h != 0 {
-        // SetTimer dengan id sama mereset hitungan: debounce yang mempertahankan event terakhir.
         timer(HWND(h as *mut _), TIMER_WINDOWS, 120);
     }
 }
 
-/// Persegi ikon dock untuk jendela `hwnd` (untuk animasi jendela).
+pub fn reveal_for(ms: u32) {
+    let h = HWND(DOCK_HWND.load(Ordering::Relaxed) as *mut _);
+    with_dock(h, |d| {
+        d.revealing = true;
+        d.update_visibility();
+        timer(d.hwnd, TIMER_REVEAL, ms);
+    });
+}
+
 pub fn icon_rect_for(hwnd: isize) -> Option<(i32, i32, i32, i32)> {
     let h = HWND(DOCK_HWND.load(Ordering::Relaxed) as *mut _);
     with_dock(h, |d| d.icon_rect(hwnd)).flatten()
 }
 
-/// Perintah CLI (`--add-app`, `--set-icon`): berguna untuk skrip/uji tanpa dialog berkas.
 pub fn cli_commands(hwnd: HWND, add: Option<String>, icon: Option<(String, String)>) {
     with_dock(hwnd, |d| {
         if let Some(p) = add {
@@ -304,7 +281,6 @@ pub fn cli_commands(hwnd: HWND, add: Option<String>, icon: Option<(String, Strin
     });
 }
 
-/// Metrik dock dari pengaturan pengguna.
 fn metrics_from_prefs(dpi: f32) -> Metrics {
     let s = crate::prefs::get();
     Metrics::custom(s.dock_size as f32, s.dock_gap as f32, s.dock_zoom as f32 / 100.0, dpi)
@@ -330,7 +306,7 @@ impl Dock {
                 0, 0, 400, 120,
                 None, None, Some(hi), None,
             )?;
-            let dpi = GetDpiForWindow(hwnd).max(96) as f32 / 96.0;
+            let dpi = GetDpiForWindow(hwnd).max(96) as f32 / 96.0 * crate::prefs::ui_scale();
             let screen = sys::screen_size();
             let m = metrics_from_prefs(dpi);
 
@@ -343,20 +319,18 @@ impl Dock {
             let content = host.compositor.CreateContainerVisual()?;
             stage.Children()?.InsertAtTop(&content)?;
 
-            let gfx = Gfx::new(&host.compositor)?;
+            let gfx = Gfx::shared(&host.compositor)?;
             let hw = hwnd.0 as isize;
             let px = ((m.icon * m.max_scale * 1.15) as i32).clamp(64, 256);
             let worker = icons::spawn_worker(px, move || {
                 let _ = PostMessageW(Some(HWND(hw as *mut _)), WM_ICONS, WPARAM(0), LPARAM(0));
             });
 
-            // ikon kustom harus terdaftar SEBELUM dock meminta ikon pertama, kalau tidak ikon asli yang termuat dan tersimpan
             custom_icons::install();
             nacre_platform::iconpack::configure(&paths::config_dir().join("iconpack"), crate::prefs::get().icon_pack);
             let pins_path = paths::config_dir().join("pins.txt");
             let pins = pins::load(&pins_path);
             let recents_path = paths::config_dir().join("recents.txt");
-            // buang app yang sudah tidak ada sekali saat memuat (bukan tiap refresh dock)
             let recents: Vec<Pin> = pins::load(&recents_path)
                 .into_iter()
                 .filter(|r| r.path.to_ascii_lowercase().starts_with("shell:") || std::path::Path::new(&r.path).exists())
@@ -426,6 +400,7 @@ impl Dock {
                 dragging: None,
                 shown: true,
                 starting: true,
+                revealing: false,
                 overlap: Overlap::default(),
                 grace: false,
                 edge_armed: false,
@@ -440,7 +415,6 @@ impl Dock {
             });
             dock.compute_geometry();
             dock.refresh_windows();
-            // Masuk dari bawah layar dengan spring; ShowWindow dulu agar animasi terlihat.
             let _ = dock.stage.SetOffset(Vector3 { X: 0.0, Y: dock.win.1 as f32 + 8.0, Z: 0.0 });
             let appbar = dock.opts.appbar;
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(dock) as isize);
@@ -463,8 +437,6 @@ impl Dock {
         }
     }
 
-    // ---------- geometri ----------
-
     fn compute_geometry(&mut self) {
         let d = self.dpi;
         let icon = self.m.icon;
@@ -480,7 +452,6 @@ impl Dock {
         self.win.1 = win_h as i32;
     }
 
-    /// Lebar terbesar isi dock di semua posisi kursor (untuk ukuran window tetap, tanpa resize saat hover).
     fn max_content_width(&self) -> f32 {
         let area = 4000.0;
         let base = layout(&self.slots, None, area, &self.m);
@@ -511,10 +482,9 @@ impl Dock {
         );
     }
 
-    /// Resolusi/DPI berubah saat berjalan: hitung ulang metrik dan susun ulang seluruh dock.
     fn on_reconfigure(&mut self) {
         let screen = sys::screen_size();
-        let dpi = unsafe { GetDpiForWindow(self.hwnd) }.max(96) as f32 / 96.0;
+        let dpi = unsafe { GetDpiForWindow(self.hwnd) }.max(96) as f32 / 96.0 * crate::prefs::ui_scale();
         if screen == self.screen && (dpi - self.dpi).abs() < 0.01 {
             return;
         }
@@ -536,7 +506,6 @@ impl Dock {
         }
     }
 
-    /// Ukuran/jarak/zoom/margin dari pengaturan berubah: hitung ulang metrik, ukuran jendela, dan susun ulang.
     fn apply_metrics(&mut self) {
         let s = crate::prefs::get();
         let m = metrics_from_prefs(self.dpi);
@@ -551,7 +520,6 @@ impl Dock {
         self.m = m;
         let px = ((m.icon * m.max_scale * 1.15) as i32).clamp(64, 256);
         if px != self.icon_px {
-            // Ikon harus dimuat ulang pada resolusi yang sesuai.
             self.icon_px = px;
             let hw = self.hwnd.0 as isize;
             self.worker = icons::spawn_worker(px, move || unsafe {
@@ -570,17 +538,6 @@ impl Dock {
         log::line("dock", &format!("metrik: ikon={} jarak={} zoom={} margin={}", s.dock_size, s.dock_gap, s.dock_zoom, s.dock_margin));
     }
 
-    /// Refraksi tepi pada rak dock (hanya material Liquid Glass dan tier penuh); peta dibuat ulang saat ukuran rak berubah.
-    fn refresh_refraction(&mut self, w: f32, h: f32) {
-        let on = crate::prefs::get().dock_material == nacre_core::settings::Material::Glass && self.tier == Tier::Full && crate::prefs::get().refraction;
-        let d = self.dpi;
-        let radius = 22.0 * d * crate::prefs::round(crate::prefs::Role::Dock);
-        let arg = on.then(|| (w.round() as u32, h.round() as u32, radius, 15.0 * d, 9.0 * d));
-        if let Err(e) = self.panel.set_refraction(&self.gfx, arg) {
-            log::line("dock", &format!("refraksi gagal: {e}"));
-        }
-    }
-
     fn reserve_strip(&mut self) {
         if self.off {
             return;
@@ -591,8 +548,6 @@ impl Dock {
         log::line("appbar", &format!("strip={strip} hasil={r:?}"));
     }
 
-    /// Hanya kartu yang menerima mouse saat diam; saat di-hover seluruh window (ikon yang membesar
-    /// melewati tepi kartu). Area transparan lain tidak menelan klik ke window di bawahnya.
     fn set_region(&mut self, full: bool) {
         self.region_full = full;
         let (l, t, r, b) = if full || self.layout.cells.is_empty() {
@@ -605,12 +560,9 @@ impl Dock {
         };
         unsafe {
             let rgn = CreateRectRgn(l, t, r, b);
-            // Setelah berhasil, region dimiliki sistem.
             SetWindowRgn(self.hwnd, Some(rgn), true);
         }
     }
-
-    // ---------- visibilitas ----------
 
     fn interacting(&self) -> bool {
         self.tracking || self.preview_hover || self.menu_open || self.dragging.is_some() || self.grace
@@ -625,7 +577,6 @@ impl Dock {
         (l, t, l + cw.ceil() as i32, t + (self.card_h + self.margin) as i32)
     }
 
-    /// Letakkan strip deteksi tepi tepat di tepi bawah layar selebar jendela dock.
     fn place_strip(&self) {
         if let Some(s) = &self.strip {
             s.place(self.win_pos.0, self.screen.1 - 2, self.win.0, 2);
@@ -659,6 +610,7 @@ impl Dock {
             edge_armed: self.edge_armed,
             starting: self.starting,
             fullscreen: self.overlap.fullscreen,
+            revealing: self.revealing,
         };
         let hide = self.off || should_hide(self.opts.mode, &inputs);
         self.sync_strip();
@@ -674,6 +626,7 @@ impl Dock {
             unsafe {
                 let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
             }
+            crate::topmost::request_raise();
             self.animate_stage(0.0);
             log::line("dock", "tampil");
         }
@@ -684,15 +637,14 @@ impl Dock {
         timer(self.hwnd, TIMER_GRACE, 800);
     }
 
-    // ---------- model → visual ----------
-
     pub fn refresh_windows(&mut self) {
         let wins = enumerate::list(std::process::id());
         tracker::prune(focus::is_alive);
         let mut items = merge(&self.pins, &wins, &tracker::recent, &mut self.seen);
+        self.heal_pins(&mut items);
         self.track_recents(&items);
         self.append_recents(&mut items);
-        let sig: Vec<_> = items.iter().map(|i| (i.key.clone(), i.pinned, i.hwnds.len())).collect();
+        let sig: Vec<_> = items.iter().map(|i| (i.key.clone(), i.pinned, i.hwnds.len(), i.path.clone())).collect();
         self.items = items;
         if sig != self.signature {
             self.signature = sig;
@@ -700,7 +652,6 @@ impl Dock {
         }
         self.overlap = overlap::evaluate(tracker::external_foreground(), std::process::id(), self.card_screen_rect(), self.screen);
         if self.overlap.fullscreen && crate::prefs::get().above_fullscreen {
-            // tetap tampil di atas jendela layar penuh
             self.overlap = overlap::Overlap { overlapped: false, fullscreen: false };
         }
         self.update_visibility();
@@ -739,7 +690,6 @@ impl Dock {
         }
         self.views.clear();
         let icon = self.m.icon;
-        // ikon Launchpad bawaan dibuat sendiri; bila pengguna mengganti ikonnya, pemuat ikon yang memakai gambar pilihan
         if !icons::is_themed(LAUNCHPAD_KEY) && !self.surfaces.contains_key(LAUNCHPAD_KEY) {
             let px = ((self.m.icon * self.m.max_scale * 1.15) as i32).clamp(64, 256) as u32;
             let p = crate::prefs::get();
@@ -778,7 +728,6 @@ impl Dock {
                 Err(e) => log::line("dock", &format!("gagal membuat view: {e}")),
             }
         }
-        // jaga paralelitas entries ↔ views bila ada view gagal dibuat
         if self.views.len() != self.entries.len() {
             self.entries.truncate(self.views.len());
             self.slots.truncate(self.views.len());
@@ -790,8 +739,6 @@ impl Dock {
         self.set_region(self.tracking);
     }
 
-    /// Magnifikasi sepenuhnya di compositor: skala tiap ikon, posisi, titik, dan lebar kartu dihitung dari satu
-    /// properti (`cx`). Proses kita hanya menulis satu angka per gerakan kursor, tanpa alokasi/animasi per ikon.
     fn bind_expressions(&mut self) {
         self.exprs_ok = false;
         self.k_on = false;
@@ -889,9 +836,6 @@ impl Dock {
             let _ = self.panel.set_rect(card.0, card.1, card.2, card.3);
             self.last_card = card;
         }
-        if cursor.is_none() {
-            self.refresh_refraction(card.2, card.3);
-        }
         for (i, (v, c)) in self.views.iter().zip(l.cells.iter()).enumerate() {
             if self.dragging == Some(i) {
                 continue;
@@ -902,7 +846,6 @@ impl Dock {
         self.last_apply = Instant::now();
     }
 
-    /// Ikon tempat sampah Tahoe buatan sendiri (kosong/berisi), digayakan seperti ikon lain.
     fn make_trash_surface(&mut self) {
         let px = ((self.m.icon * self.m.max_scale * 1.15) as i32).clamp(64, 256) as u32;
         let p = crate::prefs::get();
@@ -913,7 +856,6 @@ impl Dock {
         }
     }
 
-    /// Recycle Bin berubah kosong ↔ berisi: ganti gambar ikon tanpa membangun ulang dock.
     fn update_trash_icon(&mut self) {
         if icons::is_themed(TRASH_PATH) {
             return;
@@ -932,7 +874,6 @@ impl Dock {
     pub fn on_icons(&mut self) {
         while let Ok((path, bmp)) = self.worker.results.try_recv() {
             let Some(mut b) = bmp else { continue };
-            // ikon seragam ala macOS (kecuali tempat sampah dan ikon pilihan pengguna)
             if crate::prefs::get().dock_plates && b.w == b.h && !icons::is_themed(&path) {
                 b.bgra = if path == TRASH_PATH || path == downloads_key() { nacre_core::iconplate::free(&b.bgra, b.w) } else { nacre_core::iconplate::plate(&b.bgra, b.w) };
             }
@@ -954,7 +895,6 @@ impl Dock {
         }
     }
 
-    /// Terapkan pengaturan: perilaku (mode/cadangan ruang) dan tampilan kaca. Dipanggil saat `WM_PREFS`.
     fn apply_prefs(&mut self) {
         let s = crate::prefs::get();
         let key = (s.icon_style, s.icon_tint, s.icon_pack, crate::prefs::icon_dark());
@@ -967,7 +907,6 @@ impl Dock {
             self.refresh_windows();
         }
         if s.dock_plates != self.plates {
-            // gaya ikon berubah: muat ulang semua ikon dan bangun ulang tampilan
             self.plates = s.dock_plates;
             self.surfaces.clear();
             self.requested.clear();
@@ -993,8 +932,6 @@ impl Dock {
                 self.strip = None;
                 self.edge_armed = false;
             } else if self.strip.is_none() {
-                // Bug lama: strip baru lahir di (0,0) 10×2 px dan baru dipindah saat dock dibangun ulang, sehingga
-                // setelah mengganti perilaku ke sembunyi, kursor di tepi bawah tidak pernah memunculkan dock.
                 self.strip = Strip::new(self.hwnd, STRIP_ENTER, STRIP_LEAVE).ok();
                 self.place_strip();
             }
@@ -1011,10 +948,6 @@ impl Dock {
         let (themed, dark) = (crate::prefs::look(crate::prefs::Role::Dock), crate::prefs::look(crate::prefs::Role::Dark));
         let base = GlassParams::dark((10.0, 10.0), 22.0 * self.dpi);
         let _ = self.panel.set_params(crate::prefs::apply(base, &themed));
-        let (cw, ch) = (self.last_card.2, self.last_card.3);
-        if cw > 0.0 {
-            self.refresh_refraction(cw, ch);
-        }
         let _ = self.panel.set_radius(22.0 * self.dpi * crate::prefs::round(crate::prefs::Role::Dock));
         let pd = crate::prefs::apply(base, &dark);
         if let Some(t) = self.tooltip.as_mut() {
@@ -1046,8 +979,6 @@ impl Dock {
         }
     }
 
-    // ---------- popup: tooltip + pratinjau ----------
-
     fn hide_popups(&mut self) {
         kill(self.hwnd, TIMER_TIP);
         kill(self.hwnd, TIMER_PREVIEW);
@@ -1060,7 +991,6 @@ impl Dock {
         self.preview_hover = false;
     }
 
-    /// (pusat-x, atas ikon yang sudah diskalakan) dalam piksel layar.
     fn icon_anchor(&self, slot: usize) -> Option<(i32, i32)> {
         let c = self.layout.cells.get(slot)?;
         let cx = self.win_pos.0 as f32 + c.x + c.w / 2.0;
@@ -1078,7 +1008,6 @@ impl Dock {
             Some(Entry::Launchpad) => crate::prefs::tr("Apps").to_string(),
             Some(Entry::Trash) => crate::prefs::tr("Tempat sampah").to_string(),
             Some(Entry::Downloads) => crate::prefs::tr("Unduhan").to_string(),
-            // Seperti macOS: tooltip hanya nama app, bukan judul jendela.
             Some(Entry::App(i)) => match self.items.get(*i) {
                 Some(it) => {
                     let f = nacre_platform::wins::names::friendly(&it.path);
@@ -1134,8 +1063,6 @@ impl Dock {
         }
     }
 
-    // ---------- input ----------
-
     fn entry_at(&self, x: f32) -> Option<(usize, Entry)> {
         let i = hit(&self.slots, &self.layout, x, &self.m)?;
         Some((i, *self.entries.get(i)?))
@@ -1165,7 +1092,6 @@ impl Dock {
             if slot.is_some() {
                 let preview_up = self.preview.as_ref().is_some_and(|p| p.is_visible());
                 if preview_up {
-                    // Pratinjau sudah terbuka: pindah ke app lain langsung, tanpa jeda.
                     self.show_preview();
                     if !self.preview.as_ref().is_some_and(|p| p.is_visible()) {
                         timer(self.hwnd, TIMER_TIP, 250);
@@ -1176,14 +1102,11 @@ impl Dock {
                 }
             }
         }
-        // Jalur ekspresi murah (satu angka per gerakan): jangan membuang event, atau posisi akhir kursor bisa hilang
-        // (gerakan cepat ke ujung dock berhenti pada nilai lama). Throttle hanya untuk jalur animasi per ikon.
         if self.cursor.is_some_and(|c| (c - x).abs() < 0.5) || (!self.exprs_ok && self.last_apply.elapsed() < Duration::from_millis(10)) {
             return;
         }
         self.cursor = Some(x);
         if self.exprs_ok {
-            // hit-test memakai tata letak Rust (tanpa COM); tampilan dihitung compositor dari `cx`.
             self.layout = layout(&self.slots, Some(x), self.win.0 as f32, &self.m);
             let _ = self.props.InsertScalar(&HSTRING::from("cx"), x);
             self.set_influence(true);
@@ -1215,7 +1138,6 @@ impl Dock {
         } else {
             self.apply(None, true);
         }
-        // Ikon masih mengecil; potong region setelah animasi selesai.
         timer(self.hwnd, TIMER_REGION, 450);
         self.start_grace();
         self.update_visibility();
@@ -1253,7 +1175,6 @@ impl Dock {
         self.shift_neighbors(x);
     }
 
-    /// Tetangga bergeser memberi ruang di posisi sisip saat sebuah pin diseret (hasilnya sama dengan `finish_drag`).
     fn shift_neighbors(&mut self, x: f32) {
         let Some(dragged) = self.dragging else { return };
         let rest = layout(&self.slots, None, self.win.0 as f32, &self.m);
@@ -1294,7 +1215,6 @@ impl Dock {
         }
     }
 
-    /// Lepas drag: di atas dock = lepas sematan; di dalam = pindah ke posisi baru di antara pin.
     fn finish_drag(&mut self, x: f32, y: f32, p: Press) {
         let Some(from) = p.pinned_item else { return };
         let rest = layout(&self.slots, None, self.win.0 as f32, &self.m);
@@ -1358,7 +1278,6 @@ impl Dock {
         }
     }
 
-    /// Aktifkan jendela; jendela yang diminimalkan dipulihkan dengan animasi membesar dari ikon dock.
     fn activate_target(&self, target: isize) -> bool {
         if focus::is_minimized(target) {
             if let Some(r) = self.icon_rect(target) {
@@ -1370,7 +1289,6 @@ impl Dock {
         focus::activate(target, self.hwnd.0 as isize)
     }
 
-    /// Persegi ikon (px layar, tanpa magnifikasi) dari item yang memiliki jendela `hwnd`.
     fn icon_rect(&self, hwnd: isize) -> Option<(i32, i32, i32, i32)> {
         let item = self.items.iter().position(|it| it.hwnds.contains(&hwnd))?;
         let j = self.entries.iter().position(|e| matches!(e, Entry::App(i) if *i == item))?;
@@ -1398,7 +1316,6 @@ impl Dock {
         }
     }
 
-    /// Buka menu kaca di atas dock; tidak ada loop pesan bersarang, hasilnya datang sebagai `MENU_PICK`/`MENU_CLOSE`.
     fn open_menu(&mut self, x: f32) {
         self.menu_open = true;
         self.hide_popups();
@@ -1411,12 +1328,14 @@ impl Dock {
         if let Some(it) = &info.item {
             items.push(menu::Item::action(CMD_OPEN, crate::prefs::tr("Buka"), true));
             let can_pin = it.pinned || !it.path.contains('?');
-            items.push(menu::Item::action(CMD_PIN, crate::prefs::tr(if it.pinned { "Hapus dari dock" } else { "Simpan di dock" }), can_pin));
+            items.push(menu::Item::action(CMD_PIN, crate::prefs::tr(if it.pinned { "Hapus dari Deck" } else { "Simpan di Deck" }), can_pin));
+            if !it.pinned && !it.running() {
+                items.push(menu::Item::action(CMD_FORGET, crate::prefs::tr("Hapus dari Deck"), true));
+            }
             items.push(menu::Item::action(CMD_ICON, crate::prefs::tr("Ubah ikon…"), true));
             if custom_icons::has(&it.path) {
                 items.push(menu::Item::action(CMD_ICON_RESET, crate::prefs::tr("Kembalikan ikon asli"), true));
             }
-            // seperti macOS: menutup app selalu paling bawah (refleks klik kanan → item terakhir)
             if it.running() {
                 items.push(menu::Item::separator());
                 items.push(menu::Item::action(CMD_CLOSE, crate::prefs::tr("Tutup"), true));
@@ -1433,10 +1352,9 @@ impl Dock {
             }
             items.push(menu::Item::separator());
         }
-        // "Keluar dari ABRA" hanya di area kosong dock dan ikon Start, bukan di ikon app
         let general = info.item.is_none() && !info.trash && (info.special.is_none() || info.special == Some(START_KEY));
         if general {
-            items.push(menu::Item::action(CMD_ADD, crate::prefs::tr("Tambah app ke dock…"), true));
+            items.push(menu::Item::action(CMD_ADD, crate::prefs::tr("Tambah app ke Deck…"), true));
             items.push(menu::Item::action(CMD_SETTINGS, crate::prefs::tr("Pengaturan ABRA…"), true));
             items.push(menu::Item::separator());
             items.push(menu::Item::action(CMD_QUIT, crate::prefs::tr("Keluar dari ABRA"), true));
@@ -1464,7 +1382,6 @@ impl Dock {
         }
     }
 
-    /// Klik ikon Unduhan: menu kaca berisi berkas terbaru (terbaru di bawah, dekat ikon) dan "Buka folder Unduhan".
     fn open_stack(&mut self) {
         self.menu_open = true;
         self.hide_popups();
@@ -1502,7 +1419,30 @@ impl Dock {
         }
     }
 
-    /// Ingat app non-pin yang sedang berjalan (terbaru di depan); disimpan hanya bila daftar berubah.
+    fn heal_pins(&mut self, items: &mut [Item]) {
+        let mut changed = false;
+        for it in items.iter_mut().filter(|i| i.pinned) {
+            if it.running() {
+                for p in self.pins.iter_mut().filter(|p| key_of(&p.path) == it.key && p.path != it.path) {
+                    p.path = it.path.clone();
+                    changed = true;
+                }
+            } else if !std::path::Path::new(&it.path).exists() {
+                if let Some(family) = package_family(&it.path) {
+                    let prefix = format!("shell:appsfolder\\{}!", family.to_lowercase());
+                    if let Some(app) = nacre_platform::apps::snapshot().into_iter().find(|a| a.path.to_lowercase().starts_with(&prefix)) {
+                        it.path = app.path;
+                    }
+                }
+            }
+        }
+        if changed {
+            if let Err(e) = pins::save(&self.pins_path, &self.pins) {
+                log::line("pins", &format!("simpan gagal: {e}"));
+            }
+        }
+    }
+
     fn track_recents(&mut self, items: &[Item]) {
         if !crate::prefs::get().recent_apps {
             return;
@@ -1522,7 +1462,6 @@ impl Dock {
         }
     }
 
-    /// Tampilkan hingga 3 app terakhir (sudah tertutup, bukan pin) di akhir daftar app.
     fn append_recents(&self, items: &mut Vec<Item>) {
         if !crate::prefs::get().recent_apps {
             return;
@@ -1562,14 +1501,12 @@ impl Dock {
         self.update_visibility();
     }
 
-    /// Muat ulang ikon satu app (setelah ikon kustom diubah/dikembalikan).
     fn reload_icon(&mut self, path: &str) {
         self.surfaces.remove(path);
         self.requested.insert(path.to_string());
         let _ = self.worker.requests.send(path.to_string());
     }
 
-    /// Tambah app ke dock dari jalur berkas (.exe atau .lnk). Mengabaikan duplikat dan berkas bukan app.
     pub fn add_app(&mut self, picked: &str) {
         let lower = picked.to_ascii_lowercase();
         let Some(target) = nacre_platform::pick::resolve_shortcut(picked) else {
@@ -1599,7 +1536,6 @@ impl Dock {
         self.refresh_windows();
     }
 
-    /// Berkas dijatuhkan ke dock (drag dari Explorer).
     fn on_drop(&mut self, hdrop: windows::Win32::UI::Shell::HDROP) {
         use windows::Win32::UI::Shell::{DragFinish, DragQueryFileW};
         unsafe {
@@ -1622,7 +1558,6 @@ impl Dock {
                 }
             }
             c if c >= CMD_STACK => {
-                // hanya path yang kita daftarkan sendiri dari folder Unduhan
                 if let Some(p) = self.stack_files.get(c - CMD_STACK).cloned() {
                     launch::open(&p);
                 }
@@ -1659,10 +1594,19 @@ impl Dock {
                     self.refresh_windows();
                 }
             }
+            CMD_FORGET => {
+                if let Some(it) = &info.item {
+                    self.recents.retain(|r| key_of(&r.path) != it.key);
+                    if let Err(e) = pins::save(&self.recents_path, &self.recents) {
+                        log::line("recents", &format!("simpan gagal: {e}"));
+                    }
+                    self.signature.clear();
+                    self.refresh_windows();
+                }
+            }
             CMD_SETTINGS => crate::settings_win::open(&self.comp),
             CMD_TRASH_OPEN => launch::open("shell:RecycleBinFolder"),
             CMD_TRASH_EMPTY => unsafe {
-                // Dialog konfirmasi bawaan Windows tetap muncul (flag 0): tidak ada penghapusan tanpa persetujuan.
                 let _ = windows::Win32::UI::Shell::SHEmptyRecycleBinW(Some(self.hwnd), windows::core::PCWSTR::null(), 0);
                 timer(self.hwnd, TIMER_TRASH, 300);
             },
@@ -1726,8 +1670,6 @@ impl Dock {
         }
     }
 
-    // ---------- timer & pesan pendamping ----------
-
     fn on_timer(&mut self, id: usize) {
         kill(self.hwnd, id);
         match id {
@@ -1764,6 +1706,10 @@ impl Dock {
             }
             TIMER_START => {
                 self.starting = false;
+                self.update_visibility();
+            }
+            TIMER_REVEAL => {
+                self.revealing = false;
                 self.update_visibility();
             }
             TIMER_REGION => {
@@ -1895,7 +1841,6 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             LRESULT(0)
         }
         WM_APPBAR_SYNC => {
-            // Beri waktu taskbar menyelesaikan perubahan state sebelum strip dihitung ulang.
             timer(hwnd, TIMER_APPBAR, 400);
             LRESULT(0)
         }
@@ -1905,7 +1850,10 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             LRESULT(0)
         }
         crate::prefs::WM_PREFS => {
-            with_dock(hwnd, |d| d.apply_prefs());
+            with_dock(hwnd, |d| {
+                d.apply_prefs();
+                d.on_reconfigure();
+            });
             LRESULT(0)
         }
         STRIP_ENTER => {
@@ -1936,7 +1884,6 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             LRESULT(0)
         }
         WM_DISPLAYCHANGE | WM_DPICHANGED => {
-            // Pesan ini datang bertubi-tubi saat resolusi berganti; tunggu stabil dulu.
             timer(hwnd, TIMER_RECONF, 500);
             DefWindowProcW(hwnd, msg, wp, lp)
         }
@@ -1952,14 +1899,3 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         _ => DefWindowProcW(hwnd, msg, wp, lp),
     }
 }
-
-
-
-
-
-
-
-
-
-
-

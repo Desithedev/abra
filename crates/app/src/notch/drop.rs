@@ -1,6 +1,3 @@
-//! Target seret-taruh OLE untuk notch: berkas dari Explorer (atau app lain) yang diseret ke notch. Callback OLE
-//! hanya menyimpan jalur berkas dan memposting pesan ke jendela notch; logikanya tetap di kontroler (tanpa reentrancy).
-
 use std::cell::RefCell;
 use std::rc::Rc;
 use windows::core::implement;
@@ -14,13 +11,11 @@ use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
 use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
 use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
 
-/// Jenis kejadian di `wParam` pesan seret-taruh.
 pub const ENTER: usize = 1;
 pub const OVER: usize = 2;
 pub const LEAVE: usize = 3;
 pub const DROP: usize = 4;
 
-/// Jalur berkas yang sedang diseret (diisi saat masuk dan saat dilepas).
 pub type Shared = Rc<RefCell<Vec<String>>>;
 
 #[implement(IDropTarget)]
@@ -28,7 +23,6 @@ struct Target {
     hwnd: isize,
     msg: u32,
     paths: Shared,
-    /// Seretan berisi berkas (selain itu diabaikan, mis. teks).
     has_files: RefCell<bool>,
 }
 
@@ -109,7 +103,6 @@ impl IDropTarget_Impl for Target_Impl {
     }
 }
 
-/// Daftarkan `hwnd` sebagai target taruh. Objek yang dikembalikan harus tetap hidup selama jendela ada.
 pub fn register(hwnd: HWND, msg: u32, paths: Shared) -> Option<IDropTarget> {
     unsafe {
         let _ = OleInitialize(None);

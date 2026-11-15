@@ -1,17 +1,3 @@
-//! Berkas penanda "taskbar sedang disembunyikan".
-//!
-//! Ditulis sebelum taskbar Windows disembunyikan dan dihapus hanya setelah
-//! pemulihan terverifikasi. Berisi segala yang diperlukan untuk memulihkan
-//! taskbar tanpa bantuan proses utama (watchdog, atau start berikutnya setelah crash).
-//!
-//! Format teks per baris, mudah dibaca manusia:
-//! ```text
-//! abstate=2
-//! pid=1234
-//! primary=0,1040,1920,1080
-//! secondary=65890,1920,1040,3840,1080
-//! ```
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rect {
     pub left: i32,
@@ -21,9 +7,6 @@ pub struct Rect {
 }
 
 impl Rect {
-    /// Persegi yang benar-benar terpasang di layar. Taskbar yang kita parkir
-    /// berada jauh di luar (−10000), dan taskbar Explorer yang baru dibuat bisa
-    /// melapor rect kosong; keduanya tidak boleh disimpan sebagai posisi asli.
     pub fn is_placed(&self) -> bool {
         self.right > self.left && self.bottom > self.top && self.left > -9000 && self.top > -9000
     }
@@ -31,12 +14,9 @@ impl Rect {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Marker {
-    /// State AppBar taskbar sebelum kita ubah (bit 1 = auto-hide, bit 2 = selalu di atas).
-    /// Negatif = tidak diketahui.
     pub abstate: i32,
     pub pid: u32,
     pub primary: Option<Rect>,
-    /// (handle window, rect) tiap taskbar monitor sekunder.
     pub secondaries: Vec<(isize, Rect)>,
 }
 
@@ -58,8 +38,6 @@ impl Marker {
         s
     }
 
-    /// `None` bila berkas rusak atau tanpa pid. Marker format lama/rusak tidak
-    /// boleh membuat pemulihan salah menebak posisi.
     pub fn parse(text: &str) -> Option<Marker> {
         let mut abstate = -1;
         let mut pid = None;
@@ -156,7 +134,6 @@ mod tests {
         assert!(!Rect { left: -10000, top: -10000, right: -9900, bottom: -9950 }.is_placed());
         assert!(!Rect { left: 0, top: 0, right: 0, bottom: 0 }.is_placed());
         assert!(Rect { left: 0, top: 1032, right: 1920, bottom: 1080 }.is_placed());
-        // monitor di sebelah kiri/atas primer: koordinat negatif tetap sah
         assert!(Rect { left: -1920, top: 1032, right: 0, bottom: 1080 }.is_placed());
     }
 }

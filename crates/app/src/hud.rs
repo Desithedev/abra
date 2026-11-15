@@ -1,8 +1,3 @@
-//! HUD volume dan kecerahan ala macOS Tahoe: kapsul kaca horizontal di kanan atas (di bawah menu bar) berjudul "Volume"/"Kecerahan"
-//! dengan slider tipis dan ikon di kedua ujung; muncul saat nilai berubah (tombol keras, aplikasi lain) atau saat kursor menyentuh
-//! tepi layar, bisa di-drag, lalu hilang sendiri.
-//! Menggantikan flyout bawaan Windows (disembunyikan selagi HUD aktif).
-
 use crate::motion;
 use crate::popup::Popup;
 use crate::services::{self, WM_BRIGHT, WM_VOLUME};
@@ -30,7 +25,7 @@ use windows_numerics::{Vector2, Vector3};
 
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const WM_DISPLAYCHANGE: u32 = 0x007E;
-const HUD_MOUSE: u32 = WM_APP + 30; // wparam = (bar << 8) | kind, lparam = y klien
+const HUD_MOUSE: u32 = WM_APP + 30;
 const STRIP_L_ENTER: u32 = WM_APP + 31;
 const STRIP_L_LEAVE: u32 = WM_APP + 32;
 const STRIP_R_ENTER: u32 = WM_APP + 33;
@@ -41,10 +36,10 @@ const K_UP: usize = 2;
 const K_ENTER: usize = 3;
 const K_LEAVE: usize = 4;
 
-const T_HIDE0: usize = 1; // + indeks bar
-const T_DWELL0: usize = 3; // + indeks bar
+const T_HIDE0: usize = 1;
+const T_DWELL0: usize = 3;
 const T_RECONF: usize = 5;
-const T_FIN0: usize = 6; // + indeks bar: sembunyikan jendela setelah animasi keluar
+const T_FIN0: usize = 6;
 
 static ENABLED: AtomicBool = AtomicBool::new(true);
 
@@ -57,7 +52,6 @@ enum Kind {
 struct Bar {
     kind: Kind,
     popup: Popup,
-    /// Judul: nama perangkat keluaran (volume) atau "Layar" (kecerahan), seperti "MacBook Pro Speakers" di video.
     title: SpriteVisual,
     title_text: String,
     fill: SpriteVisual,
@@ -83,12 +77,12 @@ pub struct Hud {
 }
 
 fn xy_y(lp: LPARAM) -> f32 {
-    (lp.0 as i16) as f32 // sumbu x klien (nama lama dipertahankan)
+    (lp.0 as i16) as f32
 }
 
 unsafe extern "system" fn bar_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     let ctl = HWND(CTL.load(Ordering::Relaxed) as *mut _);
-    let idx = GetWindowLongPtrW(h, GWLP_USERDATA) as usize; // indeks bar + 1
+    let idx = GetWindowLongPtrW(h, GWLP_USERDATA) as usize;
     let post = |kind: usize, y: f32| {
         let _ = PostMessageW(Some(ctl), HUD_MOUSE, WPARAM(((idx.saturating_sub(1)) << 8) | kind), LPARAM(y as isize));
     };
@@ -155,7 +149,7 @@ impl Hud {
                 let c = sys::conditions();
                 if !c.transparency || c.battery_saver || c.remote_session { Tier::Solid } else { Tier::Full }
             });
-            let gfx = Gfx::new(&host.compositor)?;
+            let gfx = Gfx::shared(&host.compositor)?;
             let mut bars = Vec::new();
             for (i, kind) in [Kind::Volume, Kind::Brightness].into_iter().enumerate() {
                 let mut popup = Popup::new(
@@ -168,15 +162,12 @@ impl Hud {
                 let _ = popup.panel.set_tier(tier);
                 SetWindowLongPtrW(popup.hwnd, GWLP_USERDATA, (i + 1) as isize);
                 let (bw, bh) = (Self::box_w(dpi) as i32, Self::box_h(dpi) as i32);
-                // kanan atas, tepat di bawah menu bar
                 popup.set_rect(screen.0 - bw - (12.0 * dpi) as i32, (34.0 * dpi) as i32, bw, bh)?;
                 popup.panel.set_radius(24.0 * dpi)?;
-                // judul (diisi `update_title` saat tampil: nama perangkat bisa berubah)
                 let tv = host.compositor.CreateSpriteVisual()?;
                 tv.SetOffset(Vector3 { X: 18.0 * dpi, Y: 10.0 * dpi, Z: 0.0 })?;
                 tv.SetOpacity(0.95)?;
                 popup.content.Children()?.InsertAtTop(&tv)?;
-                // lintasan + isi (horizontal)
                 let (track_w, track_h) = (Self::track_w(dpi), 5.0 * dpi);
                 let (tx, ty) = (Self::track_x(dpi), Self::track_y(dpi));
                 let track = host.compositor.CreateSpriteVisual()?;
@@ -191,7 +182,6 @@ impl Hud {
                 fill.SetBrush(&host.compositor.CreateColorBrushWithColor(Color { A: 245, R: 255, G: 255, B: 255 })?)?;
                 fill.SetClip(&Self::clip(&host.compositor, track_w, track_h, track_h / 2.0)?)?;
                 popup.content.Children()?.InsertAtTop(&fill)?;
-                // 16 titik skala di bawah lintasan, seperti HUD Tahoe
                 let dot = (2.4 * dpi).max(2.0);
                 for k in 0..16 {
                     let d = host.compositor.CreateSpriteVisual()?;
@@ -201,7 +191,6 @@ impl Hud {
                     d.SetClip(&Self::clip(&host.compositor, dot, dot, dot / 2.0)?)?;
                     popup.content.Children()?.InsertAtTop(&d)?;
                 }
-                // ikon di kedua ujung (simbol vektor buatan sendiri)
                 let (sl, sr) = if i == 0 { (nacre_core::symbols::Sym::Speaker, nacre_core::symbols::Sym::SpeakerWave) } else { (nacre_core::symbols::Sym::SunSmall, nacre_core::symbols::Sym::Sun) };
                 let isz = (16.0 * dpi).round() as u32;
                 let mk = |sym, x: f32| -> windows_core::Result<SpriteVisual> {
@@ -220,10 +209,9 @@ impl Hud {
                 let icon2 = mk(sr, bw as f32 - 16.0 * dpi - isz as f32)?;
                 popup.content.Children()?.InsertAtTop(&icon)?;
                 popup.content.Children()?.InsertAtTop(&icon2)?;
-                // strip tepi (kiri untuk volume, kanan untuk brightness)
                 let (enter, leave) = if i == 0 { (STRIP_L_ENTER, STRIP_L_LEAVE) } else { (STRIP_R_ENTER, STRIP_R_LEAVE) };
                 let _ = (enter, leave);
-                let strip: Option<Strip> = None; // Tahoe tidak memunculkan HUD dari tepi layar
+                let strip: Option<Strip> = None;
                 if let Some(s) = &strip {
                     let sx = if i == 0 { 0 } else { screen.0 - 2 };
                     s.place(sx, (screen.1 - bh) / 2, 2, bh);
@@ -302,7 +290,6 @@ impl Hud {
         let _ = go();
     }
 
-    /// Perbarui isi dan ikon kedua bar dari nilai terbaru. `animate`: spring untuk isi.
     fn update_values(&mut self, animate: bool) {
         for i in 0..self.bars.len() {
             let kind = self.bars[i].kind;
@@ -316,12 +303,10 @@ impl Hud {
             } else {
                 let _ = bar.fill.SetSize(Vector2 { X: fill_w, Y: 5.0 * self.dpi });
             }
-            // ikon kiri: speaker kosong saat senyap atau 0
             let _ = (level, muted, &self.last_glyph, kind);
         }
     }
 
-    /// Tulis ulang judul bila berubah (mis. pindah dari speaker ke headphone).
     fn update_title(&mut self, i: usize) {
         let t = match self.bars[i].kind {
             Kind::Volume => {
@@ -356,7 +341,6 @@ impl Hud {
         }
         self.update_title(i);
         let now = self.now();
-        // volume dan kecerahan memakai satu tempat: yang lain disembunyikan
         for j in 0..self.bars.len() {
             if j != i && self.bars[j].shown {
                 self.bars[j].shown = false;
@@ -367,8 +351,6 @@ impl Hud {
         if !self.bars[i].shown {
             self.bars[i].shown = true;
             self.bars[i].popup.show();
-            // muncul seperti modul Control Center: membesar dari sudut kanan atas (dekat ikon CC) dengan sedikit pantulan,
-            // sambil memudar masuk, sehingga kesan Liquid Glass terasa
             unsafe {
                 let _ = KillTimer(Some(self.hwnd), T_FIN0 + i);
             }
@@ -390,7 +372,6 @@ impl Hud {
         let now = self.now();
         if self.bars[i].shown && !self.bars[i].time.visible(now) {
             self.bars[i].shown = false;
-            // hilang dengan mengecil ke sudut dan memudar (tanpa pantulan), lalu jendela disembunyikan
             let center = Vector3 { X: Self::box_w(self.dpi) - 28.0 * self.dpi, Y: 0.0, Z: 0.0 };
             let _ = motion::pop_out(&self.comp, self.bars[i].popup.root(), center, 0.8, motion::CC_CLOSE_MS);
             unsafe {
@@ -448,7 +429,6 @@ impl Hud {
                     K_MOVE => {
                         if !self.bars[i].over {
                             self.bars[i].over = true;
-                            // minta pemberitahuan keluar
                             let mut t = TRACKMOUSEEVENT {
                                 cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
                                 dwFlags: TME_LEAVE,
@@ -504,7 +484,6 @@ impl Hud {
                     T_HIDE0 | 2 => self.hide_if_idle(id - T_HIDE0),
                     T_FIN0 | 7 => {
                         let i = id - T_FIN0;
-                        // jika sempat muncul lagi selama animasi keluar, jangan disembunyikan
                         if i < self.bars.len() && !self.bars[i].shown {
                             self.bars[i].popup.hide();
                         }
@@ -532,7 +511,6 @@ impl Hud {
     }
 }
 
-/// Pusatkan glyph (font ikon menggambar di kiri-atas kotak).
 fn center(b: &Bitmap) -> Option<Bitmap> {
     let (w, h) = (b.w as usize, b.h as usize);
     let (mut minx, mut miny, mut maxx, mut maxy) = (w, h, 0usize, 0usize);

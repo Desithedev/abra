@@ -1,8 +1,3 @@
-//! LRCLIB (lrclib.net): basis data lirik terbuka, gratis, tanpa akun. Modul ini hanya menyusun alamat kueri, membaca
-//! jawabannya, dan membuat kunci cache; permintaan jaringannya dilakukan di lapisan platform.
-//!
-//! Data yang dikirim hanya judul, artis, album, dan durasi lagu.
-
 use super::json::{self, Json};
 
 pub const API: &str = "https://lrclib.net/api";
@@ -23,7 +18,6 @@ pub struct Found {
 }
 
 impl Found {
-    /// Teks untuk disimpan di cache dan diurai `lyrics::parse` (lirik tersinkron bila ada).
     pub fn text(&self) -> String {
         if self.instrumental {
             return String::new();
@@ -32,7 +26,6 @@ impl Found {
     }
 }
 
-/// Percent-encoding RFC 3986 (selain karakter "unreserved").
 pub fn encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len() * 3);
     for b in s.bytes() {
@@ -45,7 +38,6 @@ pub fn encode(s: &str) -> String {
     out
 }
 
-/// Kata yang menandai tambahan di judul video/streaming, bukan bagian nama lagu.
 const NOISE: [&str; 16] = [
     "official", "video", "audio", "lyric", "lyrics", "visualizer", "visualiser", "mv", "m/v", "hd", "4k", "remaster", "remastered",
     "explicit", "clean", "color coded",
@@ -56,8 +48,6 @@ fn is_noise(inner: &str) -> bool {
     NOISE.iter().any(|w| l.split(|c: char| !c.is_alphanumeric() && c != '/').any(|t| t == *w) || (w.contains(' ') && l.contains(w)))
 }
 
-/// Rapikan judul dan artis dari sesi media: "Artis - Judul (Official Video)" dari browser, "Artis - Topic", "ArtisVEVO",
-/// atau "Judul - Remastered 2011".
 pub fn clean(title: &str, artist: &str) -> (String, String) {
     let mut artist = artist.trim().to_string();
     for suffix in [" - Topic", "VEVO"] {
@@ -66,7 +56,6 @@ pub fn clean(title: &str, artist: &str) -> (String, String) {
             artist = artist.trim().to_string();
         }
     }
-    // buang (…) / […] yang berisi kata tambahan
     let mut t = String::new();
     let mut rest = title.trim();
     while let Some(i) = rest.find(['(', '[']) {
@@ -84,7 +73,6 @@ pub fn clean(title: &str, artist: &str) -> (String, String) {
     }
     t.push_str(rest);
     let mut title = t.split_whitespace().collect::<Vec<_>>().join(" ");
-    // "Artis - Judul": pisahkan bila artis kosong atau judul diawali nama artis
     for sep in [" - ", " – ", " — "] {
         if let Some((left, right)) = title.split_once(sep) {
             let (l, r) = (left.trim().to_string(), right.trim().to_string());
@@ -97,7 +85,6 @@ pub fn clean(title: &str, artist: &str) -> (String, String) {
             break;
         }
     }
-    // "Judul - Remastered 2011"
     for sep in [" - ", " – "] {
         if let Some((left, right)) = title.split_once(sep) {
             if is_noise(right) {
@@ -119,13 +106,11 @@ fn query(t: &Track, with_album: bool) -> String {
     q
 }
 
-/// Pencocokan tepat (butuh album dan durasi); `None` bila datanya tidak cukup.
 pub fn get_url(t: &Track) -> Option<String> {
     (!t.title.is_empty() && !t.artist.is_empty() && !t.album.trim().is_empty() && t.duration_s.is_some())
         .then(|| format!("{API}/get?{}", query(t, true)))
 }
 
-/// Pencarian longgar (judul + artis); hasilnya dipilih dengan [`pick_search`].
 pub fn search_url(t: &Track) -> Option<String> {
     (!t.title.is_empty()).then(|| {
         let mut q = format!("track_name={}", encode(&t.title));
@@ -148,13 +133,10 @@ fn found(o: &Json) -> Option<(Found, Option<f64>)> {
     Some((f, o.get("duration").and_then(Json::as_f64)))
 }
 
-/// Jawaban `/api/get` (satu objek).
 pub fn parse_get(body: &str) -> Option<Found> {
     found(&json::parse(body)?).map(|(f, _)| f)
 }
 
-/// Pilih hasil `/api/search` terbaik: durasi harus dekat (±8 detik) bila diketahui, utamakan lirik tersinkron, lalu yang
-/// durasinya paling dekat.
 pub fn pick_search(body: &str, duration_s: Option<u32>) -> Option<Found> {
     let j = json::parse(body)?;
     let mut best: Option<(Found, (bool, i64))> = None;
@@ -170,7 +152,6 @@ pub fn pick_search(body: &str, duration_s: Option<u32>) -> Option<Found> {
             }
             _ => 0,
         };
-        // kunci urut: lirik tersinkron dulu (false < true, jadi dibalik), lalu selisih durasi terkecil
         let key = (f.synced.is_none(), diff);
         if best.as_ref().is_none_or(|(_, k)| key < *k) {
             best = Some((f, key));
@@ -179,7 +160,6 @@ pub fn pick_search(body: &str, duration_s: Option<u32>) -> Option<Found> {
     best.map(|(f, _)| f)
 }
 
-/// Nama berkas cache untuk lagu ini (FNV-1a 64-bit dari data yang dinormalkan).
 pub fn cache_key(t: &Track) -> String {
     let norm = format!(
         "{}\u{1f}{}\u{1f}{}\u{1f}{}",
@@ -228,7 +208,6 @@ mod tests {
         assert_eq!(clean("Clocks", "Coldplay - Topic"), ("Clocks".into(), "Coldplay".into()));
         assert_eq!(clean("Clocks", "ColdplayVEVO"), ("Clocks".into(), "Coldplay".into()));
         assert_eq!(clean("Here Comes the Sun - Remastered 2009", "The Beatles"), ("Here Comes the Sun".into(), "The Beatles".into()));
-        // keterangan yang bukan tambahan dipertahankan
         assert_eq!(clean("Stay (feat. Justin Bieber)", "The Kid LAROI"), ("Stay (feat. Justin Bieber)".into(), "The Kid LAROI".into()));
         assert_eq!(clean("Anti-Hero", "Taylor Swift"), ("Anti-Hero".into(), "Taylor Swift".into()));
     }

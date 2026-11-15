@@ -1,5 +1,3 @@
-//! Log berkas minimal (tanpa dependensi). Satu baris per kejadian, dibatasi ukurannya.
-
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -11,7 +9,6 @@ pub fn init(path: PathBuf) {
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    // Potong bila terlalu besar: cukup mulai ulang, ini log diagnostik, bukan arsip.
     if std::fs::metadata(&path).map(|m| m.len() > MAX_BYTES).unwrap_or(false) {
         let _ = std::fs::remove_file(&path);
     }

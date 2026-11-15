@@ -1,5 +1,3 @@
-﻿//! Menggabungkan app yang dipin dengan window yang sedang berjalan menjadi item dock.
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pin {
     pub path: String,
@@ -11,7 +9,6 @@ pub struct Win {
     pub hwnd: isize,
     pub path: String,
     pub title: String,
-    /// Nama ramah dari metadata exe (FileDescription); kosong bila tidak ada.
     pub name: String,
 }
 
@@ -21,7 +18,6 @@ pub struct Item {
     pub name: String,
     pub path: String,
     pub pinned: bool,
-    /// Window milik item ini, yang paling baru difokus lebih dulu.
     pub hwnds: Vec<isize>,
 }
 
@@ -31,12 +27,44 @@ impl Item {
     }
 }
 
-/// Kunci identitas: path dinormalkan (huruf kecil, garis miring ke belakang).
 pub fn key_of(path: &str) -> String {
-    path.replace('/', "\\").to_lowercase()
+    path.replace('/', "\\").to_lowercase().split('\\').map(stable_segment).collect::<Vec<_>>().join("\\")
 }
 
-/// App UWP/Store berpath `shell:AppsFolder\<AUMID>`: stem path tidak berarti, pakai judul window.
+fn is_version(s: &str) -> bool {
+    s.contains('.') && s.chars().all(|c| c.is_ascii_digit() || c == '.')
+}
+
+fn package_parts(seg: &str) -> Option<(&str, &str, &str)> {
+    let parts: Vec<&str> = seg.split('_').collect();
+    if parts.len() == 5 && is_version(parts[1]) && !parts[0].is_empty() && !parts[4].is_empty() {
+        Some((parts[0], parts[3], parts[4]))
+    } else {
+        None
+    }
+}
+
+fn stable_segment(seg: &str) -> String {
+    if let Some(v) = seg.strip_prefix("app-") {
+        if is_version(v) || v.chars().all(|c| c.is_ascii_digit()) && !v.is_empty() {
+            return "app-*".to_string();
+        }
+    }
+    match package_parts(seg) {
+        Some((name, resource, publisher)) => format!("{name}__{resource}__{publisher}"),
+        None => seg.to_string(),
+    }
+}
+
+pub fn package_family(path: &str) -> Option<String> {
+    let p = path.replace('/', "\\");
+    let lower = p.to_lowercase();
+    let at = lower.find("\\windowsapps\\")? + "\\windowsapps\\".len();
+    let seg = p[at..].split('\\').next()?;
+    let (name, _, publisher) = package_parts(seg)?;
+    Some(format!("{name}_{publisher}"))
+}
+
 fn display_name(w: &Win) -> String {
     if !w.name.trim().is_empty() {
         return w.name.trim().to_string();
@@ -56,7 +84,6 @@ pub fn name_from_path(path: &str) -> String {
         Some((stem, _)) if !stem.is_empty() => stem,
         _ => file,
     };
-    // buang akhiran teknis pada nama berkas (mis. "WhatsApp.Root" → "WhatsApp")
     for suffix in [".Root", ".Desktop", ".App", ".Win32", ".x64"] {
         if let Some(base) = stem.strip_suffix(suffix) {
             if !base.is_empty() {
@@ -67,9 +94,6 @@ pub fn name_from_path(path: &str) -> String {
     stem.to_string()
 }
 
-/// Urutan: semua pin (sesuai urutan pin), lalu app berjalan yang tidak dipin menurut
-/// kemunculan pertamanya. `seen` menyimpan urutan itu antar pemanggilan, sehingga
-/// ikon tidak berpindah tempat setiap kali ada window baru.
 pub fn merge(pins: &[Pin], wins: &[Win], recent: &dyn Fn(isize) -> i64, seen: &mut Vec<String>) -> Vec<Item> {
     let mut items: Vec<Item> = pins
         .iter()
@@ -81,7 +105,12 @@ pub fn merge(pins: &[Pin], wins: &[Win], recent: &dyn Fn(isize) -> i64, seen: &m
         let key = key_of(&w.path);
         let slot = items.iter_mut().chain(extra.iter_mut()).find(|i| i.key == key);
         match slot {
-            Some(i) => i.hwnds.push(w.hwnd),
+            Some(i) => {
+                if i.hwnds.is_empty() && !w.path.is_empty() {
+                    i.path = w.path.clone();
+                }
+                i.hwnds.push(w.hwnd);
+            }
             None => extra.push(Item {
                 key,
                 name: display_name(w),
@@ -92,7 +121,6 @@ pub fn merge(pins: &[Pin], wins: &[Win], recent: &dyn Fn(isize) -> i64, seen: &m
         }
     }
 
-    // urutan kemunculan untuk yang tidak dipin
     seen.retain(|k| extra.iter().any(|i| &i.key == k));
     for i in &extra {
         if !seen.contains(&i.key) {
@@ -133,6 +161,26 @@ mod tests {
         let items = merge(&[pin("C:\\a.exe"), pin("C:\\b.exe")], &[win(5, "c:\\B.EXE")], &|_| 0, &mut seen);
         assert!(!items[0].running());
         assert_eq!(items[1].hwnds, vec![5]);
+    }
+
+    #[test]
+    fn updated_store_app_still_matches_its_old_pin() {
+        let old = "C:\\Program Files\\WindowsApps\\Claude_5.11492.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe";
+        let new = "C:\\Program Files\\WindowsApps\\Claude_5.11492.5.0_x64__pzs8sxrjxfjjc\\app\\claude.exe";
+        assert_eq!(key_of(old), key_of(new));
+        let mut seen = vec![];
+        let items = merge(&[pin(old)], &[win(7, new)], &|_| 0, &mut seen);
+        assert_eq!(items.len(), 1);
+        assert!(items[0].pinned && items[0].running());
+        assert_eq!(items[0].path, new);
+        assert_eq!(package_family(old).as_deref(), Some("Claude_pzs8sxrjxfjjc"));
+        assert_eq!(package_family("C:\\Windows\\notepad.exe"), None);
+    }
+
+    #[test]
+    fn squirrel_versioned_folder_is_ignored_in_key() {
+        assert_eq!(key_of("C:\\Users\\u\\AppData\\Local\\Discord\\app-1.0.9001\\Discord.exe"), key_of("C:\\Users\\u\\AppData\\Local\\Discord\\app-1.0.9002\\Discord.exe"));
+        assert_ne!(key_of("C:\\a\\app-data\\x.exe"), key_of("C:\\a\\app-1.0\\x.exe"));
     }
 
     #[test]
@@ -190,5 +238,3 @@ mod tests {
         assert_eq!(name_from_path("noext"), "noext");
     }
 }
-
-

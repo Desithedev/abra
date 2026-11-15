@@ -1,6 +1,3 @@
-﻿//! Garis waktu tampil/sembunyi HUD: muncul saat nilai berubah atau tepi disentuh, bertahan sebentar,
-//! tetap selama dipegang (kursor di atasnya / sedang di-drag), lalu hilang. Waktu dioper dari luar.
-
 pub const LINGER_MS: i64 = 1500;
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -10,12 +7,10 @@ pub struct Timeline {
 }
 
 impl Timeline {
-    /// Nilai berubah atau tepi disentuh: tampil dan perpanjang hitungan.
     pub fn poke(&mut self, now: i64) {
         self.visible_until = now + LINGER_MS;
     }
 
-    /// Kursor di HUD atau slider sedang di-drag: tampil tanpa batas sampai dilepas.
     pub fn hold(&mut self, held: bool, now: i64) {
         self.held = held;
         if !held {
@@ -27,7 +22,6 @@ impl Timeline {
         self.held || now < self.visible_until
     }
 
-    /// Sisa ms sampai sembunyi bila tak ada yang memperpanjang (untuk menjadwalkan satu timer).
     pub fn remaining(&self, now: i64) -> Option<i64> {
         if self.held || now >= self.visible_until {
             None

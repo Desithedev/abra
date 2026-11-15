@@ -1,4 +1,3 @@
-//! Ikon ABRA di abra-guard.exe.
 include!("../app/icon_res.rs");
 
 fn main() {

@@ -1,6 +1,3 @@
-//! Ikon aplikasi dari shell sebagai piksel BGRA ter-premultiply (siap diunggah ke Composition).
-//! Pemuatan jalan di thread pekerja agar thread UI tidak tersendat oleh disk/shell.
-
 use std::sync::mpsc::{channel, Receiver, Sender};
 use windows::core::HSTRING;
 use windows::Win32::Foundation::SIZE;
@@ -15,15 +12,9 @@ use windows::Win32::UI::Shell::{IShellItemImageFactory, SHCreateItemFromParsingN
 pub struct Bitmap {
     pub w: u32,
     pub h: u32,
-    /// BGRA, baris dari atas ke bawah, alfa ter-premultiply.
     pub bgra: Vec<u8>,
 }
 
-/// Muat ikon `px`×`px`. Kunci internal host UWP (`path?judul`) diabaikan; hasilnya ikon exe-nya.
-/// Thread pemanggil harus sudah menginisialisasi COM.
-/// Susutkan ikon yang lebih besar dari `px` ke ukuran `px` dengan filter area-rata-rata (kotak berbobot pecahan).
-/// Windows sering mengembalikan ikon 128/256 px walau diminta lebih kecil; bila langsung dirender kecil oleh
-/// compositor (penyusutan >2× tanpa penyaringan), pinggirnya bergerigi.
 pub fn fit(b: Bitmap, px: u32) -> Bitmap {
     if b.w <= px && b.h <= px {
         return b;
@@ -69,7 +60,6 @@ fn key(path: &str) -> String {
     path.replace('/', "\\").to_lowercase()
 }
 
-/// Ikon kustom untuk `path` (berkas gambar), atau `None` untuk mengembalikan ikon asli.
 pub fn set_override(path: &str, image: Option<String>) {
     let mut g = OVERRIDES.lock().unwrap();
     let m = g.get_or_insert_with(Default::default);
@@ -87,13 +77,11 @@ pub fn override_for(path: &str) -> Option<String> {
     OVERRIDES.lock().unwrap().as_ref().and_then(|m| m.get(&key(path)).cloned())
 }
 
-/// Apakah ikon `path` berasal dari pilihan pengguna atau paket ikon (sudah berbentuk jadi: tanpa pelat/gaya tambahan).
 pub fn is_themed(path: &str) -> bool {
     override_for(path).is_some() || crate::iconpack::lookup(path).is_some()
 }
 
 pub fn load(path: &str, px: i32) -> Option<Bitmap> {
-    // urutan: ikon pilihan pengguna → paket ikon → ikon asli dari shell
     if let Some(img) = override_for(path) {
         if let Some(b) = crate::wic::decode_file_fit(&img, px as u32) {
             return Some(b);
@@ -107,8 +95,6 @@ pub fn load(path: &str, px: i32) -> Option<Bitmap> {
     load_shell(path, px)
 }
 
-/// Thumbnail isi berkas (foto, dokumen, video) muat dalam kotak `px`×`px`, rasio aspek dipertahankan; berkas tanpa
-/// thumbnail mendapat ikonnya. Thread pemanggil harus sudah menginisialisasi COM.
 pub fn thumbnail(path: &str, px: i32) -> Option<Bitmap> {
     unsafe {
         let factory: IShellItemImageFactory = SHCreateItemFromParsingName(&HSTRING::from(path), None).ok()?;
@@ -140,7 +126,6 @@ pub fn thumbnail(path: &str, px: i32) -> Option<Bitmap> {
         if lines == 0 {
             return None;
         }
-        // Foto/JPEG datang tanpa alfa (semua 0): jadikan opak agar tidak tak terlihat.
         if buf.chunks_exact(4).all(|p| p[3] == 0) {
             for p in buf.chunks_exact_mut(4) {
                 p[3] = 255;
@@ -154,8 +139,6 @@ fn load_shell(path: &str, px: i32) -> Option<Bitmap> {
     let path = path.split('?').next().unwrap_or(path);
     unsafe {
         let factory: IShellItemImageFactory = SHCreateItemFromParsingName(&HSTRING::from(path), None).ok()?;
-        // Minta ukuran lebih besar (hingga 256) lalu susutkan sendiri dengan filter area: ikon yang dirender shell pada
-        // ukuran kecil sering bertepi bergerigi, sedangkan versi besar lalu disusutkan menghasilkan tepi halus.
         let req = (px * 2).clamp(128, 256);
         let hbmp = factory.GetImage(SIZE { cx: req, cy: req }, SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK).ok()?;
 
@@ -170,7 +153,7 @@ fn load_shell(path: &str, px: i32) -> Option<Bitmap> {
             bmiHeader: BITMAPINFOHEADER {
                 biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
                 biWidth: w as i32,
-                biHeight: -(h as i32), // negatif = dari atas ke bawah
+                biHeight: -(h as i32),
                 biPlanes: 1,
                 biBitCount: 32,
                 biCompression: BI_RGB.0,
@@ -190,8 +173,6 @@ fn load_shell(path: &str, px: i32) -> Option<Bitmap> {
     }
 }
 
-/// Pekerja ikon: kirim path, terima `(path, bitmap)`. `notify` dipanggil (dari thread pekerja)
-/// setelah hasil masuk antrean, mis. memposting pesan ke thread UI.
 pub struct Worker {
     pub requests: Sender<String>,
     pub results: Receiver<(String, Option<Bitmap>)>,

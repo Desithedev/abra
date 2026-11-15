@@ -1,7 +1,3 @@
-//! Notch ABRA generasi baru, dirancang sendiri (clean room). Satu jendela tanpa aktivasi di tengah atas layar ditambah
-//! jendela bayangan tembus klik di bawahnya. Keputusan keadaan, ukuran, dan prioritas aktivitas ada di
-//! `nacre_core::notch`; modul ini hanya menerjemahkan kejadian Win32 ke sana lalu menggambar hasilnya.
-
 mod body;
 mod draw;
 mod drop;
@@ -47,24 +43,15 @@ const WM_POWERBROADCAST: u32 = 0x0218;
 const WM_SETTINGCHANGE: u32 = 0x001A;
 const STRIP_ENTER: u32 = WM_APP + 14;
 const STRIP_LEAVE: u32 = WM_APP + 15;
-/// Dari menu bar: naikkan kembali ke paling atas.
 const WM_TOPMOST: u32 = WM_APP + 72;
-/// Buka panel (mis. dari pintasan).
 const WM_OPEN: u32 = WM_APP + 73;
-/// Sesi media berubah / pita visualizer baru.
 const WM_MEDIA: u32 = WM_APP + 10;
 const WM_BANDS: u32 = WM_APP + 11;
-/// Jawaban pekerja lirik (WM_APP+12/13 dipakai menu popup).
 const WM_LYRICS: u32 = WM_APP + 18;
-/// Seret-taruh berkas (wParam = drop::ENTER/OVER/LEAVE/DROP, lParam = titik layar).
 const WM_DND: u32 = WM_APP + 19;
-/// Setelah dilepas di zona "Salin ke…" / "Buka dengan…" (wParam = zona): dikerjakan di luar callback OLE.
 const WM_AFTERDROP: u32 = WM_APP + 20;
-/// Pemantau unduhan punya data baru.
 const WM_DOWNLOAD: u32 = WM_APP + 21;
-/// Acara kalender untuk kartu kalender sudah dibaca.
 const WM_AGENDA: u32 = WM_APP + 23;
-/// Kemajuan sesi "Kirim ke HP".
 const WM_SEND: u32 = WM_APP + 24;
 
 const T_DWELL: usize = 1;
@@ -84,16 +71,12 @@ const T_MINUTE: usize = 14;
 const T_PROGRESS: usize = 15;
 const T_LYRIC: usize = 16;
 const T_PRIVACY: usize = 17;
-/// Unduhan selesai sudah cukup lama tampil.
 const T_DLDONE: usize = 18;
-/// Pemeriksa sesi Kirim yang menganggur (berhenti setelah 15 menit), selesai-kirim yang sudah cukup lama tampil, dan
-/// pemicu uji `NACRE_TEST_SEND`.
 const T_SEND: usize = 19;
 const T_SENDDONE: usize = 20;
 const T_TESTSEND: usize = 21;
 const SEND_IDLE: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
-/// Sesi "Kirim ke HP" yang sedang berjalan.
 struct SendSess {
     server: nacre_platform::sendsrv::Server,
     qr: Option<CompositionDrawingSurface>,
@@ -104,10 +87,8 @@ struct SendSess {
     done_at: Option<Instant>,
 }
 
-/// Jendela notch (dp): muat panel terbuka terbesar beserta telinga.
 const WIN_W: f32 = 640.0;
 const WIN_H: f32 = 222.0;
-/// Ruang bayangan di sekitar jendela notch (dp).
 const SHADOW_PAD: f32 = 36.0;
 
 static NOTCH_HWND: AtomicIsize = AtomicIsize::new(0);
@@ -116,11 +97,9 @@ static BUSY: AtomicBool = AtomicBool::new(false);
 pub struct Options {
     pub glass: Option<Tier>,
     pub mode: Vis,
-    /// Cadangkan strip di atas layar (notch tetap).
     pub reserve: bool,
 }
 
-/// Animasikan satu properti skalar dengan pegas compositor.
 pub(crate) fn spring(comp: &Compositor, obj: &CompositionObject, prop: &str, v: f32, ratio: f32, period_ms: u32) {
     let go = || -> windows_core::Result<()> {
         let a = comp.CreateSpringScalarAnimation()?;
@@ -136,7 +115,6 @@ fn ts(ms: u32) -> windows::Foundation::TimeSpan {
     windows::Foundation::TimeSpan { Duration: ms as i64 * 10_000 }
 }
 
-/// Animasi skalar dengan jeda; nilai awal dipasang selama jeda.
 fn keyframes(comp: &Compositor, obj: &CompositionObject, prop: &str, from: f32, to: f32, ms: u32, delay: u32) -> windows_core::Result<()> {
     let e = crate::motion::ease(comp)?;
     let a = comp.CreateScalarKeyFrameAnimation()?;
@@ -202,8 +180,18 @@ fn auto_tier(over: Option<Tier>) -> Tier {
     })
 }
 
+static ISLAND_GAP: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+fn island_gap(dpi: f32) -> f32 {
+    if crate::prefs::get().notch_island {
+        (7.0 * dpi).round()
+    } else {
+        0.0
+    }
+}
+
 fn win_size(dpi: f32, screen_w: i32) -> (i32, i32) {
-    (((WIN_W * dpi) as i32).min(screen_w), (WIN_H * dpi).ceil() as i32)
+    (((WIN_W * dpi) as i32).min(screen_w), (WIN_H * dpi + island_gap(dpi)).ceil() as i32)
 }
 
 pub struct Notch {
@@ -221,6 +209,7 @@ pub struct Notch {
     size: Size,
     first: bool,
     tracking: bool,
+    hover_act: Option<Action>,
     regions: Vec<Region>,
 
     timer: Timer,
@@ -228,7 +217,6 @@ pub struct Notch {
     last_sec: i64,
     battery: Option<(u8, bool)>,
     charging_fresh: bool,
-    /// Indeks item sapaan & info yang sedang tampil.
     glance_idx: usize,
 
     media: Media,
@@ -244,7 +232,6 @@ pub struct Notch {
     tint: Option<[u8; 3]>,
     loopback: Option<Loopback>,
     live_vis: views::Live,
-    /// Penggeser posisi sedang diseret: (x awal, lebar, posisi 0..1).
     seek_drag: Option<(f32, f32, f32)>,
 
     album: String,
@@ -252,10 +239,8 @@ pub struct Notch {
     lyr: Option<nacre_core::notch::lyrics::Lyrics>,
     lyr_state: LyrState,
     lyr_lrclib: bool,
-    /// Kunci cache lagu yang lirik-nya sedang ditunggu/ditampilkan, dan lagu (judul+artis) terakhir.
     lyr_key: String,
     lyr_track: String,
-    /// Baris yang terakhir ditampilkan (untuk animasi pergantian).
     lyr_idx: Option<usize>,
 
     shelf: nacre_core::notch::shelf::Shelf,
@@ -263,26 +248,19 @@ pub struct Notch {
     dnd: drop::Shared,
     _drop_target: Option<windows::Win32::System::Ole::IDropTarget>,
     drop_zone: Option<usize>,
-    /// Berkas yang menunggu "Salin ke…" / "Buka dengan…".
     pending: Vec<String>,
     menu: Option<Menu>,
-    /// Berkas Rak yang menu klik-kanannya sedang terbuka.
     menu_item: Option<usize>,
-    /// (mikrofon, kamera) sedang dipakai.
     privacy: (bool, bool),
-    /// Unduhan: pemantau (hidup hanya bila pengaturannya aktif), yang ditampilkan, yang baru selesai, ikon app.
     dl_watch: Option<nacre_platform::dlwatch::Watch>,
     dl: Option<nacre_core::notch::download::Download>,
     dl_done: Option<nacre_core::notch::download::Download>,
     dl_icons: std::collections::HashMap<String, Option<CompositionDrawingSurface>>,
-    /// Kartu kalender: pilihan (hari dari hari ini), pembaca acara (hidup saat pertama dibutuhkan), acara terakhir.
     cal_sel: i32,
     agenda: Option<nacre_platform::agenda::Agenda>,
     cal_events: Option<(views::Date, Option<Vec<nacre_platform::agenda::Event>>)>,
-    /// "Kirim ke HP": sesi aktif, atau gagal dimulai (ditampilkan di tab Rak sampai Selesai).
     send: Option<SendSess>,
     send_err: bool,
-    /// App sumber lagu (AppUserModelID) dan ikonnya, dipakai hanya sebagai pengganti sampul bila lagu tanpa sampul.
     media_app: String,
     app_icons: std::collections::HashMap<String, Option<CompositionDrawingSurface>>,
     vis: Vis,
@@ -318,14 +296,14 @@ impl Notch {
                 0, 0, 400, 200,
                 None, None, Some(hi), None,
             )?;
-            let dpi = GetDpiForWindow(hwnd).max(96) as f32 / 96.0;
+            let dpi = GetDpiForWindow(hwnd).max(96) as f32 / 96.0 * crate::prefs::ui_scale();
             let screen_w = sys::screen_size().0;
             let win = win_size(dpi, screen_w);
             let _ = SetWindowPos(hwnd, None, (screen_w - win.0) / 2, 0, win.0, win.1, SWP_NOACTIVATE | SWP_NOZORDER);
             let comp = host.compositor.clone();
             let surface = host.attach(hwnd, (win.0 as f32, win.1 as f32))?;
             let tier = auto_tier(opts.glass);
-            let gfx = Gfx::new(&comp)?;
+            let gfx = Gfx::shared(&comp)?;
             let body = Body::new(&comp, &gfx, &surface.root, win, dpi, tier)?;
             let pad = (SHADOW_PAD * dpi).round();
             let shadow = match Shadow::new(&comp, (win.0 + 2 * pad as i32, win.1 + pad as i32), pad) {
@@ -350,6 +328,7 @@ impl Notch {
                 size: state::size(rest, dpi),
                 first: true,
                 tracking: false,
+                hover_act: None,
                 regions: Vec::new(),
                 timer: Timer::new(std::env::var("NACRE_TIMER_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(25 * 60)),
                 t0: Instant::now(),
@@ -360,7 +339,6 @@ impl Notch {
                 media: {
                     let hw = hwnd.0 as isize;
                     if std::env::var_os("NACRE_NO_MEDIA").is_some() {
-                        // kait uji: abaikan sesi media sistem (mis. untuk menguji notch diam)
                         let (commands, _) = std::sync::mpsc::channel();
                         let (_, snapshots) = std::sync::mpsc::channel();
                         Media { commands, snapshots }
@@ -426,7 +404,6 @@ impl Notch {
                 tier,
                 glass_override: opts.glass,
             });
-            // hitung tampilan awal dari data (mis. sapaan & info), tanpa animasi
             n.refresh();
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(n) as isize);
             NOTCH_HWND.store(hwnd.0 as isize, Ordering::Relaxed);
@@ -486,9 +463,6 @@ impl Notch {
         }
     }
 
-    // ---------- kirim ke HP ----------
-
-    /// Mulai sesi Kirim untuk `paths` dan buka tab Rak yang menampilkan QR-nya.
     fn start_send(&mut self, paths: Vec<String>) {
         if paths.is_empty() {
             return;
@@ -541,14 +515,11 @@ impl Notch {
         kill(self.hwnd, T_SEND);
         kill(self.hwnd, T_SENDDONE);
         self.refresh();
-        // panel tadi ditahan oleh sesi: tutup bila kursor sudah tidak di notch
         if !self.tracking && matches!(self.mode, Mode::Open(_)) {
             self.dispatch(Event::Leave);
         }
     }
 
-    /// Panel QR tetap terbuka selama sesi Kirim (atau pesan gagalnya) tampil, walau kursor keluar dari notch; ditutup
-    /// lewat tombol Selesai, batas waktu sesi, atau pindah tab.
     fn send_pinned(&self) -> bool {
         self.mode == Mode::Open(Tab::Shelf) && (self.send.is_some() || self.send_err)
     }
@@ -574,14 +545,11 @@ impl Notch {
         }
     }
 
-    /// Kemajuan kirim untuk notch tertutup: (pecahan, selesai) selama mengirim atau sesaat setelah selesai.
     fn send_compact(&self) -> Option<(f32, bool)> {
         let s = self.send.as_ref()?;
         let done = s.done_at.is_some_and(|t| t.elapsed().as_millis() < nacre_core::notch::download::DONE_LINGER_MS as u128);
         (s.prog.active || done).then(|| (nacre_core::notch::send::fraction(s.prog.sent, s.prog.total), done && !s.prog.active))
     }
-
-    // ---------- kalender & badge app ----------
 
     fn today() -> views::Date {
         let t = nacre_platform::time::local_now();
@@ -593,7 +561,6 @@ impl Notch {
         nacre_core::island::calendar::add_days(y, m, d, self.cal_sel)
     }
 
-    /// Minta acara tanggal terpilih bila belum ada (pembaca kalender dinyalakan saat pertama dibutuhkan).
     fn ensure_events(&mut self) {
         let date = self.cal_date();
         if self.cal_events.as_ref().is_some_and(|(d, _)| *d == date) {
@@ -620,7 +587,6 @@ impl Notch {
         }
     }
 
-    /// Ikon app sumber lagu (pengganti sampul bila lagu tidak punya sampul): lewat AppUserModelID (shell:AppsFolder), atau exe proses bila id-nya nama berkas .exe.
     fn ensure_app_icon(&mut self) {
         let id = self.media_app.clone();
         if id.is_empty() || self.app_icons.contains_key(&id) {
@@ -634,16 +600,12 @@ impl Notch {
         self.app_icons.insert(id, s);
     }
 
-    // ---------- unduhan ----------
-
-    /// Nyalakan/matikan pemantau unduhan sesuai pengaturan.
     fn sync_download_watch(&mut self) {
         let on = crate::prefs::get().notch_downloads;
         if on && self.dl_watch.is_none() {
             let hw = self.hwnd.0 as isize;
             self.dl_watch = Some(nacre_platform::dlwatch::spawn(move || post(hw, WM_DOWNLOAD)));
         } else if !on && self.dl_watch.is_some() {
-            // menutup penerima menghentikan thread pada kiriman berikutnya
             self.dl_watch = None;
             self.dl = None;
             self.dl_done = None;
@@ -675,7 +637,6 @@ impl Notch {
         }
     }
 
-    /// Data tampilan unduhan (fungsi terkait, bukan metode, agar tidak meminjam seluruh `self` saat menggambar).
     fn download_view<'a>(
         dl: &'a Option<nacre_core::notch::download::Download>,
         dl_done: &'a Option<nacre_core::notch::download::Download>,
@@ -699,8 +660,6 @@ impl Notch {
             up: false,
         })
     }
-
-    // ---------- sapaan & info ----------
 
     fn glance_items(&self) -> Vec<glance::Item> {
         glance::items(self.battery.is_some())
@@ -726,7 +685,6 @@ impl Notch {
         }
     }
 
-    /// Pergantian sapaan & info hanya berjalan saat tampil dan tidak sedang diintip/terbuka.
     fn sync_glance(&self) {
         if self.look == state::look(Mode::Rest, Some(state::Activity::Glance)) {
             let ms = std::env::var("NACRE_GLANCE_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(glance::ROTATE_MS);
@@ -739,7 +697,6 @@ impl Notch {
     fn rotate_glance(&mut self) {
         let n = self.glance_items().len();
         self.glance_idx = glance::next(self.glance_idx, n);
-        // isi lama naik dan memudar, isi baru naik dari bawah; ukuran notch tetap
         self.retire_content(120);
         let rise = 6.0 * self.dpi;
         if let Ok(g) = self.body.ghost.cast::<CompositionObject>() {
@@ -754,8 +711,6 @@ impl Notch {
         }
     }
 
-    // ---------- keadaan ----------
-
     fn dispatch(&mut self, ev: Event) {
         let open_on = if crate::prefs::get().notch_hover_open { OpenOn::Hover } else { OpenOn::Click };
         let next = state::step(self.mode, ev, open_on, self.tracking);
@@ -767,7 +722,6 @@ impl Notch {
         }
     }
 
-    /// Hitung ulang tampilan dari mode + data; beranimasi bila berubah, selain itu cukup gambar ulang isinya.
     fn refresh(&mut self) {
         let look = state::look(self.mode, state::activity(&self.live()));
         if look != self.look || self.first {
@@ -796,7 +750,6 @@ impl Notch {
         self.first = false;
         self.look = new;
         let view_changed = old.view != new.view || first;
-        // kalender kembali ke hari ini setiap panel ditutup
         if !matches!(new.view, View::Open(_)) {
             self.cal_sel = 0;
         }
@@ -813,24 +766,32 @@ impl Notch {
         }
     }
 
-    /// Ukuran target untuk tampilan sekarang, badan + bayangan ikut beranimasi.
     fn apply_size(&mut self, springy: Option<(f32, u32)>) {
         let (px0, pw, ph) = (self.x0(), self.size.w, self.size.h);
         let mut z = state::size(self.look, self.dpi);
         z.radius *= crate::prefs::round(crate::prefs::Role::Notch);
         z.w = z.w.round();
         z.h = z.h.round();
+        let gap = island_gap(self.dpi);
+        if gap > 0.0 {
+            z.radius = (z.h / 2.0).min(36.0 * self.dpi);
+        }
+        ISLAND_GAP.store(gap.to_bits(), std::sync::atomic::Ordering::Relaxed);
+        self.body.set_island(gap, self.shown);
+        if let Some(sh) = self.shadow.as_mut() {
+            sh.set_island(gap, self.shown);
+        }
         self.size = z;
         let x0 = self.x0();
         self.body.set_geometry(self.win, x0, z.w, z.h, z.radius, springy);
         let (blur, dy, op) = state::shadow(self.look);
-        let over = self.body.top_over;
+        let over = if gap > 0.0 { 0.0 } else { self.body.top_over };
         if let Some(sh) = self.shadow.as_mut() {
             sh.follow(&self.paint.gfx, (x0, -over, z.w, z.h + over), z.radius, (blur * self.dpi, dy * self.dpi, op), springy);
         }
         let e = self.body.ear;
         let (l, r) = (px0.min(x0) - e, (px0 + pw).max(x0 + z.w) + e);
-        self.set_region((l.max(0.0), 0.0, r.min(self.win.0 as f32), ph.max(z.h)));
+        self.set_region((l.max(0.0), 0.0, r.min(self.win.0 as f32), gap + ph.max(z.h)));
         timer(self.hwnd, T_REGION, 700);
     }
 
@@ -843,7 +804,7 @@ impl Notch {
 
     fn settle_region(&self) {
         let (x0, e) = (self.x0(), self.body.ear);
-        self.set_region(((x0 - e).max(0.0), 0.0, (x0 + self.size.w + e).min(self.win.0 as f32), self.size.h));
+        self.set_region(((x0 - e).max(0.0), 0.0, (x0 + self.size.w + e).min(self.win.0 as f32), island_gap(self.dpi) + self.size.h));
     }
 
     fn render(&mut self) {
@@ -893,7 +854,6 @@ impl Notch {
             None if self.send_err => Some(views::SendView { qr: None, qr_px: 0.0, title: String::new(), status: String::new(), frac: 0.0, done: false, error: true }),
             None => None,
         };
-        // tanpa sampul: ikon app pemutar menggantikan sampulnya (tidak pernah ditampilkan sebagai badge)
         let app_icon = if self.art.is_none() { self.app_icons.get(&self.media_app).and_then(|s| s.as_ref()) } else { None };
         let pos_ms = self.position_ms();
         let media = self.has_media.then(|| MediaView {
@@ -927,11 +887,17 @@ impl Notch {
             send_zone: crate::prefs::get().notch_send,
         };
         views::draw(&mut self.paint, &c, self.look, f, &d, &mut self.regions, &mut self.live_vis);
+        if let Some(r) = self.hover_act.and_then(|a| self.regions.iter().find(|r| r.action == a)) {
+            if let Some(v) = &r.vis {
+                let k = hover_scale(r.action);
+                let _ = v.SetCenterPoint(Vector3 { X: r.x + r.w / 2.0, Y: r.y + r.h / 2.0, Z: 0.0 });
+                let _ = v.SetScale(Vector3 { X: k, Y: k, Z: 1.0 });
+            }
+        }
         self.sync_visualizer();
         self.sync_progress();
     }
 
-    /// Isi lama pindah ke lapisan ghost lalu memudar.
     fn retire_content(&mut self, ms: u32) {
         let go = || -> windows_core::Result<()> {
             let kids = self.body.content.Children()?;
@@ -950,7 +916,6 @@ impl Notch {
         timer(self.hwnd, T_GHOST, 260);
     }
 
-    /// Isi baru masuk. Membuka panel: tertunda, memudar masuk sambil sedikit membesar dan turun ke tempatnya.
     fn intro(&self, opening: bool) {
         let go = || -> windows_core::Result<()> {
             let c: CompositionObject = self.body.content.cast()?;
@@ -971,8 +936,6 @@ impl Notch {
         };
         let _ = go();
     }
-
-    // ---------- musik ----------
 
     fn position_ms(&self) -> i64 {
         let extra = if self.playing { self.pos_at.elapsed().as_millis() as i64 } else { 0 };
@@ -1021,8 +984,6 @@ impl Notch {
         }
     }
 
-    // ---------- lirik ----------
-
     fn request_lyrics(&mut self) {
         self.lyr = None;
         self.lyr_idx = None;
@@ -1065,7 +1026,6 @@ impl Notch {
         }
     }
 
-    /// Bangun tepat saat baris berikutnya dimulai (tanpa polling); hanya selama lagu diputar.
     fn schedule_lyric(&self) {
         kill(self.hwnd, T_LYRIC);
         let Some(l) = &self.lyr else { return };
@@ -1088,7 +1048,6 @@ impl Notch {
                 self.swap_lyric();
             } else if self.mode == Mode::Open(Tab::Play) || self.look.view == View::Compact(state::Activity::Player) {
                 self.render();
-                // maju satu baris: isi lirik bergulir naik ke posisi barunya
                 if forward {
                     if let Some(sc) = &self.live_vis.lyric_scroll {
                         if let Ok(o) = sc.cast::<CompositionObject>() {
@@ -1101,7 +1060,6 @@ impl Notch {
         self.schedule_lyric();
     }
 
-    /// Baris lirik ringkas berganti: baris lama naik dan memudar, baris baru naik dari bawah.
     fn swap_lyric(&mut self) {
         let rise = state::motion::LYRIC_RISE_DP * self.dpi;
         let ms = state::motion::LYRIC_SWAP_MS;
@@ -1129,9 +1087,7 @@ impl Notch {
         }
     }
 
-    /// Visualizer hanya hidup saat musik ringkas tampil dan lagu diputar (loopback berhenti total selain itu).
     fn sync_visualizer(&mut self) {
-        // tetap hidup selama lagu diputar dan notch terlihat (tidak dinyalakan-matikan tiap ganti tampilan)
         let want = self.has_media && self.playing && self.shown && !self.overlap.fullscreen && !self.off;
         if want && self.loopback.is_none() {
             let hw = self.hwnd.0 as isize;
@@ -1149,7 +1105,6 @@ impl Notch {
         }
     }
 
-    /// Waktu lagu di tab Putar diperbarui tiap detik selama terlihat dan diputar.
     fn sync_progress(&self) {
         if self.mode == Mode::Open(Tab::Play) && self.has_media && self.playing && self.seek_drag.is_none() {
             timer(self.hwnd, T_PROGRESS, 1000);
@@ -1177,7 +1132,6 @@ impl Notch {
         }
     }
 
-    /// Lepas penggeser: lompat ke posisi itu. `true` bila memang sedang menyeret.
     fn on_up(&mut self) -> bool {
         let Some((_, _, fr)) = self.seek_drag.take() else { return false };
         if self.dur_ms > 0 {
@@ -1190,8 +1144,6 @@ impl Notch {
         self.schedule_lyric();
         true
     }
-
-    // ---------- Rak & seret-taruh ----------
 
     fn load_shelf_icons(&mut self) {
         let px = (40.0 * self.dpi).round() as i32;
@@ -1324,8 +1276,6 @@ impl Notch {
         timer(self.hwnd, T_PRIVACY, 3000);
     }
 
-    // ---------- input ----------
-
     fn on_move(&mut self) {
         if !self.tracking {
             let mut t = TRACKMOUSEEVENT { cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32, dwFlags: TME_LEAVE, hwndTrack: self.hwnd, dwHoverTime: 0 };
@@ -1341,20 +1291,33 @@ impl Notch {
         self.dispatch(Event::Enter);
         if self.mode == Mode::Peek && crate::prefs::get().notch_hover_open {
             if self.cursor_on_media_button() {
-                // di atas tombol mundur/putar/maju: biarkan diklik tanpa membuka panel
                 kill(self.hwnd, T_DWELL);
             } else {
-                // dimulai ulang tiap gerakan: panel terbuka hanya bila kursor benar-benar berhenti di notch
                 timer(self.hwnd, T_DWELL, motion::DWELL_MS);
             }
         }
     }
 
+    fn on_hover(&mut self, x: f32, y: f32) {
+        let hit = self.regions.iter().find(|r| r.vis.is_some() && r.hit(x, y)).map(|r| r.action);
+        if hit == self.hover_act {
+            return;
+        }
+        for (a, on) in [(self.hover_act, false), (hit, true)] {
+            let Some(r) = a.and_then(|a| self.regions.iter().find(|r| r.action == a)) else { continue };
+            let Some(v) = &r.vis else { continue };
+            let to = if on { hover_scale(r.action) } else { 1.0 };
+            let Ok(comp) = v.Compositor() else { continue };
+            let _ = crate::motion::hover_pop(&comp, v, Vector3 { X: r.x + r.w / 2.0, Y: r.y + r.h / 2.0, Z: 0.0 }, to);
+        }
+        self.hover_act = hit;
+    }
+
     fn on_leave(&mut self) {
+        self.on_hover(-1.0, -1.0);
         self.tracking = false;
         kill(self.hwnd, T_DWELL);
         if self.seek_drag.is_some() || self.menu.as_ref().is_some_and(|m| m.is_open()) {
-            // penggeser masih diseret atau menu klik-kanan terbuka: jangan tutup panel
             return;
         }
         if matches!(self.mode, Mode::Open(_)) {
@@ -1367,12 +1330,10 @@ impl Notch {
         self.update_visibility();
     }
 
-    /// Titik (px jendela) berada di tombol media notch diam "musik & lirik".
     fn on_media_button(&self, x: f32, y: f32) -> bool {
         self.look.view == View::Compact(state::Activity::Player) && self.regions.iter().any(|r| r.hit(x, y) && matches!(r.action, Action::PlayPause | Action::Next | Action::Prev))
     }
 
-    /// Kursor sekarang di tombol media notch diam (panel tidak dibuka oleh diam kursor di sana).
     fn cursor_on_media_button(&self) -> bool {
         let mut pt = windows::Win32::Foundation::POINT::default();
         unsafe {
@@ -1454,8 +1415,6 @@ impl Notch {
         }
     }
 
-    // ---------- data yang berjalan ----------
-
     fn sync_tick(&self) {
         if self.timer.phase == Phase::Running {
             timer(self.hwnd, T_TICK, 250);
@@ -1490,9 +1449,6 @@ impl Notch {
         self.refresh();
     }
 
-    // ---------- tampil/sembunyi, ruang, pengaturan ----------
-
-    /// Kotak notch diam (px layar) untuk uji tumpang-tindih dan celah menu bar.
     fn pill_screen_rect(&self) -> (i32, i32, i32, i32) {
         let base = state::size(state::look(Mode::Rest, None), self.dpi);
         let l = ((sys::screen_size().0 as f32 - base.w) / 2.0) as i32;
@@ -1527,6 +1483,7 @@ impl Notch {
             edge_armed: self.edge_armed,
             starting: self.starting,
             fullscreen: self.overlap.fullscreen,
+            revealing: false,
         };
         let hide = self.off || should_hide(self.vis, &inputs);
         if let Some(s) = &self.strip {
@@ -1547,6 +1504,7 @@ impl Notch {
             unsafe {
                 let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
             }
+            crate::topmost::request_raise();
             if let Some(sh) = &self.shadow {
                 sh.set_visible(true);
                 sh.stage_y(0.0, 0.8, 90);
@@ -1579,7 +1537,6 @@ impl Notch {
     fn apply_prefs(&mut self) {
         let s = crate::prefs::get();
         self.off = !s.notch_enabled;
-        // menu bar aktif: dialah satu-satunya yang mencadangkan ruang atas
         let (vis, reserve) = (s.notch.mode(), s.notch.reserves() && s.notch_enabled && !s.menubar);
         if vis != self.vis {
             self.vis = vis;
@@ -1602,7 +1559,6 @@ impl Notch {
         }
         self.update_visibility();
         self.sync_download_watch();
-        // tampilan bisa berubah (mis. "Saat diam" diganti): hitung ulang tanpa animasi
         self.first = true;
         self.refresh();
         log::line("notch", &format!("pengaturan: perilaku={vis:?} cadangan={reserve} mati={}", self.off));
@@ -1619,7 +1575,7 @@ impl Notch {
 
     fn on_reconfigure(&mut self) {
         let screen_w = sys::screen_size().0;
-        let dpi = unsafe { GetDpiForWindow(self.hwnd) }.max(96) as f32 / 96.0;
+        let dpi = unsafe { GetDpiForWindow(self.hwnd) }.max(96) as f32 / 96.0 * crate::prefs::ui_scale();
         let win = win_size(dpi, screen_w);
         if win == self.win && screen_w == self.screen_w && (dpi - self.dpi).abs() < 0.01 {
             return;
@@ -1757,7 +1713,6 @@ impl Notch {
     }
 }
 
-/// "Salin ke…" (pilih folder lalu salin dengan dialog salin Windows) atau "Buka dengan…" (berkas pertama).
 fn after_drop(paths: &[String], zone: usize) {
     if paths.is_empty() {
         return;
@@ -1786,9 +1741,9 @@ fn after_drop(paths: &[String], zone: usize) {
     }
 }
 
-
 fn xy(lp: LPARAM) -> (f32, f32) {
-    ((lp.0 as i16) as f32, ((lp.0 >> 16) as i16) as f32)
+    let gap = f32::from_bits(ISLAND_GAP.load(std::sync::atomic::Ordering::Relaxed));
+    ((lp.0 as i16) as f32, ((lp.0 >> 16) as i16) as f32 - gap)
 }
 
 unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
@@ -1802,10 +1757,11 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
-            let (x, _) = xy(lp);
+            let (x, y) = xy(lp);
             with(hwnd, |d| {
                 d.on_drag(x);
                 d.on_move();
+                d.on_hover(x, y);
             });
             LRESULT(0)
         }
@@ -1838,7 +1794,6 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             LRESULT(0)
         }
         WM_AFTERDROP => {
-            // dialog bersifat modal: jalankan di luar penjaga BUSY agar pesan lain tetap terlayani
             let pending = with(hwnd, |d| std::mem::take(&mut d.pending)).unwrap_or_default();
             after_drop(&pending, wp.0);
             LRESULT(0)
@@ -1907,7 +1862,10 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             LRESULT(0)
         }
         crate::prefs::WM_PREFS => {
-            with(hwnd, |d| d.apply_prefs());
+            with(hwnd, |d| {
+                d.apply_prefs();
+                d.on_reconfigure();
+            });
             LRESULT(0)
         }
         WM_TOPMOST => {
@@ -1943,5 +1901,13 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wp, lp),
+    }
+}
+
+fn hover_scale(a: Action) -> f32 {
+    if matches!(a, Action::ShelfItem(_)) {
+        crate::motion::HOVER_ROW
+    } else {
+        crate::motion::HOVER_BUTTON
     }
 }

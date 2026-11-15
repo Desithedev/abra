@@ -1,9 +1,3 @@
-//! Urutan fokus bergilir untuk app multi-window (SPEC §4.5): klik berulang mengunjungi
-//! semua window, bukan hanya bolak-balik antara dua yang terbaru.
-
-/// `recent_first`: window item ini, paling baru difokus lebih dulu. `foreground`: window di depan.
-/// Bila `foreground` ada dalam daftar → window berikutnya menurut urutan tetap (terurut handle);
-/// bila tidak → yang paling baru difokus.
 pub fn next_in_ring(recent_first: &[isize], foreground: isize) -> Option<isize> {
     let most_recent = *recent_first.first()?;
     let mut ring = recent_first.to_vec();
@@ -14,7 +8,6 @@ pub fn next_in_ring(recent_first: &[isize], foreground: isize) -> Option<isize> 
     })
 }
 
-/// Kebalikan `next_in_ring`: jendela sebelumnya menurut urutan tetap (terurut handle).
 pub fn prev_in_ring(recent_first: &[isize], foreground: isize) -> Option<isize> {
     let most_recent = *recent_first.first()?;
     let mut ring = recent_first.to_vec();

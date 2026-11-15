@@ -1,13 +1,9 @@
-//! Rak: daftar berkas yang ditaruh ke notch. Hanya menyimpan jalur (isi berkas tidak disalin). Yang terbaru di depan,
-//! tanpa duplikat (jalur Windows tidak peka huruf besar/kecil), dibatasi jumlahnya.
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Item {
     pub path: String,
 }
 
 impl Item {
-    /// Nama berkas (bagian terakhir jalur).
     pub fn name(&self) -> &str {
         let p = self.path.trim_end_matches(['\\', '/']);
         p.rsplit(['\\', '/']).next().unwrap_or(p)
@@ -41,7 +37,6 @@ impl Shelf {
         self.items.iter().position(|i| i.path.eq_ignore_ascii_case(path))
     }
 
-    /// Tambah di depan; berkas yang sudah ada dipindah ke depan. `false` bila jalur kosong.
     pub fn add(&mut self, path: &str) -> bool {
         let path = path.trim();
         if path.is_empty() {
@@ -69,14 +64,12 @@ impl Shelf {
         self.items.clear();
     }
 
-    /// Satu jalur per baris (untuk opsi "simpan Rak").
     pub fn serialize(&self) -> String {
         self.items.iter().map(|i| i.path.as_str()).collect::<Vec<_>>().join("\n")
     }
 
     pub fn parse(src: &str, max: usize) -> Shelf {
         let mut s = Shelf::new(max);
-        // urutan berkas = terbaru dulu; tambahkan dari belakang agar urutannya tetap
         for line in src.lines().rev() {
             s.add(line);
         }

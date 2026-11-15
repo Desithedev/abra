@@ -1,5 +1,3 @@
-//! Visual satu slot dock: simpul yang diskalakan (ikon), titik "berjalan", dan animasi spring-nya.
-
 use windows::Foundation::TimeSpan;
 use windows::UI::Color;
 use windows::UI::Composition::{
@@ -57,7 +55,6 @@ impl View {
     fn base(comp: &Compositor, content: &ContainerVisual, kind: Kind, base_w: f32, icon_px: f32) -> Result<View> {
         let node = comp.CreateContainerVisual()?;
         node.SetSize(Vector2 { X: base_w, Y: icon_px })?;
-        // Skala dari tengah-bawah: ikon membesar ke atas, sejajar dasar dock seperti di macOS.
         node.SetCenterPoint(Vector3 { X: base_w / 2.0, Y: icon_px, Z: 0.0 })?;
         content.Children()?.InsertAtTop(&node)?;
         Ok(View {
@@ -75,7 +72,6 @@ impl View {
         })
     }
 
-    /// Ikon aplikasi. Selagi ikon belum termuat, tampil kotak abu-abu netral.
     pub fn app(comp: &Compositor, content: &ContainerVisual, path: String, icon_px: f32, running: bool, dpi: f32) -> Result<View> {
         let mut v = View::base(comp, content, Kind::App { path }, icon_px, icon_px)?;
         let sprite = comp.CreateSpriteVisual()?;
@@ -98,7 +94,6 @@ impl View {
 
     pub fn start(comp: &Compositor, content: &ContainerVisual, icon_px: f32) -> Result<View> {
         let v = View::base(comp, content, Kind::Start, icon_px, icon_px)?;
-        // badan ikon sama besar dengan ikon lain (86% kanvas) bila ikon seragam aktif
         let full = icon_px;
         let icon_px = if crate::prefs::get().dock_plates { (full * nacre_core::iconplate::BODY).round() } else { full };
         let inset = (full - icon_px) / 2.0;
@@ -114,7 +109,6 @@ impl View {
         tile.SetBrush(&grad)?;
         tile.SetClip(&rounded_clip(comp, icon_px, icon_px, icon_px * 0.23)?)?;
         v.node.Children()?.InsertAtTop(&tile)?;
-        // tanda sendiri: empat kelopak bulat (bukan logo siapa pun)
         let petal = icon_px * 0.17;
         let c = inset + icon_px / 2.0;
         let off = icon_px * 0.15;
@@ -140,20 +134,17 @@ impl View {
         Ok(v)
     }
 
-    /// Pasang ikon yang sudah dimuat menggantikan kotak sementara.
     pub fn set_surface(&mut self, comp: &Compositor, surface: &CompositionDrawingSurface) -> Result<()> {
         if let Some(sprite) = &self.icon {
             let brush = comp.CreateSurfaceBrushWithSurface(surface)?;
             brush.SetStretch(CompositionStretch::Uniform)?;
             let _ = brush.SetBitmapInterpolationMode(windows::UI::Composition::CompositionBitmapInterpolationMode::Linear);
             sprite.SetBrush(&brush)?;
-            // Ikon asli sudah punya bentuknya sendiri (perisai, lingkaran, dll.): jangan dipotong klip kotak penampung.
             let _ = sprite.SetClip(None::<&windows::UI::Composition::CompositionClip>);
         }
         Ok(())
     }
 
-    /// Tempatkan slot. `x`,`w`,`scale` dari `layout`; `y` = atas ikon saat diam; `dot_y` = atas titik.
     pub fn place(&self, x: f32, w: f32, scale: f32, y: f32, dot_y: f32, animate: bool) -> Result<()> {
         let left = x + w / 2.0 - self.base_w / 2.0;
         let dot_x = x + w / 2.0;
@@ -191,7 +182,6 @@ impl View {
         }
     }
 
-    /// Ikon diangkat dan mengikuti kursor selama drag-reorder (animasi dihentikan agar tidak melawan).
     pub fn drag_to(&self, left: f32, y: f32) -> Result<()> {
         self.stop_animations();
         self.node.SetOffset(Vector3 { X: left, Y: y, Z: 0.0 })?;
@@ -200,7 +190,6 @@ impl View {
         Ok(())
     }
 
-    /// Satu pantulan vertikal saat app diluncurkan.
     pub fn bounce(&self, rest_y: f32) -> Result<()> {
         self.bounce.SetInitialValue(&f32_ref(rest_y - self.icon_px * 0.45)?)?;
         self.bounce.SetFinalValue(&f32_ref(rest_y)?)?;
@@ -208,5 +197,3 @@ impl View {
         Ok(())
     }
 }
-
-

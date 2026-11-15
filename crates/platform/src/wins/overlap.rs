@@ -1,6 +1,3 @@
-﻿//! Apakah window foreground menimpa area dock? (SPEC §4.4, versi ringkas: hanya monitor primer.)
-//! Dievaluasi saat ada event (foreground berubah, window selesai digeser/di-resize, minimize), bukan berkala.
-
 use std::ffi::c_void;
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS};
@@ -21,7 +18,6 @@ fn class_of(h: HWND) -> String {
     String::from_utf16_lossy(&b[..n.max(0) as usize])
 }
 
-/// Shell/desktop tidak pernah dianggap menimpa: membuka Start atau menekan desktop tidak boleh menyembunyikan dock.
 fn is_shell_class(c: &str) -> bool {
     matches!(
         c,
@@ -42,7 +38,6 @@ fn frame_rect(h: HWND) -> Option<RECT> {
     Some(r)
 }
 
-/// `fg`: window foreground eksternal terakhir. `dock`: (kiri, atas, kanan, bawah) kartu dock dalam piksel layar.
 pub fn evaluate(fg: isize, own_pid: u32, dock: (i32, i32, i32, i32), screen: (i32, i32)) -> Overlap {
     let none = Overlap::default();
     let h = HWND(fg as *mut _);
@@ -63,7 +58,6 @@ pub fn evaluate(fg: isize, own_pid: u32, dock: (i32, i32, i32, i32), screen: (i3
             return none;
         }
         let Some(r) = frame_rect(h) else { return none };
-        // hanya monitor primer: pusat window harus berada di dalamnya
         let (cx, cy) = ((r.left + r.right) / 2, (r.top + r.bottom) / 2);
         if cx < 0 || cy < 0 || cx >= screen.0 || cy >= screen.1 {
             return none;

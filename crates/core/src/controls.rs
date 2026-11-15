@@ -1,5 +1,3 @@
-//! Katalog modul Control Center dan tata letak grid 4 kolom (murni, diuji).
-
 pub const COLS: usize = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -7,7 +5,6 @@ pub enum Kind {
     Wifi,
     Bluetooth,
     Hotspot,
-    /// Padanan AirDrop di Windows: Berbagi Terdekat (Nearby Sharing).
     Share,
     Airplane,
     NowPlaying,
@@ -61,13 +58,12 @@ pub enum Category {
 impl Category {
     pub const ALL: [Category; 6] = [Category::Connectivity, Category::Display, Category::Sound, Category::Media, Category::Battery, Category::Utilities];
 
-    /// Kunci terjemahan (Indonesia).
     pub fn title(self) -> &'static str {
         match self {
             Category::Connectivity => "Konektivitas",
             Category::Display => "Layar & Kecerahan",
             Category::Sound => "Suara",
-            Category::Media => "Sedang Diputar",
+            Category::Media => "Playing",
             Category::Battery => "Baterai",
             Category::Utilities => "Utilitas",
         }
@@ -103,7 +99,6 @@ impl Kind {
         ALL.into_iter().find(|k| k.key() == s.trim())
     }
 
-    /// Ukuran (kolom, baris).
     pub fn size(self) -> (usize, usize) {
         match self {
             Kind::Wifi | Kind::Bluetooth | Kind::Hotspot | Kind::Share | Kind::Focus | Kind::Battery => (2, 1),
@@ -124,7 +119,6 @@ impl Kind {
         }
     }
 
-    /// Judul (kunci terjemahan Indonesia).
     pub fn title(self) -> &'static str {
         match self {
             Kind::Wifi => "Wi-Fi",
@@ -132,8 +126,8 @@ impl Kind {
             Kind::Hotspot => "Hotspot",
             Kind::Share => "Berbagi Terdekat",
             Kind::Airplane => "Mode Pesawat",
-            Kind::NowPlaying => "Sedang Diputar",
-            Kind::Stage => "Stage Manager",
+            Kind::NowPlaying => "Playing",
+            Kind::Stage => "Scene",
             Kind::Mirror => "Pencerminan Layar",
             Kind::Focus => "Fokus",
             Kind::DarkMode => "Mode Gelap",
@@ -142,7 +136,7 @@ impl Kind {
             Kind::Sound => "Suara",
             Kind::Battery => "Baterai",
             Kind::Lock => "Kunci Layar",
-            Kind::Mission => "Mission Control",
+            Kind::Mission => "Overview",
             Kind::Apps => "Aplikasi",
             Kind::Calculator => "Kalkulator",
             Kind::Timer => "Timer",
@@ -150,21 +144,19 @@ impl Kind {
     }
 }
 
-/// Ukuran modul yang bisa dipilih pengguna (klik kanan di mode Edit): Kecil 1×1, Sedang 2×1, Besar 2×2.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Size {
-    S,
-    M,
-    L,
+pub struct Size {
+    pub w: usize,
+    pub h: usize,
 }
 
 impl Size {
-    pub fn key(self) -> &'static str {
-        match self {
-            Size::S => "s",
-            Size::M => "m",
-            Size::L => "l",
-        }
+    pub const S: Size = Size { w: 1, h: 1 };
+    pub const M: Size = Size { w: 2, h: 1 };
+    pub const L: Size = Size { w: 2, h: 2 };
+
+    pub fn key(self) -> String {
+        format!("{}x{}", self.w, self.h)
     }
 
     pub fn parse(s: &str) -> Option<Size> {
@@ -172,35 +164,44 @@ impl Size {
             "s" => Some(Size::S),
             "m" => Some(Size::M),
             "l" => Some(Size::L),
-            _ => None,
+            t => {
+                let (a, b) = t.split_once('x')?;
+                Some(Size { w: a.trim().parse().ok()?, h: b.trim().parse().ok()? })
+            }
         }
     }
 }
 
 impl Kind {
-    /// Slider dan Sedang Diputar punya ukuran tetap.
     pub fn resizable(self) -> bool {
-        !matches!(self, Kind::Display | Kind::Sound | Kind::NowPlaying)
+        true
+    }
+
+    pub fn max_size(self) -> Size {
+        match self {
+            Kind::NowPlaying => Size { w: 4, h: 4 },
+            _ => Size { w: 4, h: 2 },
+        }
     }
 
     pub fn default_size(self) -> Size {
-        match self.size() {
-            (2, 1) => Size::M,
-            _ => Size::S,
-        }
+        let (w, h) = self.size();
+        Size { w, h }
     }
 
-    /// Kolom × baris untuk ukuran pilihan.
-    pub fn dims(self, s: Size) -> (usize, usize) {
-        if !self.resizable() {
-            return self.size();
-        }
-        match s {
-            Size::S => (1, 1),
-            Size::M => (2, 1),
-            Size::L => (2, 2),
-        }
+    pub fn clamp(self, w: usize, h: usize) -> Size {
+        let m = self.max_size();
+        Size { w: w.clamp(1, m.w.min(COLS)), h: h.clamp(1, m.h) }
     }
+
+    pub fn dims(self, s: Size) -> (usize, usize) {
+        let c = self.clamp(s.w, s.h);
+        (c.w, c.h)
+    }
+}
+
+pub fn cells_for(span: f32, cell: f32, gap: f32) -> usize {
+    (((span + gap) / (cell + gap)).round().max(1.0)) as usize
 }
 
 pub fn default_layout() -> Vec<Kind> {
@@ -216,13 +217,10 @@ pub struct Placed {
     pub h: usize,
 }
 
-/// Tata letak mengalir: tiap modul menempati spot bebas pertama (baris demi baris) yang muat.
-/// Mengembalikan modul yang tertata dan jumlah baris.
 pub fn layout(kinds: &[Kind]) -> (Vec<Placed>, usize) {
     layout_sized(kinds, &|k| k.default_size())
 }
 
-/// Seperti `layout` tetapi dengan ukuran pilihan per modul.
 pub fn layout_sized(kinds: &[Kind], size_of: &dyn Fn(Kind) -> Size) -> (Vec<Placed>, usize) {
     let mut occ: Vec<[bool; COLS]> = Vec::new();
     let mut out = Vec::new();
@@ -255,7 +253,6 @@ pub fn to_text(kinds: &[Kind]) -> String {
     kinds.iter().map(|k| k.key()).collect::<Vec<_>>().join(",")
 }
 
-/// Baca daftar modul; yang tidak dikenal dan duplikat diabaikan. Kosong/rusak ⇒ bawaan.
 pub fn from_text(s: &str) -> Vec<Kind> {
     let mut v: Vec<Kind> = Vec::new();
     for part in s.split(',') {
@@ -268,19 +265,17 @@ pub fn from_text(s: &str) -> Vec<Kind> {
     if v.is_empty() { default_layout() } else { v }
 }
 
-/// Seperti `to_text` tetapi menyertakan ukuran yang berbeda dari bawaan ("wifi:l").
 pub fn to_text_sized(kinds: &[Kind], sizes: &std::collections::HashMap<Kind, Size>) -> String {
     kinds
         .iter()
         .map(|k| match sizes.get(k) {
-            Some(s) if *s != k.default_size() && k.resizable() => format!("{}:{}", k.key(), s.key()),
+            Some(s) if *s != k.default_size() => format!("{}:{}", k.key(), s.key()),
             _ => k.key().to_string(),
         })
         .collect::<Vec<_>>()
         .join(",")
 }
 
-/// Baca daftar modul beserta ukurannya.
 pub fn from_text_sized(s: &str) -> (Vec<Kind>, std::collections::HashMap<Kind, Size>) {
     let kinds = from_text(s);
     let mut sizes = std::collections::HashMap::new();
@@ -303,17 +298,14 @@ mod tests {
     fn default_layout_matches_reference_rows() {
         let (p, rows) = layout(&default_layout());
         let at = |k: Kind| p.iter().find(|x| x.kind == k).copied().unwrap();
-        // baris 0: Wi-Fi (2×1) di kiri, Now Playing (2×2) di kanan
         assert_eq!((at(Kind::Wifi).col, at(Kind::Wifi).row), (0, 0));
         assert_eq!((at(Kind::NowPlaying).col, at(Kind::NowPlaying).row), (2, 0));
         assert_eq!((at(Kind::Bluetooth).col, at(Kind::Bluetooth).row), (0, 1));
-        // Berbagi Terdekat (2×1) di baris 2 kiri, dua ubin 1×1 di sebelahnya
         assert_eq!((at(Kind::Share).col, at(Kind::Share).row), (0, 2));
         assert_eq!((at(Kind::Stage).col, at(Kind::Stage).row), (2, 2));
         assert_eq!((at(Kind::Mission).col, at(Kind::Mission).row), (3, 2));
-        // slider selalu menempati satu baris penuh
         assert_eq!(at(Kind::Display).w, 4);
-        assert_eq!(at(Kind::Sound).row, at(Kind::Display).row + 1); // seperti contoh: Display di atas Sound
+        assert_eq!(at(Kind::Sound).row, at(Kind::Display).row + 1);
         assert!(rows >= 6);
     }
 
@@ -322,13 +314,20 @@ mod tests {
         use std::collections::HashMap;
         assert_eq!(Kind::Focus.dims(Size::L), (2, 2));
         assert_eq!(Kind::Stage.dims(Size::M), (2, 1));
-        assert_eq!(Kind::Sound.dims(Size::S), (4, 1), "slider tidak bisa diubah");
+        assert_eq!(Kind::Sound.dims(Size::S), (1, 1));
+        assert_eq!(Kind::Sound.dims(Size { w: 9, h: 9 }), (4, 2));
+        assert_eq!(Kind::NowPlaying.dims(Size { w: 4, h: 4 }), (4, 4));
+        assert_eq!(Size::parse("3x2"), Some(Size { w: 3, h: 2 }));
+        assert_eq!(Size::parse("l"), Some(Size::L));
+        assert_eq!(cells_for(82.0 * 2.0 + 14.0, 82.0, 14.0), 2);
+        assert_eq!(cells_for(10.0, 82.0, 14.0), 1);
         let mut sizes = HashMap::new();
         sizes.insert(Kind::Focus, Size::L);
         sizes.insert(Kind::Stage, Size::M);
-        let kinds = vec![Kind::Wifi, Kind::Focus, Kind::Stage];
+        sizes.insert(Kind::Sound, Size { w: 1, h: 2 });
+        let kinds = vec![Kind::Wifi, Kind::Focus, Kind::Stage, Kind::Sound];
         let text = to_text_sized(&kinds, &sizes);
-        assert_eq!(text, "wifi,focus:l,stage:m");
+        assert_eq!(text, "wifi,focus:2x2,stage:2x1,sound:1x2");
         let (k2, s2) = from_text_sized(&text);
         assert_eq!(k2, kinds);
         assert_eq!(s2.get(&Kind::Focus), Some(&Size::L));

@@ -1,9 +1,3 @@
-//! Stage Manager ala macOS Tahoe: satu grup app di panggung, grup lain di strip kiri sebagai kartu miring
-//! berisi tangkapan jendela (diperbarui pelan) dengan lencana ikon. Jendela yang keluar panggung DIPARKIR di luar
-//! layar (bukan diminimalkan) sehingga tetap "hidup". Klik kartu menukar grup dengan animasi terbang.
-//! Daftar jendela terparkir disimpan ke `parked.txt` agar bisa dipulihkan setelah ABRA mati mendadak.
-//! Event-driven (hook foreground yang sudah ada + timer debounce), tanpa polling saat tidak aktif.
-
 use crate::popup::Popup;
 use crate::{motion, paths, prefs};
 use nacre_core::stage::{Change, Stage};
@@ -38,7 +32,6 @@ const T_PEEK: usize = 6;
 const T_FLYEND: usize = 7;
 const T_LIVE: usize = 8;
 
-/// Kemiringan kartu strip (derajat) saat diam dan saat di-hover.
 const TILT: f32 = 22.0;
 const TILT_HOVER: f32 = 8.0;
 
@@ -47,11 +40,10 @@ type Rect = (f32, f32, f32, f32);
 struct Slot {
     apps: Vec<String>,
     rect: Rect,
+    card: Rect,
     cont: ContainerVisual,
     cards: Vec<SpriteVisual>,
-    /// Kuas gambar tiap kartu (diganti di tempat saat tangkapan diperbarui, tanpa membangun ulang strip).
     brushes: Vec<(String, CompositionSurfaceBrush)>,
-    /// Judul jendela (muncul saat hover).
     label: Option<SpriteVisual>,
 }
 
@@ -63,13 +55,11 @@ struct StripUi {
     hover: Option<usize>,
     tracking: bool,
     shown: bool,
-    /// Strip di sisi kanan layar (kartu dicerminkan).
     right: bool,
 }
 
 struct Fly {
     popup: Popup,
-    /// App yang jendelanya dikembalikan ke layar saat animasi selesai.
     show: Vec<String>,
     activate: isize,
 }
@@ -78,7 +68,6 @@ struct St {
     ctl: HWND,
     comp: Compositor,
     gfx: Option<Gfx>,
-    /// Perangkat GPU + tangkapan jendela hidup (Windows.Graphics.Capture) untuk kartu strip; hanya selama Stage Manager aktif.
     live_gfx: Option<Gfx>,
     live: HashMap<String, Capture>,
     active: bool,
@@ -89,22 +78,16 @@ struct St {
     strip: Option<StripUi>,
     edge: Option<crate::strip::Strip>,
     fly: Option<Fly>,
-    /// Overlay animasi yang sedang memudar sebelum dihancurkan.
     dying: Option<Popup>,
-    /// Daftar app strip terakhir (untuk animasi muncul saat isi strip berubah).
+    hold: Vec<String>,
     sig: String,
     peek: bool,
-    /// Jendela yang seharusnya jadi foreground setelah tukar (diaktifkan ulang bila Windows memindahkan fokus).
     want_fg: isize,
-    /// App yang jendelanya menolak diparkir (mis. dijalankan sebagai Administrator): tidak dikelola agar tidak tampil ganda.
     refused: Vec<String>,
-    /// Selama animasi tukar berjalan, perubahan foreground otomatis dari Windows diabaikan.
     busy_until: std::time::Instant,
-    /// Konfigurasi tata letak terakhir yang diterapkan (untuk mendeteksi perubahan pengaturan).
     cfg: (bool, u8, u8, u8, u8),
 }
 
-/// Media yang kita jeda: (app, id sumber) — dilanjutkan saat app kembali ke panggung. Diisi dari thread pekerja.
 static PAUSED: std::sync::Mutex<Vec<(String, Vec<String>)>> = std::sync::Mutex::new(Vec::new());
 
 fn take_paused(app: Option<&str>) -> Vec<Vec<String>> {
@@ -121,7 +104,6 @@ fn take_paused(app: Option<&str>) -> Vec<Vec<String>> {
     out
 }
 
-/// Program yang dikecualikan dari Stage Manager (tidak pernah diparkir): satu potongan jalur/nama per baris di `stage_exclude.txt`.
 fn excluded(app: &str) -> bool {
     let Ok(t) = std::fs::read_to_string(paths::config_dir().join("stage_exclude.txt")) else { return false };
     t.lines().map(|l| l.trim().to_ascii_lowercase()).any(|l| !l.is_empty() && !l.starts_with('#') && app.contains(&l))
@@ -148,7 +130,6 @@ fn hook(ev: u32, hwnd: isize) {
 }
 
 pub fn init(comp: &Compositor) -> windows_core::Result<()> {
-    // sisa jendela terparkir dari proses sebelumnya yang mati mendadak
     let n = park::restore_file(&parked_file());
     if n > 0 {
         log::line("stage", &format!("{n} jendela terparkir dari sesi lalu dikembalikan"));
@@ -174,6 +155,7 @@ pub fn init(comp: &Compositor) -> windows_core::Result<()> {
                 edge: None,
                 fly: None,
                 dying: None,
+                hold: Vec::new(),
                 sig: String::new(),
                 peek: false,
                 want_fg: 0,
@@ -193,7 +175,6 @@ pub fn init(comp: &Compositor) -> windows_core::Result<()> {
 
 fn noop() {}
 
-/// App yang berjalan (punya jendela), tanpa program yang dikecualikan dari Stage Manager.
 fn running_apps(wins: &[nacre_core::dock::items::Win], refused: &[String]) -> Vec<String> {
     let mut running: Vec<String> = Vec::new();
     for w in wins {
@@ -205,7 +186,6 @@ fn running_apps(wins: &[nacre_core::dock::items::Win], refused: &[String]) -> Ve
     running
 }
 
-/// Tangkapan kosong (satu warna rata, mis. putih/hitam dari PrintWindow yang gagal)? Diuji dari 144 titik sampel.
 pub(crate) fn blank(b: &Bitmap) -> bool {
     if b.w < 4 || b.h < 4 {
         return true;
@@ -224,7 +204,6 @@ pub(crate) fn blank(b: &Bitmap) -> bool {
     true
 }
 
-/// Apakah ikon desktop harus terlihat: pengaturan global "sembunyikan" menang; selain itu ikuti mode Stage Manager.
 fn icons_visible(stage_active: bool, stage_empty: bool) -> bool {
     let p = prefs::get();
     if p.hide_desktop_icons {
@@ -244,19 +223,15 @@ fn parked_file() -> std::path::PathBuf {
     paths::config_dir().join("parked.txt")
 }
 
-/// Dipanggil saat keluar normal: kembalikan semua jendela yang kita parkir.
 pub fn shutdown() {
     with(|s| s.deactivate());
     nacre_platform::desktopicons::set_visible(true);
 }
 
-/// Dipakai pengalih app (Alt+Tab pengganti): apakah Stage Manager menyala.
 pub fn is_active() -> bool {
     with(|s| s.active).unwrap_or(false)
 }
 
-/// Bawa app `path` ke panggung (dipakai pengalih app).
-/// Tangkapan terakhir yang bagus untuk `app` (jalur exe), dipakai pengalih app untuk jendela yang sedang diparkir.
 pub fn shot_for(app: &str) -> Option<Bitmap> {
     with(|s| s.shots.get(&key_of(app)).cloned()).flatten()
 }
@@ -310,7 +285,6 @@ fn is_own(hwnd: isize) -> bool {
     }
 }
 
-/// Matriks perspektif berpusat di (cx, cy) untuk container induk kartu (kedalaman d).
 fn perspective(cx: f32, cy: f32, d: f32) -> Matrix4x4 {
     Matrix4x4 {
         M11: 1.0, M12: 0.0, M13: 0.0, M14: 0.0,
@@ -321,9 +295,6 @@ fn perspective(cx: f32, cy: f32, d: f32) -> Matrix4x4 {
 }
 
 impl St {
-    // -----------------------------------------------------------------------------------------------------------
-    // siklus hidup
-    // -----------------------------------------------------------------------------------------------------------
 
     fn activate(&mut self) {
         self.active = true;
@@ -352,6 +323,7 @@ impl St {
         self.live.clear();
         self.live_gfx = None;
         self.finish_fly();
+        self.hold.clear();
         self.kill_dying();
         for (p, _) in self.parked.drain(..) {
             park::unpark(&p);
@@ -366,7 +338,6 @@ impl St {
         log::line("stage", "nonaktif");
     }
 
-    /// Ikon desktop sesuai mode: 0 sembunyi, 1 otomatis (tampil hanya saat panggung kosong), 2 tampil.
     fn apply_icons(&self) {
         nacre_platform::desktopicons::set_visible(icons_visible(self.active, self.model.current.is_empty()));
     }
@@ -387,15 +358,9 @@ impl St {
         park::save(&parked_file(), &list);
     }
 
-    // -----------------------------------------------------------------------------------------------------------
-    // model ⇄ jendela
-    // -----------------------------------------------------------------------------------------------------------
-
-    /// Foreground berubah: perbarui panggung.
     fn refresh(&mut self) {
         let now = std::time::Instant::now();
         if self.fly.is_some() || now < self.busy_until {
-            // perubahan foreground selama animasi tidak boleh hilang: periksa ulang begitu animasi selesai
             let wait = self.busy_until.saturating_duration_since(now).as_millis() as u32 + 60;
             unsafe {
                 SetTimer(Some(self.ctl), T_FG, wait.max(80), None);
@@ -407,7 +372,6 @@ impl St {
             return;
         }
         if self.want_fg != 0 {
-            // Windows kadang memindahkan fokus segera setelah tukar: aktifkan lagi jendela yang dipilih (sekali)
             let w = std::mem::take(&mut self.want_fg);
             if fg != w && unsafe { IsWindow(Some(HWND(w as *mut _))).as_bool() } {
                 focus::force_foreground(w);
@@ -429,7 +393,6 @@ impl St {
         } else {
             let Some(w) = wins.iter().find(|w| w.hwnd == fg) else { return };
             let app = key_of(&w.path);
-            // program kosong/dikecualikan tidak ikut dikelola
             if app.is_empty() || excluded(&app) || self.refused.contains(&app) {
                 return;
             }
@@ -438,7 +401,6 @@ impl St {
         self.apply(ch, &wins, 0);
     }
 
-    /// Klik kartu / pengalih app: jadikan `app` fokus panggung.
     fn focus_app(&mut self, app: &str, _from: isize) {
         let wins = enumerate::list(std::process::id());
         let running = running_apps(&wins, &self.refused);
@@ -450,7 +412,21 @@ impl St {
     fn slot_rect_of(&self, app: &str) -> Option<Rect> {
         let s = self.strip.as_ref()?;
         let base = s.popup.rect;
-        s.slots.iter().find(|sl| sl.apps.iter().any(|a| a == app)).map(|sl| (base.0 as f32 + sl.rect.0, base.1 as f32 + sl.rect.1, sl.rect.2, sl.rect.3))
+        let (i, sl) = s.slots.iter().enumerate().find(|(_, sl)| sl.apps.iter().any(|a| a == app))?;
+        let k = if s.hover == Some(i) { 1.06 } else { 1.0 };
+        let (cx, cy) = (sl.rect.0 + sl.rect.2 / 2.0, sl.rect.1 + sl.rect.3 / 2.0);
+        let (x, y, w, h) = sl.card;
+        Some((base.0 as f32 + cx + (x - cx) * k, base.1 as f32 + cy + (y - cy) * k, w * k, h * k))
+    }
+
+    fn reveal_hold(&mut self) {
+        let hold = std::mem::take(&mut self.hold);
+        let comp = self.comp.clone();
+        let Some(s) = self.strip.as_ref() else { return };
+        for sl in s.slots.iter().filter(|sl| sl.apps.iter().any(|a| hold.contains(a))) {
+            let _ = motion::scalar(&comp, &sl.cont, "Opacity", 0.0, 1.0, 150);
+            let _ = sl.cont.SetOpacity(1.0);
+        }
     }
 
     fn apply(&mut self, ch: Change, wins: &[nacre_core::dock::items::Win], activate: isize) {
@@ -461,10 +437,8 @@ impl St {
         self.busy_until = std::time::Instant::now() + std::time::Duration::from_millis(motion::stage_ms(motion::STAGE_SWAP_MS) as u64 + 350);
         let mut items: Vec<(Bitmap, Rect, Rect)> = Vec::new();
 
-        // yang masuk panggung: catat asal kartunya sebelum strip dibangun ulang
         let show_from: Option<(String, Rect)> = ch.show.iter().find_map(|a| self.slot_rect_of(a).map(|r| (a.clone(), r)));
 
-        // yang keluar panggung: tangkap lalu parkir
         let mut outs: Vec<(String, Rect)> = Vec::new();
         let mut refused_now = false;
         let media_on = prefs::get().stage_media;
@@ -473,7 +447,6 @@ impl St {
                 nacre_platform::media::resume_ids(ids);
             }
         }
-        // tangkapan segar untuk jendela yang akan terbang masuk (kartu tidak boleh "meloncat" saat jendela asli muncul)
         for app in &ch.show {
             if let Some((p, _)) = self.parked.iter().find(|(_, a)| a == app) {
                 if let Some(shot) = snapshot::capture(p.hwnd, 2) {
@@ -507,7 +480,6 @@ impl St {
                 if let Some(shot) = snapshot::capture(w.hwnd, 2) {
                     let first_of_app = !outs.iter().any(|(a, _)| a == app);
                     let good = !blank(&shot.bmp);
-                    // semua app yang keluar panggung ikut terbang ke strip (maks. 4), bukan hanya yang pertama
                     if first_of_app && good && outs.len() < 4 {
                         outs.push((app.clone(), (shot.rect.0 as f32, shot.rect.1 as f32, shot.rect.2 as f32, shot.rect.3 as f32)));
                     }
@@ -519,7 +491,7 @@ impl St {
                     if park::is_parked(w.hwnd) {
                         self.parked.push((p, app.clone()));
                     } else {
-                        park::unpark(&p); // jendela menolak dipindah (mis. dijalankan sebagai admin)
+                        park::unpark(&p);
                         if !self.refused.contains(app) {
                             log::line("stage", &format!("{app} menolak diparkir; tidak dikelola"));
                             self.refused.push(app.clone());
@@ -530,11 +502,11 @@ impl St {
             }
         }
         if refused_now {
-            // app yang tidak bisa diparkir dikeluarkan dari model agar tidak muncul sebagai kartu kosong
             let running = running_apps(&wins, &self.refused);
             self.model.prune(&running);
         }
         self.save();
+        self.hold = outs.iter().map(|(a, _)| a.clone()).collect();
         self.rebuild();
 
         for (app, from) in outs {
@@ -543,7 +515,6 @@ impl St {
             }
         }
 
-        // yang masuk panggung: terbang dari kartu ke posisi jendela, lalu dikembalikan ke layar
         let mut fly_in = false;
         if let Some((app, from)) = show_from {
             let to = self.parked.iter().find(|(_, a)| *a == app).map(|(p, _)| {
@@ -555,7 +526,9 @@ impl St {
                 fly_in = true;
             }
         }
-        if !items.is_empty() {
+        if items.is_empty() {
+            self.reveal_hold();
+        } else {
             self.start_fly(items, if fly_in { ch.show.clone() } else { vec![] }, activate);
         }
         if !fly_in {
@@ -573,7 +546,6 @@ impl St {
         for (p, a) in self.parked.drain(..) {
             if apps.contains(&a) {
                 let mut q = p;
-                // jendela tidak boleh menutupi strip: geser ke kanan strip bila perlu (bukan yang dimaksimalkan)
                 let sw = nacre_platform::sys::screen_size().0;
                 let right = self.strip.as_ref().map(|s| s.right).unwrap_or(false);
                 let edge = self.strip.as_ref().map(|s| (s.w + 8.0 * s.dpi) as i32).unwrap_or(0);
@@ -596,14 +568,10 @@ impl St {
         self.save();
     }
 
-    // -----------------------------------------------------------------------------------------------------------
-    // animasi terbang (overlay layar penuh sementara)
-    // -----------------------------------------------------------------------------------------------------------
-
     fn start_fly(&mut self, items: Vec<(Bitmap, Rect, Rect)>, show: Vec<String>, activate: isize) {
         let comp = self.comp.clone();
         if self.gfx.is_none() {
-            self.gfx = Gfx::new(&comp).ok();
+            self.gfx = Gfx::shared(&comp).ok();
         }
         let Some(gfx) = self.gfx.as_ref() else { return };
         let (sw, sh) = nacre_platform::sys::screen_size();
@@ -630,14 +598,12 @@ impl St {
                 v.SetCenterPoint(Vector3 { X: cx, Y: cy, Z: 0.0 })?;
                 let (sx, sy) = (from.2 / to.2.max(1.0), from.3 / to.3.max(1.0));
                 popup.content.Children()?.InsertAtTop(&v)?;
-                // skala berpusat di tengah: sesuaikan offset agar pojok kiri-atas visual tetap di `from`/`to`
                 let off0 = Vector3 { X: from.0 - cx * (1.0 - sx), Y: from.1 - cy * (1.0 - sy), Z: 0.0 };
                 motion::vec3(&comp, &v, "Offset", off0, Vector3 { X: to.0, Y: to.1, Z: 0.0 }, motion::stage_ms(motion::STAGE_SWAP_MS))?;
-                // kemiringan perspektif: jendela keluar mulai datar lalu miring ke strip, jendela masuk sebaliknya
                 let sign = if prefs::get().stage_right { -1.0f32 } else { 1.0 };
                 let shrinking = from.2 > to.2;
                 v.SetRotationAxis(Vector3 { X: 0.0, Y: 1.0, Z: 0.0 })?;
-                let (a0, a1) = if shrinking { (0.0, sign * TILT) } else { (sign * 35.0, 0.0) };
+                let (a0, a1) = if shrinking { (0.0, sign * TILT) } else { (sign * TILT, 0.0) };
                 motion::scalar(&comp, &v, "RotationAngleInDegrees", a0, a1, motion::stage_ms(motion::STAGE_SWAP_MS))?;
                 motion::vec3(&comp, &v, "Scale", Vector3 { X: sx, Y: sy, Z: 1.0 }, Vector3 { X: 1.0, Y: 1.0, Z: 1.0 }, motion::stage_ms(motion::STAGE_SWAP_MS))?;
             }
@@ -653,6 +619,7 @@ impl St {
             }
             Err(e) => {
                 log::line("stage", &format!("animasi gagal: {e}"));
+                self.reveal_hold();
                 self.unpark_apps(&show);
                 if activate != 0 {
                     focus::force_foreground(activate);
@@ -666,6 +633,7 @@ impl St {
             let _ = KillTimer(Some(self.ctl), T_FLY);
         }
         if let Some(f) = self.fly.take() {
+            self.reveal_hold();
             self.unpark_apps(&f.show);
             if f.activate != 0 {
                 focus::force_foreground(f.activate);
@@ -677,7 +645,6 @@ impl St {
                     let _ = DestroyWindow(h);
                 }
             }
-            // overlay memudar halus di atas jendela asli yang baru muncul
             let _ = motion::scalar(&self.comp, f.popup.root(), "Opacity", 1.0, 0.0, 140);
             let _ = f.popup.root().SetOpacity(0.0);
             self.dying = Some(f.popup);
@@ -699,10 +666,6 @@ impl St {
             }
         }
     }
-
-    // -----------------------------------------------------------------------------------------------------------
-    // strip
-    // -----------------------------------------------------------------------------------------------------------
 
     fn icon(&mut self, app: &str, px: i32) -> Option<Bitmap> {
         if !self.icons.contains_key(app) {
@@ -727,7 +690,6 @@ impl St {
         true
     }
 
-    /// Bangun ulang isi strip dari model dan tangkapan.
     fn rebuild(&mut self) {
         let groups = self.model.strip.clone();
         if groups.is_empty() {
@@ -738,9 +700,8 @@ impl St {
             return;
         }
         if self.gfx.is_none() {
-            self.gfx = Gfx::new(&self.comp).ok();
+            self.gfx = Gfx::shared(&self.comp).ok();
         }
-        // ikon dulu (butuh &mut self)
         let dpi = self.strip.as_ref().map(|s| s.dpi).unwrap_or(1.0);
         let icon_px = (prefs::get().stage_size as f32 * 0.22 * dpi) as i32;
         let mut icon_bmps: HashMap<String, Bitmap> = HashMap::new();
@@ -763,8 +724,11 @@ impl St {
             }
         }
         let shots = &self.shots;
+        let hold = self.hold.clone();
         let Some(gfx) = self.gfx.as_ref() else { return };
         let Some(strip) = self.strip.as_mut() else { return };
+        let prev: HashMap<String, f32> = strip.slots.iter().filter_map(|sl| sl.apps.first().map(|a| (a.clone(), sl.rect.1))).collect();
+        let slide_ms = motion::stage_ms(motion::STRIP_SLIDE_MS);
 
         let cfg = prefs::get();
         let right = cfg.stage_right;
@@ -803,7 +767,7 @@ impl St {
                 cont.SetTransformMatrix(perspective(tw / 2.0, slot_h / 2.0, 600.0 * dpi))?;
                 let mut cards = Vec::new();
                 let mut brushes: Vec<(String, CompositionSurfaceBrush)> = Vec::new();
-                // belakang → depan: app ke-3, ke-2, lalu ke-1
+                let mut front: Rect = (card_x, sy, tw, slot_h);
                 let count = g.len().min(3);
                 for j in (0..count).rev() {
                     let app = &g[j];
@@ -812,7 +776,11 @@ impl St {
                     let v = comp.CreateSpriteVisual()?;
                     v.SetSize(Vector2 { X: bw, Y: bh })?;
                     let hug = if right { tw - bw } else { 0.0 };
-                    v.SetOffset(Vector3 { X: hug + sign * off * 7.0 * dpi * scale, Y: slot_h - bh - 14.0 * dpi * scale - off * 9.0 * dpi * scale, Z: 0.0 })?;
+                    let (ox, oy) = (hug + sign * off * 7.0 * dpi * scale, slot_h - bh - 14.0 * dpi * scale - off * 9.0 * dpi * scale);
+                    if j == 0 {
+                        front = (card_x + ox, sy + oy, bw, bh);
+                    }
+                    v.SetOffset(Vector3 { X: ox, Y: oy, Z: 0.0 })?;
                     v.SetCenterPoint(Vector3 { X: bw / 2.0, Y: bh / 2.0, Z: 0.0 })?;
                     v.SetRotationAxis(Vector3 { X: 0.0, Y: 1.0, Z: 0.0 })?;
                     v.SetRotationAngleInDegrees(sign * TILT)?;
@@ -828,7 +796,6 @@ impl St {
                             windows_core::Interface::cast::<CompositionBrush>(&br)?
                         }
                         None => {
-                            // belum ada tangkapan: kuas gelap sementara yang tetap bisa diganti gambar hidup begitu frame pertama tiba
                             let surf = gfx.surface_from_bgra(1, 1, &[34, 29, 26, 170])?;
                             let br = comp.CreateSurfaceBrushWithSurface(&surf)?;
                             br.SetStretch(CompositionStretch::Fill)?;
@@ -846,7 +813,6 @@ impl St {
                     cont.Children()?.InsertAtTop(&v)?;
                     cards.push(v);
                 }
-                // lencana ikon (kiri-bawah)
                 for (k, a) in g.iter().take(2).enumerate() {
                     if let Some(b) = icon_bmps.get(a) {
                         let surf = gfx.surface_from_bgra(b.w, b.h, &b.bgra)?;
@@ -861,7 +827,6 @@ impl St {
                         cont.Children()?.InsertAtTop(&v)?;
                     }
                 }
-                // judul jendela (muncul saat hover)
                 let mut label = None;
                 if show_titles {
                     if let Some((surf, lw, lh)) = title_surface(gfx, &g[0], (11.0 * dpi) as i32, tw as i32) {
@@ -877,7 +842,19 @@ impl St {
                     }
                 }
                 strip.popup.content.Children()?.InsertAtTop(&cont)?;
-                strip.slots.push(Slot { apps: g.clone(), rect: (card_x, sy, tw, slot_h), cont, cards, brushes, label });
+                let held = g.iter().any(|a| hold.contains(a));
+                match prev.get(&g[0]) {
+                    _ if held => cont.SetOpacity(0.0)?,
+                    Some(py) if (py - sy).abs() > 0.5 => {
+                        motion::vec3(&comp, &cont, "Offset", Vector3 { X: card_x, Y: *py, Z: 0.0 }, Vector3 { X: card_x, Y: sy, Z: 0.0 }, slide_ms)?;
+                    }
+                    None if !prev.is_empty() => {
+                        motion::scalar(&comp, &cont, "Opacity", 0.0, 1.0, slide_ms)?;
+                        motion::vec3(&comp, &cont, "Scale", Vector3 { X: 0.9, Y: 0.9, Z: 1.0 }, Vector3 { X: 1.0, Y: 1.0, Z: 1.0 }, slide_ms)?;
+                    }
+                    _ => {}
+                }
+                strip.slots.push(Slot { apps: g.clone(), rect: (card_x, sy, tw, slot_h), card: front, cont, cards, brushes, label });
             }
             Ok(())
         };
@@ -898,7 +875,6 @@ impl St {
         self.sync_live();
     }
 
-    /// Mulai/hentikan tangkapan jendela hidup untuk app yang tampil di strip, lalu pasang permukaannya ke kartu.
     fn sync_live(&mut self) {
         if !capture::supported() {
             return;
@@ -909,7 +885,7 @@ impl St {
             return;
         }
         if self.live_gfx.is_none() {
-            self.live_gfx = Gfx::new_hardware(&self.comp).ok().or_else(|| Gfx::new(&self.comp).ok());
+            self.live_gfx = Gfx::new_hardware(&self.comp).ok().or_else(|| Gfx::shared(&self.comp).ok());
         }
         let Some(lg) = self.live_gfx.as_ref() else { return };
         for app in wanted {
@@ -927,7 +903,6 @@ impl St {
         self.apply_live_brushes();
     }
 
-    /// Kuas kartu memakai permukaan hidup untuk app yang sudah menerima frame.
     fn apply_live_brushes(&self) {
         let Some(strip) = self.strip.as_ref() else { return };
         for sl in &strip.slots {
@@ -941,7 +916,6 @@ impl St {
         }
     }
 
-    /// Ambil frame terbaru semua tangkapan (dipanggil timer ±20 fps selama strip terlihat).
     fn poll_live(&mut self) {
         if self.live.is_empty() || !self.strip.as_ref().is_some_and(|s| s.shown) {
             return;
@@ -955,14 +929,9 @@ impl St {
             }
         }
         if first {
-            // frame pertama: bentuk kartu mengikuti ukuran jendela sebenarnya, jadi bangun ulang sekali
             self.rebuild();
         }
     }
-
-    // -----------------------------------------------------------------------------------------------------------
-    // strip menyingkir bila tertimpa jendela panggung
-    // -----------------------------------------------------------------------------------------------------------
 
     fn check_overlap(&mut self) {
         let fg = focus::foreground();
@@ -1006,7 +975,6 @@ impl St {
         }
     }
 
-    /// Perbarui tangkapan kartu strip (jendela terparkir tetap bisa ditangkap).
     fn refresh_shots(&mut self) {
         if self.strip.is_none() || self.fly.is_some() {
             return;
@@ -1017,12 +985,11 @@ impl St {
             let Some(hwnd) = self.parked.iter().find(|(_, a)| *a == app).map(|(p, _)| p.hwnd) else { continue };
             let Some(shot) = snapshot::capture(hwnd, 2) else { continue };
             if blank(&shot.bmp) || self.live.get(&app).is_some_and(|c| c.has_frame) {
-                continue; // simpan tangkapan lama yang bagus; app berstatus hidup tidak perlu snapshot
+                continue;
             }
             let old = self.shots.get(&app).map(|b| (b.w, b.h));
             let same_shape = old.map(|(w, h)| ((w as f32 / h.max(1) as f32) - (shot.bmp.w as f32 / shot.bmp.h.max(1) as f32)).abs() < 0.02).unwrap_or(false);
             let Some(gfx) = self.gfx.as_ref() else { continue };
-            // ganti gambar di tempat (tanpa membangun ulang strip): tidak berkedip dan hover tidak hilang
             let mut done = false;
             if same_shape {
                 if let (Some(strip), Ok(surf)) = (self.strip.as_ref(), gfx.surface_from_bgra(shot.bmp.w, shot.bmp.h, &shot.bmp.bgra)) {
@@ -1045,10 +1012,6 @@ impl St {
             self.rebuild();
         }
     }
-
-    // -----------------------------------------------------------------------------------------------------------
-    // interaksi strip
-    // -----------------------------------------------------------------------------------------------------------
 
     fn set_hover(&mut self, i: Option<usize>) {
         let comp = self.comp.clone();
@@ -1083,7 +1046,6 @@ impl St {
     }
 }
 
-/// Judul app (nama berkas tanpa ekstensi, huruf awal besar) sebagai permukaan teks putih.
 fn title_surface(gfx: &Gfx, app: &str, px: i32, maxw: i32) -> Option<(windows::UI::Composition::CompositionDrawingSurface, i32, i32)> {
     use nacre_platform::text::{measure, render, Style};
     let stem = std::path::Path::new(app).file_stem()?.to_string_lossy().to_string();
@@ -1104,7 +1066,6 @@ fn title_surface(gfx: &Gfx, app: &str, px: i32, maxw: i32) -> Option<(windows::U
     Some((surf, tw, th))
 }
 
-/// Ukuran kartu: muat di (tw × th_max) mempertahankan rasio tangkapan (16:10 bila belum ada).
 fn gfx_dims(ar: Option<f32>, tw: f32, th_max: f32) -> (f32, f32) {
     let ar = ar.unwrap_or(1.6);
     let (mut w, mut h) = (tw, tw / ar);
@@ -1187,7 +1148,6 @@ unsafe extern "system" fn ctl_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                 T_PEEK => {
                     let _ = KillTimer(Some(hwnd), T_PEEK);
                     with(|s| {
-                        // masih di atas strip? tunda lagi; selainnya kembali ke aturan tertimpa
                         let over = s.strip.as_ref().map(|st| st.hover.is_some()).unwrap_or(false);
                         if !over {
                             s.peek = false;
@@ -1247,7 +1207,6 @@ unsafe extern "system" fn strip_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARA
                 let shift = windows::Win32::UI::Input::KeyboardAndMouse::GetKeyState(windows::Win32::UI::Input::KeyboardAndMouse::VK_SHIFT.0 as i32) < 0;
                 let apps = sl.apps.clone();
                 if shift {
-                    // Shift-klik: gabungkan ke grup panggung
                     let ch = s.model.add_to_stage(&apps[0]);
                     let wins = enumerate::list(std::process::id());
                     s.apply(ch, &wins, 0);

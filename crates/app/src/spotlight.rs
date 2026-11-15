@@ -1,10 +1,5 @@
-//! Spotlight ala macOS Tahoe: kapsul kaca di atas-tengah layar (Ctrl+Space atau ikon cari di menu bar) dengan empat mode:
-//! Apps (Ctrl+1, juga Ctrl+Shift+Space), Berkas (Ctrl+2), Aksi (Ctrl+3, dengan quick keys), dan Papan Klip (Ctrl+4).
-//! Saat kosong tampil kapsul + empat tombol bulat; saat mengetik berubah menjadi panel berisi hasil (aplikasi, kalkulator,
-//! aksi, berkas, web) dengan chip filter. Dibuat saat dibuka dan dihancurkan saat ditutup.
-
 use crate::popup::Popup;
-use crate::{paths, prefs};
+use crate::{motion, paths, prefs};
 use nacre_core::appcat::{self, Cat};
 use nacre_core::search;
 use nacre_core::spotlight::{self as model, Mode, ACTIONS};
@@ -39,15 +34,12 @@ const WM_CLOSE_SPOT: u32 = WM_APP + 81;
 const WM_FILES: u32 = WM_APP + 84;
 const WM_THUMBS: u32 = WM_APP + 85;
 const WM_MOUSELEAVE_SPOT: u32 = 0x02A3;
-/// Timer pada jendela Spotlight: tahap 2 morph kapsul → panel, dan merapikan region klik setelah animasi.
 const T_MORPH: usize = 1;
 const T_REGION: usize = 2;
-/// Timer pada jendela kontrol: menghancurkan jendela setelah fade-out tutup.
 const T_FINISH: usize = 9;
 const HOTKEY_ID: i32 = 0xAB01;
 const HOTKEY_APPS: i32 = 0xAB02;
 const COLS: usize = 5;
-/// Chip jenis berkas di mode Berkas (padanan chip app di video): label + ekstensi.
 const FTYPES: [(&str, &[&str]); 4] = [
     ("Gambar", &["png", "jpg", "jpeg", "gif", "webp", "heic", "bmp", "svg", "tif", "tiff"]),
     ("Video", &["mp4", "mov", "mkv", "avi", "webm", "wmv", "m4v"]),
@@ -96,18 +88,13 @@ enum HitKind {
     Cat(Option<Cat>),
     Row(usize),
     Cell(usize),
-    /// "Lihat Semua" pada seksi ke-n.
     ShowMore(usize),
-    /// Tombol "⋯" di kepala panel dan item menunya.
     More,
     MoreItem,
-    /// Tombol salin di baris Papan Klip.
     CopyRow(usize),
-    /// Chip jenis berkas ke-n.
     FType(usize),
 }
 
-/// Apa yang dijalankan setelah Spotlight tertutup.
 enum Run {
     Nothing,
     Open(String),
@@ -134,7 +121,6 @@ struct Spot {
     files_gen: u64,
     shared_files: Arc<Mutex<(u64, Vec<Hit>)>>,
     quick: HashMap<String, String>,
-    /// Sedang mengisi quick key untuk aksi ini.
     editing: Option<usize>,
     edit_buf: String,
     hits: Vec<(Rect, HitKind)>,
@@ -142,18 +128,15 @@ struct Spot {
     text_cache: HashMap<String, (CompositionDrawingSurface, i32, i32)>,
     icon_cache: HashMap<String, Option<CompositionDrawingSurface>>,
     geo: Geo,
-    /// Persegi badan kaca saat ini (koordinat jendela).
     cur: Rect,
-    /// Tombol mode tampil di samping kapsul (kursor di atas Spotlight).
     buttons: bool,
     buttons_intro: bool,
     side_fading: bool,
     hover_mode: Option<Mode>,
+    popped: Option<String>,
     tracking: bool,
     clip: InsetClip,
-    /// Lapisan tombol mode (tidak ikut klip/geser isi).
     side: ContainerVisual,
-    /// Seksi grid (Apps/Berkas): judul + rentang indeks `rows`.
     sections: Vec<(String, std::ops::Range<usize>)>,
     expanded: Vec<bool>,
     pscroll: f32,
@@ -161,7 +144,6 @@ struct Spot {
     view: (f32, f32),
     cell_y: Vec<(usize, f32, f32)>,
     more_open: bool,
-    /// Judul seksi daftar (Aksi): sebelum baris ke-n.
     headers: Vec<(usize, String)>,
     recents: Arc<Mutex<Vec<(String, String)>>>,
     thumbs: Arc<Mutex<HashMap<String, Bitmap>>>,
@@ -171,9 +153,6 @@ struct Spot {
     ftype: Option<usize>,
 }
 
-/// Ukuran Spotlight (piksel perangkat), diturunkan dari video referensi: kapsul ±54 pt; saat tombol mode muncul
-/// kapsul memendek ±15 % dan empat tombol bulat setinggi kapsul berjajar di kanannya; panel mode selebar
-/// kapsul pendek + empat tombol; kapsul berada di sekitar 23 % tinggi layar.
 #[derive(Clone, Copy)]
 struct Geo {
     h: f32,
@@ -206,7 +185,6 @@ fn union(a: Rect, b: Rect) -> Rect {
     (l, t, r - l, bt - t)
 }
 
-/// Pegas compositor pada satu properti skalar.
 fn spring(comp: &Compositor, obj: &CompositionObject, prop: &str, v: f32, ratio: f32, period_ms: u32) {
     let go = || -> windows_core::Result<()> {
         let a = comp.CreateSpringScalarAnimation()?;
@@ -225,7 +203,6 @@ struct Ctl {
 
 thread_local! {
     static SPOT: RefCell<Option<Box<Spot>>> = const { RefCell::new(None) };
-    /// Spotlight yang sedang memudar keluar (dihancurkan oleh timer `T_FINISH`).
     static CLOSING: RefCell<Option<Box<Spot>>> = const { RefCell::new(None) };
     static CTL: RefCell<Option<Ctl>> = const { RefCell::new(None) };
 }
@@ -289,7 +266,6 @@ fn action_glyph(id: &str) -> (&'static str, [u8; 3]) {
     }
 }
 
-/// Daftarkan hot key (Ctrl+Space = Spotlight, Ctrl+Shift+Space = Apps) dan siapkan jendela kontrol.
 pub fn init(comp: &Compositor) -> windows_core::Result<()> {
     unsafe {
         let hi: HINSTANCE = GetModuleHandleW(None)?.into();
@@ -324,12 +300,10 @@ pub fn shutdown() {
     });
 }
 
-/// Buka bila tertutup, tutup bila terbuka.
 pub fn toggle() {
     toggle_mode(Mode::Search)
 }
 
-/// Buka langsung di `mode`; bila sudah terbuka di mode itu, tutup; bila di mode lain, pindah.
 pub fn toggle_mode(mode: Mode) {
     let open_mode = SPOT.with(|c| c.borrow().as_ref().map(|s| s.mode));
     match open_mode {
@@ -338,7 +312,6 @@ pub fn toggle_mode(mode: Mode) {
             return;
         }
         Some(_) => {
-            // kapsul → morph; panel → ganti isi
             with_spot(|s| s.set_mode(mode));
             return;
         }
@@ -350,7 +323,6 @@ pub fn toggle_mode(mode: Mode) {
         Ok(s) => {
             SPOT.with(|c| *c.borrow_mut() = Some(s));
             with_spot(|s| {
-                // Seperti video: muncul murni memudar ±80 ms, tanpa skala atau geser.
                 s.reset_state(mode);
                 s.render();
                 let root = s.popup.root().clone();
@@ -359,7 +331,6 @@ pub fn toggle_mode(mode: Mode) {
                 let _ = crate::motion::scalar(&s.comp, &root, "Opacity", 0.0, 1.0, 80);
                 let _ = root.SetOpacity(1.0);
             });
-            // segarkan indeks di latar belakang (aplikasi baru terpasang)
             let h = CTL.with(|c| c.borrow().as_ref().map(|c| c.hwnd.0 as isize)).unwrap_or(0);
             apps::refresh(move || unsafe {
                 let _ = PostMessageW(Some(HWND(h as *mut _)), WM_APPS, WPARAM(0), LPARAM(0));
@@ -369,7 +340,6 @@ pub fn toggle_mode(mode: Mode) {
     }
 }
 
-/// Tutup dengan memudar ±90 ms (seperti video); jendela dihancurkan sesudahnya oleh timer.
 pub fn close() {
     let s = SPOT.with(|c| c.borrow_mut().take());
     if let Some(s) = s {
@@ -395,6 +365,7 @@ fn finish_closing() {
         unsafe {
             let _ = DestroyWindow(h);
         }
+        nacre_platform::sys::trim_later(5000);
     }
 }
 
@@ -408,20 +379,17 @@ fn create(comp: &Compositor, mode: Mode) -> windows_core::Result<Box<Spot>> {
         if !c.transparency || c.battery_saver || c.remote_session { nacre_ui::glass::Tier::Solid } else { nacre_ui::glass::Tier::Full }
     };
     let _ = popup.panel.set_tier(tier);
-    // Jendela dibuat sekali seukuran panel terbesar; badan kaca di dalamnya yang dianimasikan, dan region membatasi
-    // area klik ke badan itu. Dengan begitu kapsul bisa memendek/melebar/tumbuh tanpa jendela berkedip.
     let g = geo(dpi, screen);
     popup.set_rect(g.win.0, g.win.1, g.win.2, g.win.3)?;
     let idle: Rect = ((g.gw - g.ws) / 2.0, 0.0, g.ws, g.h);
     popup.panel.set_rect(idle.0, idle.1, idle.2, idle.3)?;
     popup.panel.set_radius(g.h / 2.0)?;
-    // InsetClip memotong ke ukuran visual: kontainer isi harus seukuran jendela, kalau tidak semua isi terpotong habis.
     popup.content.SetSize(Vector2 { X: g.win.2 as f32, Y: g.win.3 as f32 })?;
     let clip = comp.CreateInsetClip()?;
     popup.content.SetClip(&clip)?;
     let side = comp.CreateContainerVisual()?;
     popup.root().Children()?.InsertAtTop(&side)?;
-    let gfx = Gfx::new(comp)?;
+    let gfx = Gfx::shared(comp)?;
     let apps = apps::snapshot();
     let names = apps.iter().map(|a| a.name.clone()).collect();
     let quick = model::parse_quick_keys(&std::fs::read_to_string(quick_file()).unwrap_or_default());
@@ -457,6 +425,7 @@ fn create(comp: &Compositor, mode: Mode) -> windows_core::Result<Box<Spot>> {
         buttons_intro: false,
         side_fading: false,
         hover_mode: None,
+        popped: None,
         tracking: false,
         clip,
         side,
@@ -494,7 +463,6 @@ impl Spot {
         (0.0, 0.0, g.cap, g.h)
     }
 
-    /// Tinggi panel: Cari mengikuti jumlah hasil; mode lain setinggi tetap seperti di video.
     fn panel_h(&self) -> f32 {
         let (g, d) = (self.geo, self.dpi);
         if self.mode != Mode::Search {
@@ -514,7 +482,6 @@ impl Spot {
         }
     }
 
-    /// Region klik jendela. Pada kapsul: seluruh baris (kapsul + area tombol) agar hover di sana terdeteksi.
     fn set_region(&self, r: Rect) {
         let g = self.geo;
         let r = if r.3 <= g.h + 0.5 { (0.0, 0.0, g.gw, g.h) } else { r };
@@ -524,8 +491,6 @@ impl Spot {
         }
     }
 
-    /// Pindah/ubah ukuran badan kaca ke `t` (koordinat jendela). `anim` = pegas (rasio redam, periode ms) di
-    /// compositor; klip isi ikut dengan pegas yang sama, region dilebarkan ke gabungan lama+baru lalu dirapikan.
     fn place(&mut self, t: Rect, anim: Option<(f32, u32)>) {
         let g = self.geo;
         let old = self.cur;
@@ -535,7 +500,6 @@ impl Spot {
         }
         let radius = if t.3 <= g.h + 0.5 { t.3 / 2.0 } else { 26.0 * self.dpi };
         let (ww, wh) = (g.win.2 as f32, g.win.3 as f32);
-        // kapsul tidak dipotong (teks bergeser bersama badan); panel dipotong ke badan kaca
         let ins = if t.3 <= g.h + 0.5 { (0.0, 0.0, 0.0, 0.0) } else { (t.0, t.1, (ww - t.0 - t.2).max(0.0), (wh - t.1 - t.3).max(0.0)) };
         match anim {
             Some((ratio, period)) => {
@@ -563,7 +527,6 @@ impl Spot {
         self.cur = t;
     }
 
-    /// Kosongkan kueri dan pilihan untuk `mode` (tanpa menggambar).
     fn reset_state(&mut self, mode: Mode) {
         self.mode = mode;
         self.query.clear();
@@ -592,13 +555,10 @@ impl Spot {
         self.render();
     }
 
-    /// Mode panel (bukan kapsul + tombol): semua mode kecuali Cari yang masih kosong.
     fn compact(&self) -> bool {
         self.mode == Mode::Search && self.query.trim().is_empty()
     }
 
-    /// Kapsul → panel mode seperti video: (1) kapsul melebar menelan tombol (±100 ms), (2) badan tumbuh ke bawah,
-    /// (3) isi memudar masuk. Tahap 2 dan 3 dimulai oleh timer `T_MORPH`.
     fn begin_morph(&mut self, mode: Mode) {
         self.reset_state(mode);
         self.buttons = false;
@@ -630,7 +590,6 @@ impl Spot {
         self.render_with(true);
     }
 
-    /// Muat daftar berkas terbaru Windows + thumbnail-nya di latar belakang (sekali per pembukaan).
     fn request_recents(&mut self) {
         if self.recents_requested {
             return;
@@ -657,7 +616,6 @@ impl Spot {
         });
     }
 
-    /// Thumbnail berkas `path` yang muat di kotak `box_px` (lebar, tinggi tampil).
     fn thumb_for(&mut self, path: &str, box_px: f32) -> Option<(CompositionDrawingSurface, f32, f32)> {
         if !self.thumb_surf.contains_key(path) {
             let b = self.thumbs.lock().unwrap().get(path).cloned()?;
@@ -669,7 +627,6 @@ impl Spot {
         Some((s, w as f32 * k, h as f32 * k))
     }
 
-    /// Saran Apps: app di dock (sematan lalu terakhir dipakai) yang terpasang, dilengkapi app lain hingga 5.
     fn suggestions(&self) -> Vec<usize> {
         let mut out: Vec<usize> = Vec::new();
         let key = |p: &str| p.replace('/', "\\").to_lowercase();
@@ -741,7 +698,6 @@ impl Spot {
                 self.rows.truncate(9);
             }
             Mode::Apps if q.is_empty() => {
-                // seperti video: Saran, lalu seksi per kategori; tiap seksi satu baris kecuali "Lihat Semua"
                 let push = |rows: &mut Vec<Row>, sections: &mut Vec<(String, std::ops::Range<usize>)>, title: String, idxs: Vec<usize>, apps: &[App]| {
                     if idxs.is_empty() {
                         return;
@@ -787,7 +743,6 @@ impl Spot {
             }
             Mode::Actions => {
                 if q.is_empty() {
-                    // seperti video: Saran, lalu dikelompokkan per app
                     self.headers.push((0, prefs::tr("Saran").to_string()));
                     let n = ACTIONS.len().min(5);
                     for i in 0..n {
@@ -836,7 +791,6 @@ impl Spot {
         std::thread::spawn(move || {
             let hits = filesearch::search(&q);
             {
-                // hasil dari ketikan yang lebih lama tidak boleh menimpa yang lebih baru
                 let mut g = shared.lock().unwrap();
                 if gen >= g.0 {
                     *g = (gen, hits);
@@ -862,10 +816,6 @@ impl Spot {
         let a = &ACTIONS[i];
         Row { kind: RKind::Action(i), title: action_title(a), sub: prefs::tr(a.app).to_string(), path: a.id.to_string() }
     }
-
-    // ------------------------------------------------------------------------------------------------------------
-    // gambar
-    // ------------------------------------------------------------------------------------------------------------
 
     fn text(&mut self, parent: &ContainerVisual, s: &str, x: f32, cy: f32, px: i32, weight: i32, rgb: [u8; 3], op: f32, max_w: f32) -> f32 {
         if s.is_empty() {
@@ -937,7 +887,6 @@ impl Spot {
         }
         let plates = prefs::get().dock_plates;
         let s = icons::load(path, px).and_then(|mut b| {
-            // ikon dari paket/pilihan pengguna sudah berbentuk jadi: tanpa pelat dan gaya tambahan (sama dengan dock)
             if !icons::is_themed(path) {
                 if plates && b.w == b.h {
                     b.bgra = nacre_core::iconplate::plate(&b.bgra, b.w);
@@ -991,7 +940,6 @@ impl Spot {
         self.sprite(parent, &surf, cx - w as f32 / 2.0, cy - h as f32 / 2.0, w as f32, h as f32, op);
     }
 
-    /// Ikon mode (kapsul kosong/tombol bulat/judul panel).
     fn mode_icon(&mut self, parent: &ContainerVisual, m: Mode, cx: f32, cy: f32, size: f32, rgb: [u8; 3], op: f32) {
         match m {
             Mode::Search => self.sym(parent, Sym::Search, cx, cy, size, rgb, op),
@@ -1016,7 +964,6 @@ impl Spot {
 
     fn render_with(&mut self, intro: bool) {
         if self.morphing {
-            // tahap 1 morph sedang berjalan; gambar penuh menyusul dari timer
             return;
         }
         let content = self.popup.content.clone();
@@ -1032,7 +979,6 @@ impl Spot {
         }
     }
 
-    /// Kapsul diam ("Spotlight Search") atau kapsul pendek + empat tombol mode saat kursor di atasnya.
     fn render_compact(&mut self, content: &ContainerVisual) {
         let (g, d) = (self.geo, self.dpi);
         let fg = self.look().fg;
@@ -1041,7 +987,6 @@ impl Spot {
         let was_panel = self.cur.3 > g.h + 0.5;
         let old_x = self.cur.0;
         self.place(t, Some(if was_panel { (0.95, 70) } else { (0.82, 75) }));
-        // isi kapsul bergeser bersama badannya (pegas yang sama)
         let dx = old_x - t.0;
         if dx.abs() > 0.5 && !was_panel {
             let _ = content.SetOffset(Vector3 { X: dx, Y: 0.0, Z: 0.0 });
@@ -1055,11 +1000,10 @@ impl Spot {
         self.sym(content, Sym::Search, t.0 + 28.0 * d, cy, 21.0 * d, fg, 0.75);
         let label = match self.hover_mode {
             Some(m) => prefs::tr(m.title()).to_string(),
-            None => prefs::tr("Cari Spotlight").to_string(),
+            None => prefs::tr("Quick Search").to_string(),
         };
         let mut avail = t.2 - 72.0 * d;
         if let Some(m) = self.hover_mode {
-            // seperti ⌘1 di video: keycap pintasan di ujung kanan kapsul
             let key = format!("Ctrl {}", m.digit());
             let kpx = (12.0 * d).round() as i32;
             let kw = self.text_w(&key, kpx, 500) + 14.0 * d;
@@ -1089,7 +1033,6 @@ impl Spot {
                 }
                 self.mode_icon(&cv, m, r.0 + g.btn / 2.0, r.1 + g.btn / 2.0, 21.0 * d, fg, 0.9);
                 if self.buttons_intro {
-                    // tombol muncul satu per satu: membesar dari kecil sambil memudar masuk
                     let center = Vector3 { X: r.0 + g.btn / 2.0, Y: r.1 + g.btn / 2.0, Z: 0.0 };
                     let _ = crate::motion::pop_in(&self.comp, &cv, center, 0.55, 1.05, 20 + i as u32 * 28, 300);
                 }
@@ -1097,7 +1040,6 @@ impl Spot {
             }
             self.buttons_intro = false;
         } else if !self.side_fading && side.Children().map(|k| k.Count().unwrap_or(0)).unwrap_or(0) > 0 {
-            // tombol menghilang memudar saat kursor pergi
             let _ = crate::motion::scalar(&self.comp, &side, "Opacity", 1.0, 0.0, 130);
             let _ = side.SetOpacity(0.0);
             self.side_fading = true;
@@ -1112,7 +1054,6 @@ impl Spot {
         self.place(t, Some(if intro { (0.9, 90) } else if was_compact { (0.92, 80) } else { (1.0, 55) }));
         let _ = content.SetOffset(Vector3 { X: 0.0, Y: 0.0, Z: 0.0 });
         if intro {
-            // tahap 3 morph: isi baru memudar masuk setelah badan hampir selesai tumbuh
             let go = || -> windows_core::Result<()> {
                 let e = crate::motion::ease(&self.comp)?;
                 let a = self.comp.CreateScalarKeyFrameAnimation()?;
@@ -1134,7 +1075,6 @@ impl Spot {
         let hits0 = self.hits.len();
         let (w, ph) = (t.2, t.3);
 
-        // ---------- kepala: ikon mode + teks; "⋯" di kanan (kecuali Cari dan Aksi) ----------
         let cy = g.h / 2.0;
         self.mode_icon(&body, self.mode, 28.0 * d, cy, 21.0 * d, fg, 0.8);
         let px = (21.0 * d).round() as i32;
@@ -1170,7 +1110,6 @@ impl Spot {
         }
         let mut top = g.h + 2.0 * d;
 
-        // ---------- chip filter (Cari: jenis hasil; Berkas: jenis berkas) ----------
         if matches!(self.mode, Mode::Search | Mode::Files) {
             let chips_h = 42.0 * d;
             let mut x = 20.0 * d;
@@ -1196,7 +1135,6 @@ impl Spot {
             top += chips_h;
         }
 
-        // ---------- area gulir (dipotong di bawah kepala) ----------
         let Ok(area) = self.comp.CreateContainerVisual() else { return };
         let _ = area.SetSize(Vector2 { X: w, Y: ph });
         if let Ok(ac) = self.comp.CreateInsetClip() {
@@ -1212,7 +1150,6 @@ impl Spot {
             _ => self.draw_rows(&area, w, top, 54.0 * d, ph, fg),
         }
 
-        // ---------- menu "⋯" (di atas isi) ----------
         if self.more_open && has_more {
             let label = match self.mode {
                 Mode::Clipboard => prefs::tr("Hapus Riwayat"),
@@ -1230,14 +1167,11 @@ impl Spot {
             self.hits.insert(hits0, (r, HitKind::MoreItem));
         }
 
-        // hit dari koordinat panel ke koordinat jendela
         for h in &mut self.hits[hits0..] {
             h.0 .0 += t.0;
         }
     }
 
-    /// Seksi grid (Apps: Saran + kategori; Berkas: Terbaru dengan thumbnail): judul + "Lihat Semua", grid 5
-    /// kolom, garis pemisah antar seksi, digulir per piksel.
     #[allow(clippy::too_many_arguments)]
     fn draw_sections(&mut self, area: &ContainerVisual, w: f32, top: f32, ph: f32, fg: [u8; 3], thumbs: bool) {
         let d = self.dpi;
@@ -1281,6 +1215,13 @@ impl Spot {
                     continue;
                 }
                 let row = self.rows[idx].clone();
+                let sel_c;
+                let area = if idx == self.sel {
+                    sel_c = self.sel_box(area, &row, Vector3 { X: cx, Y: y0 + ch / 2.0, Z: 0.0 }, cw / 2.0, 12.0 * d);
+                    &sel_c
+                } else {
+                    area
+                };
                 if idx == self.sel {
                     self.rect(area, (cx - cw / 2.0 + 4.0 * d, y0, cw - 8.0 * d, ch - 4.0 * d), 14.0 * d, Color { A: 26, R: fg[0], G: fg[1], B: fg[2] });
                 }
@@ -1334,6 +1275,13 @@ impl Spot {
             let cx = 20.0 * d + c as f32 * cw + cw / 2.0;
             let cy0 = top + 6.0 * d + r as f32 * ch;
             let row = self.rows[idx].clone();
+            let sel_c;
+            let content = if idx == self.sel {
+                sel_c = self.sel_box(content, &row, Vector3 { X: cx, Y: cy0 + ch / 2.0, Z: 0.0 }, cw / 2.0, 16.0 * d);
+                &sel_c
+            } else {
+                content
+            };
             if idx == self.sel {
                 self.rect(content, (cx - cw / 2.0 + 4.0 * d, cy0, cw - 8.0 * d, ch - 4.0 * d), 14.0 * d, Color { A: 26, R: fg[0], G: fg[1], B: fg[2] });
             }
@@ -1348,7 +1296,21 @@ impl Spot {
         }
     }
 
-    /// Daftar baris (Cari, Berkas dengan kueri, Aksi, Papan Klip) dengan judul seksi opsional.
+    fn sel_box(&mut self, parent: &ContainerVisual, row: &Row, center: Vector3, half: f32, room: f32) -> ContainerVisual {
+        let k = motion::fit_pop(motion::HOVER_ROW, half, room);
+        let Ok(c) = self.comp.CreateContainerVisual() else { return parent.clone() };
+        let _ = parent.Children().and_then(|k| k.InsertAtTop(&c));
+        let key = format!("{}|{}", row.title, row.path);
+        if self.popped.as_deref() == Some(key.as_str()) {
+            let _ = c.SetCenterPoint(center);
+            let _ = c.SetScale(Vector3 { X: k, Y: k, Z: 1.0 });
+        } else {
+            let _ = motion::hover_pop(&self.comp, &c, center, k);
+            self.popped = Some(key);
+        }
+        c
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn draw_rows(&mut self, area: &ContainerVisual, w: f32, top: f32, row_h: f32, bottom: f32, fg: [u8; 3]) {
         let d = self.dpi;
@@ -1375,6 +1337,13 @@ impl Spot {
                 ry += 30.0 * d;
             }
             let row = self.rows[i].clone();
+            let sel_c;
+            let area = if i == self.sel {
+                sel_c = self.sel_box(area, &row, Vector3 { X: w / 2.0, Y: ry + row_h / 2.0, Z: 0.0 }, w / 2.0 - 8.0 * d, 8.0 * d);
+                &sel_c
+            } else {
+                area
+            };
             if i == self.sel {
                 self.rect(area, (8.0 * d, ry, w - 16.0 * d, row_h - 2.0 * d), 12.0 * d, Color { A: 28, R: fg[0], G: fg[1], B: fg[2] });
             }
@@ -1400,7 +1369,6 @@ impl Spot {
                     self.glyph(area, g, icx, icy, 17.0 * d, [255, 255, 255], 1.0);
                 }
                 RKind::Clip => {
-                    // ikon lembar dokumen seperti di video
                     self.rect(area, (icx - ic * 0.36, icy - ic / 2.0, ic * 0.72, ic), 4.0 * d, Color { A: 240, R: 250, G: 250, B: 252 });
                     self.glyph(area, "\u{E8A5}", icx, icy, 14.0 * d, [120, 120, 128], 1.0);
                 }
@@ -1422,7 +1390,6 @@ impl Spot {
                 self.text(area, &label, r.0 + 9.0 * d, icy, cpx, 500, fg, 0.75, cw);
             }
             if matches!(row.kind, RKind::Clip) {
-                // tombol salin bulat di kanan
                 let r: Rect = (w - 48.0 * d, icy - 13.0 * d, 26.0 * d, 26.0 * d);
                 self.rect(area, r, 13.0 * d, Color { A: 30, R: fg[0], G: fg[1], B: fg[2] });
                 self.glyph(area, "\u{E8C8}", r.0 + 13.0 * d, icy, 12.0 * d, fg, 0.8);
@@ -1432,10 +1399,6 @@ impl Spot {
             ry += row_h;
         }
     }
-
-    // ------------------------------------------------------------------------------------------------------------
-    // aksi
-    // ------------------------------------------------------------------------------------------------------------
 
     fn take_run(&mut self) -> Run {
         let Some(r) = self.rows.get(self.sel).cloned() else { return Run::Nothing };
@@ -1454,7 +1417,6 @@ impl Spot {
         }
         let empty_q = self.query.trim().is_empty();
         if matches!(self.mode, Mode::Apps | Mode::Files) && empty_q {
-            // seksi grid: berpindah di antara sel yang tampil; gulir agar sel terpilih terlihat
             let vis: Vec<usize> = self.cell_y.iter().map(|c| c.0).collect();
             if vis.is_empty() {
                 return;
@@ -1516,7 +1478,6 @@ impl Spot {
 }
 
 fn clip_time(at: i64) -> String {
-    // jam lokal dari selisih terhadap sekarang (tanpa tabel zona waktu): pakai jam lokal sekarang dikurangi umur
     let now_local = time::local_now();
     let now_secs = (now_local.hour * 3600 + now_local.minute * 60 + now_local.second) as i64;
     let age = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0) - at;
@@ -1572,7 +1533,6 @@ unsafe extern "system" fn ctl_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             LRESULT(0)
         }
         WM_APPS => {
-            // indeks siap: segarkan daftar pada Spotlight yang sedang terbuka
             with_spot(|s| {
                 s.apps = apps::snapshot();
                 s.names = s.apps.iter().map(|a| a.name.clone()).collect();
@@ -1587,7 +1547,6 @@ unsafe extern "system" fn ctl_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             LRESULT(0)
         }
         WM_THUMBS => {
-            // daftar terbaru / thumbnail baru siap: segarkan panel Berkas tanpa animasi
             with_spot(|s| {
                 if s.mode == Mode::Files && s.query.trim().is_empty() && !s.morphing {
                     let sel = s.sel;
@@ -1706,7 +1665,6 @@ unsafe extern "system" fn spot_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                         v if v == VK_LEFT.0 => (-1, 0),
                         _ => (1, 0),
                     };
-                    // kiri/kanan hanya bermakna pada grid Apps
                     if (dx != 0 && s.mode != Mode::Apps) || s.editing.is_some() {
                         return;
                     }
@@ -1758,7 +1716,6 @@ unsafe extern "system" fn spot_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                     return;
                 }
                 if s.compact() {
-                    // kursor di atas Spotlight: kapsul memendek dan empat tombol mode muncul
                     if !s.buttons {
                         s.buttons = true;
                         s.buttons_intro = true;
@@ -1885,7 +1842,6 @@ unsafe extern "system" fn spot_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             LRESULT(0)
         }
         WM_ACTIVATE => {
-            // kehilangan fokus (klik di luar, alt-tab): tutup
             if (wp.0 & 0xFFFF) == 0 {
                 let _ = PostMessageW(Some(hwnd), WM_CLOSE_SPOT, WPARAM(0), LPARAM(0));
             }

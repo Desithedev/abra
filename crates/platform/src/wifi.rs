@@ -1,9 +1,6 @@
-//! Nama jaringan Wi-Fi yang sedang tersambung (WLAN API). Dibaca sesuai kebutuhan, tanpa pekerja latar.
-
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::NetworkManagement::WiFi::*;
 
-/// SSID jaringan tersambung, atau `None` bila tidak ada adaptor/tidak tersambung.
 pub fn ssid() -> Option<String> {
     unsafe {
         let mut ver = 0u32;
@@ -44,31 +41,19 @@ pub fn ssid() -> Option<String> {
     }
 }
 
-// ---------------------------------------------------------------------------------------------------------------
-// Pemilih jaringan: pindai, daftar, sambung. Berjalan di thread pekerja (WlanScan butuh beberapa detik).
-// Sejak Windows 11 24H2 daftar jaringan sekitar butuh izin Lokasi untuk aplikasi desktop; tanpa itu Windows
-// mengembalikan ERROR_ACCESS_DENIED dan menu memakai mode terbatas (nama jaringan tersambung saja).
-// ---------------------------------------------------------------------------------------------------------------
-
 use nacre_core::netlist::{merge, Network};
 use std::sync::mpsc::{channel, Receiver, Sender};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Scan {
-    /// Jaringan terlihat (sudah digabung dan diurutkan); kosong bila `denied` atau tidak ada adaptor.
     pub networks: Vec<Network>,
-    /// Daftar ditolak Windows (izin Lokasi mati).
     pub denied: bool,
-    /// Ada adaptor Wi-Fi.
     pub adapter: bool,
-    /// SSID jaringan tersambung (tidak bisa dibaca saat `denied`).
     pub current: Option<String>,
-    /// Adaptor sedang tersambung ke suatu jaringan (selalu bisa dibaca, juga saat `denied`).
     pub connected: bool,
 }
 
 pub enum Cmd {
-    /// Baca daftar tersimpan sekarang, lalu pindai ulang dan kirim lagi saat selesai.
     Scan,
     Connect(Network),
 }
@@ -89,7 +74,6 @@ fn interfaces(h: HANDLE) -> Vec<windows::core::GUID> {
     interfaces_state(h).into_iter().map(|(g, _)| g).collect()
 }
 
-/// Antarmuka WLAN beserta apakah sedang tersambung.
 fn interfaces_state(h: HANDLE) -> Vec<(windows::core::GUID, bool)> {
     let mut out = Vec::new();
     unsafe {
@@ -137,9 +121,23 @@ fn read(h: HANDLE) -> Scan {
             WlanFreeMemory(list as *const _);
         }
     }
+    let live = link();
+    if scan.denied {
+        let cur = live.as_ref().map(|l| l.0.clone());
+        let sig = live.as_ref().map(|l| l.1 * 20).unwrap_or(0);
+        raw = saved_profiles()
+            .into_iter()
+            .map(|p| Network { connected: cur.as_deref() == Some(p.as_str()), signal: if cur.as_deref() == Some(p.as_str()) { sig } else { 0 }, ssid: p.clone(), secured: true, profile: Some(p) })
+            .collect();
+    }
     scan.networks = merge(raw);
-    // nama jaringan Windows (NLM) tidak dipakai: saat izin Lokasi mati Windows menggantinya dengan teks samaran
-    scan.current = scan.networks.iter().find(|n| n.connected).map(|n| n.ssid.clone()).or_else(ssid);
+    if let Some((name, bars)) = &live {
+        if let Some(n) = scan.networks.iter_mut().find(|n| n.connected || n.ssid == *name) {
+            n.connected = true;
+            n.signal = n.signal.max(bars * 20);
+        }
+    }
+    scan.current = scan.networks.iter().find(|n| n.connected).map(|n| n.ssid.clone()).or_else(|| live.map(|l| l.0)).or_else(ssid);
     scan
 }
 
@@ -152,7 +150,7 @@ fn connect(h: HANDLE, n: &Network) {
     let params = WLAN_CONNECTION_PARAMETERS {
         wlanConnectionMode: if n.profile.is_some() { wlan_connection_mode_profile } else { wlan_connection_mode_discovery_unsecure },
         strProfile: if n.profile.is_some() { windows::core::PCWSTR(prof.as_ptr()) } else { windows::core::PCWSTR::null() },
-        pDot11Ssid: &mut dot,
+        pDot11Ssid: if n.profile.is_some() { std::ptr::null_mut() } else { &mut dot },
         pDesiredBssidList: std::ptr::null_mut(),
         dot11BssType: dot11_BSS_type_infrastructure,
         dwFlags: 0,
@@ -161,7 +159,6 @@ fn connect(h: HANDLE, n: &Network) {
     crate::log::line("wifi", &format!("sambung ({}): {rc}", if n.profile.is_some() { "profil" } else { "terbuka" }));
 }
 
-/// Data palsu untuk uji tampilan (`NACRE_FAKE_WIFI=1`), tanpa menyentuh adaptor.
 fn fake() -> Scan {
     let n = |s: &str, sig: u8, sec: bool, con: bool, known: bool| Network { ssid: s.into(), signal: sig, secured: sec, connected: con, profile: known.then(|| s.to_string()) };
     let networks = merge(vec![n("Jaringan Uji", 90, true, true, true), n("Kantor Uji", 55, true, false, true), n("Kafe Uji", 70, false, false, false), n("Tetangga Uji", 25, true, false, false)]);
@@ -194,7 +191,6 @@ pub fn spawn(notify: impl Fn() + Send + 'static) -> Scanner {
                                 let _ = WlanScan(h, &g, None, None, None);
                             }
                         }
-                        // pemindaian selesai dalam ±4 detik (driver memberi tahu lewat notifikasi; cukup tunggu)
                         std::thread::sleep(std::time::Duration::from_millis(3500));
                         let _ = res_tx.send(read(h));
                         notify();
@@ -215,4 +211,42 @@ pub fn spawn(notify: impl Fn() + Send + 'static) -> Scanner {
         }
     });
     Scanner { commands: cmd_tx, results: res_rx }
+}
+
+pub fn link() -> Option<(String, u8)> {
+    use windows::Networking::Connectivity::NetworkInformation;
+    let p = NetworkInformation::GetInternetConnectionProfile().ok()?;
+    if !p.IsWlanConnectionProfile().ok()? {
+        return None;
+    }
+    let bars = p.GetSignalBars().ok().and_then(|r| r.Value().ok()).unwrap_or(0);
+    let name = p.ProfileName().map(|h| h.to_string()).unwrap_or_default();
+    Some((name, bars.min(5)))
+}
+
+pub fn saved_profiles() -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    unsafe {
+        let mut ver = 0u32;
+        let mut h = HANDLE::default();
+        if WlanOpenHandle(2, None, &mut ver, &mut h) != 0 {
+            return out;
+        }
+        for g in interfaces(h) {
+            let mut list: *mut WLAN_PROFILE_INFO_LIST = std::ptr::null_mut();
+            if WlanGetProfileList(h, &g, None, &mut list) == 0 && !list.is_null() {
+                let l = &*list;
+                for i in 0..l.dwNumberOfItems as usize {
+                    let info = &*l.ProfileInfo.as_ptr().add(i);
+                    let name = wide_to_string(&info.strProfileName);
+                    if !name.is_empty() && !out.contains(&name) {
+                        out.push(name);
+                    }
+                }
+                WlanFreeMemory(list as *const _);
+            }
+        }
+        let _ = WlanCloseHandle(h, None);
+    }
+    out
 }

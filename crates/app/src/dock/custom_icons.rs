@@ -1,6 +1,3 @@
-//! Ikon kustom per app: `icons.txt` (`jalur-app<TAB>jalur-gambar`). Gambar yang dipilih pengguna disalin ke
-//! `%APPDATA%\ABRA\icons\` agar tetap ada walau berkas aslinya dipindah/dihapus.
-
 use crate::paths;
 use nacre_core::dock::items::key_of;
 use nacre_platform::{icons, log};
@@ -35,7 +32,6 @@ fn write(rows: &[(String, String)]) {
     }
 }
 
-/// Daftarkan semua ikon kustom tersimpan ke pemuat ikon (dipanggil saat start).
 pub fn install() {
     for (app, img) in read() {
         if std::path::Path::new(&img).exists() {
@@ -53,7 +49,6 @@ fn fnv(s: &str) -> u64 {
     h
 }
 
-/// Pakai `image` sebagai ikon `app`. Mengembalikan false bila gambar tak bisa disalin/dibaca.
 pub fn set(app: &str, image: &str) -> bool {
     let ext = std::path::Path::new(image).extension().and_then(|e| e.to_str()).unwrap_or("png").to_ascii_lowercase();
     let dest = dir().join(format!("{:016x}.{ext}", fnv(&key_of(app))));
@@ -63,7 +58,6 @@ pub fn set(app: &str, image: &str) -> bool {
         return false;
     }
     let dest_s = dest.to_string_lossy().to_string();
-    // Pastikan gambar bisa didekode sebelum dipakai.
     if nacre_platform::wic::decode_file_fit(&dest_s, 16).is_none() {
         let _ = std::fs::remove_file(&dest);
         return false;

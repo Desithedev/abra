@@ -1,6 +1,3 @@
-//! Mengirim kombinasi tombol ke jendela yang sedang aktif (SendInput). Dipakai menu bar untuk meneruskan
-//! perintah standar (Salin, Simpan, ...) ke aplikasi: jendela ABRA bersifat NOACTIVATE sehingga fokus tetap di app.
-
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, VIRTUAL_KEY,
 };
@@ -25,7 +22,6 @@ fn key(vk: u16, up: bool) -> INPUT {
     }
 }
 
-/// Tekan semua `vks` berurutan lalu lepas berkebalikan (mis. `[CTRL, 0x53]` = Ctrl+S).
 pub fn chord(vks: &[u16]) {
     let mut seq: Vec<INPUT> = vks.iter().map(|v| key(*v, false)).collect();
     seq.extend(vks.iter().rev().map(|v| key(*v, true)));

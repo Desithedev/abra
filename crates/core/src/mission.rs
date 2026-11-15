@@ -1,5 +1,3 @@
-//! Tata letak Mission Control: menaruh thumbnail jendela (rasio dijaga) dalam grid yang memenuhi area. Murni.
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rect {
     pub x: f32,
@@ -8,15 +6,11 @@ pub struct Rect {
     pub h: f32,
 }
 
-/// `sizes`: ukuran asli tiap jendela (w, h). `area`: ruang yang tersedia. `gap`: jarak antar sel.
-/// `label_h`: tinggi tambahan di bawah tiap thumbnail untuk judul. Mengembalikan persegi thumbnail
-/// (tanpa label) satu per jendela, urutan sama dengan `sizes`.
 pub fn grid(sizes: &[(f32, f32)], area: Rect, gap: f32, label_h: f32) -> Vec<Rect> {
     let n = sizes.len();
     if n == 0 {
         return vec![];
     }
-    // pilih jumlah kolom yang memberi thumbnail terbesar
     let mut best: Option<(f32, usize)> = None;
     for cols in 1..=n {
         let rows = n.div_ceil(cols);
@@ -25,7 +19,6 @@ pub fn grid(sizes: &[(f32, f32)], area: Rect, gap: f32, label_h: f32) -> Vec<Rec
         if cw <= 0.0 || ch <= 0.0 {
             continue;
         }
-        // ukuran thumbnail terkecil yang dihasilkan (jendela rata-rata 16:10)
         let thumb = (cw / 1.6).min(ch);
         if best.map(|b| thumb > b.0).unwrap_or(true) {
             best = Some((thumb, cols));
@@ -40,7 +33,6 @@ pub fn grid(sizes: &[(f32, f32)], area: Rect, gap: f32, label_h: f32) -> Vec<Rec
     let mut out = Vec::with_capacity(n);
     for (i, (sw, sh)) in sizes.iter().enumerate() {
         let (r, c) = (i / cols, i % cols);
-        // baris terakhir yang tidak penuh dipusatkan
         let in_row = if r == rows - 1 { n - r * cols } else { cols };
         let row_w = in_row as f32 * cw + gap * (in_row as f32 - 1.0);
         let x0 = area.x + (area.w - row_w) / 2.0 + c as f32 * (cw + gap);

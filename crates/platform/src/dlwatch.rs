@@ -1,11 +1,3 @@
-//! Pemantau unduhan untuk notch, satu thread yang memeriksa tiap detik:
-//! - Microsoft Store: AppInstallManager (persen asli). Namespace ini tidak ada di crate `windows`, jadi dipanggil lewat
-//!   vtable COM mentah dengan GUID antarmuka resmi (IAppInstallManager/Item/Status).
-//! - Steam: appmanifest_*.acf di tiap perpustakaan (BytesDownloaded / BytesToDownload).
-//! - Peramban: berkas .crdownload / .part di folder Unduhan; ukuran total tidak diketahui (busur berputar + ukuran).
-//!   Pengunduhnya dicari lewat Restart Manager (proses yang membuka berkas) untuk ikon.
-//! Hanya metadata yang dibaca; isi berkas tidak pernah dibuka.
-
 use nacre_core::notch::download::{steam_libraries, steam_progress, vdf_value, Download, Source};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -15,7 +7,6 @@ use std::time::{Duration, Instant};
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Snapshot {
     pub active: Vec<Download>,
-    /// Unduhan yang baru saja selesai (sekali kirim).
     pub finished: Option<Download>,
 }
 
@@ -25,12 +16,7 @@ pub struct Watch {
 
 const STORE_ICON: &str = "shell:AppsFolder\\Microsoft.WindowsStore_8wekyb3d8bbwe!App";
 const PARTIAL: [&str; 4] = [".crdownload", ".part", ".partial", ".download"];
-/// Berkas parsial yang tidak bertambah selama ini dianggap dijeda (Chrome menyimpan .crdownload saat dijeda).
 const STALL: Duration = Duration::from_secs(10);
-
-// ---------------------------------------------------------------------------------------------------------------
-// Microsoft Store (COM mentah)
-// ---------------------------------------------------------------------------------------------------------------
 
 mod store {
     use std::ffi::c_void;
@@ -47,7 +33,6 @@ mod store {
         pub bytes: u64,
     }
 
-    /// Fungsi ke-`i` di vtable objek `p`.
     unsafe fn slot<F: Copy>(p: *mut c_void, i: usize) -> F {
         let vt = *(p as *const *const *const c_void);
         std::mem::transmute_copy(&*vt.add(i))
@@ -61,7 +46,6 @@ mod store {
     type GetF64 = unsafe extern "system" fn(*mut c_void, *mut f64) -> HRESULT;
     type GetStr = unsafe extern "system" fn(*mut c_void, *mut *mut c_void) -> HRESULT;
 
-    /// Pointer COM yang dilepas saat keluar cakupan.
     fn own(p: *mut c_void) -> Option<IUnknown> {
         (!p.is_null()).then(|| unsafe { IUnknown::from_raw(p) })
     }
@@ -76,7 +60,6 @@ mod store {
             own(p).map(Manager)
         }
 
-        /// Item antrean pemasangan (IAppInstallManager.AppInstallItems → IVectorView<AppInstallItem>).
         pub fn items(&self) -> Vec<Item> {
             let mut out = Vec::new();
             unsafe {
@@ -98,7 +81,6 @@ mod store {
                     }
                     let Some(item) = own(ip) else { continue };
                     let it = item.as_raw();
-                    // IAppInstallItem: 6 ProductId, 7 PackageFamilyName, 10 GetCurrentStatus
                     let mut hs: *mut c_void = std::ptr::null_mut();
                     let key = if slot::<GetStr>(it, 6)(it, &mut hs).is_ok() && !hs.is_null() {
                         let h: HSTRING = std::mem::transmute(hs);
@@ -112,7 +94,6 @@ mod store {
                     }
                     let Some(status) = own(sp) else { continue };
                     let s = status.as_raw();
-                    // IAppInstallStatus: 6 InstallState, 8 BytesDownloaded, 9 PercentComplete
                     let (mut state, mut bytes, mut pct) = (0i32, 0u64, 0f64);
                     let _ = slot::<GetI32>(s, 6)(s, &mut state);
                     let _ = slot::<GetU64>(s, 8)(s, &mut bytes);
@@ -124,17 +105,11 @@ mod store {
         }
     }
 
-    /// AppInstallState: Pending 0, Starting 1, AcquiringLicense 2, Downloading 3, RestoringData 4, Installing 5,
-    /// Completed 6 (selainnya: dibatalkan, dijeda, galat).
     pub fn is_active(state: i32) -> bool {
         (0..=5).contains(&state)
     }
     pub const COMPLETED: i32 = 6;
 }
-
-// ---------------------------------------------------------------------------------------------------------------
-// Steam
-// ---------------------------------------------------------------------------------------------------------------
 
 fn reg_str(path: &str, name: &str) -> Option<String> {
     use windows::core::HSTRING;
@@ -180,10 +155,6 @@ fn steam() -> Option<Steam> {
     Some(Steam { exe, manifests })
 }
 
-// ---------------------------------------------------------------------------------------------------------------
-// Peramban
-// ---------------------------------------------------------------------------------------------------------------
-
 struct Part {
     size: u64,
     changed: Instant,
@@ -196,7 +167,6 @@ fn partial_suffix(name: &str) -> Option<&'static str> {
     PARTIAL.iter().copied().find(|s| l.ends_with(s))
 }
 
-/// Exe proses yang membuka berkas `path` (Restart Manager), mis. brave.exe untuk .crdownload.
 fn writer_of(path: &Path) -> Option<String> {
     use windows::core::{PCWSTR, PWSTR};
     use windows::Win32::Foundation::CloseHandle;
@@ -243,11 +213,6 @@ fn downloads_dir() -> Option<PathBuf> {
     std::env::var_os("NACRE_TEST_DOWNLOADS").map(PathBuf::from).or_else(crate::downloads::folder)
 }
 
-// ---------------------------------------------------------------------------------------------------------------
-// Pekerja
-// ---------------------------------------------------------------------------------------------------------------
-
-/// Unduhan palsu untuk uji tampilan (`NACRE_FAKE_DOWNLOAD=store|browser`): naik dari 0 sampai selesai dalam ±16 detik.
 fn fake(kind: &str, t: f32) -> Snapshot {
     let app = std::env::var("SystemRoot").map(|r| format!("{r}\\explorer.exe")).unwrap_or_default();
     let pct = (t / 16.0 * 100.0).min(100.0);
@@ -290,7 +255,6 @@ pub fn spawn(notify: impl Fn() + Send + 'static) -> Watch {
             }
         }
         let store = store::Manager::new();
-        // sekali di awal: memastikan pembacaan antrean Store berjalan (hanya status, tanpa nama app)
         let states: Vec<i32> = store.as_ref().map(|m| m.items().iter().map(|i| i.state).collect()).unwrap_or_default();
         crate::log::line("unduhan", &format!("pemantau mulai: Store {} (status antrean {states:?})", if store.is_some() { "terbaca" } else { "tidak tersedia" }));
         let mut steam_info: Option<Steam> = None;
@@ -305,7 +269,6 @@ pub fn spawn(notify: impl Fn() + Send + 'static) -> Watch {
             let mut active: Vec<(String, Download)> = Vec::new();
             let mut finished: Option<Download> = None;
 
-            // Store
             let store_items = store.as_ref().map(|m| m.items()).unwrap_or_default();
             for it in &store_items {
                 if store::is_active(it.state) {
@@ -314,7 +277,6 @@ pub fn spawn(notify: impl Fn() + Send + 'static) -> Watch {
                 }
             }
 
-            // Steam (periksa ulang daftar manifes tiap menit; baca manifes tiap 2 detik)
             if steam_checked.is_none_or(|t| t.elapsed() > Duration::from_secs(60)) {
                 steam_info = steam();
                 steam_checked = Some(Instant::now());
@@ -329,12 +291,10 @@ pub fn spawn(notify: impl Fn() + Send + 'static) -> Watch {
                         }
                     }
                 } else {
-                    // detik ganjil: pertahankan unduhan Steam yang sudah diketahui
                     active.extend(prev.iter().filter(|(k, _)| k.starts_with("steam:")).map(|(k, d)| (k.clone(), d.clone())));
                 }
             }
 
-            // Peramban
             let mut seen = Vec::new();
             if let Some(dir) = downloads_dir() {
                 if let Ok(rd) = std::fs::read_dir(&dir) {
@@ -342,7 +302,6 @@ pub fn spawn(notify: impl Fn() + Send + 'static) -> Watch {
                         let name = e.file_name().to_string_lossy().to_string();
                         let Some(suffix) = partial_suffix(&name) else { continue };
                         let path = e.path();
-                        // ukuran dari berkasnya sendiri: entri folder NTFS baru diperbarui saat pengunduh menutup berkas
                         let Ok(md) = std::fs::metadata(&path) else { continue };
                         let size = md.len();
                         let part = parts.entry(path.clone()).or_insert(Part { size, changed: Instant::now(), writer: None, tries: 0 });
@@ -363,7 +322,6 @@ pub fn spawn(notify: impl Fn() + Send + 'static) -> Watch {
                     }
                 }
             }
-            // berkas parsial hilang: selesai bila berkas akhirnya ada
             let gone: Vec<PathBuf> = parts.keys().filter(|p| !seen.contains(p)).cloned().collect();
             for p in gone {
                 let part = parts.remove(&p);
@@ -377,7 +335,6 @@ pub fn spawn(notify: impl Fn() + Send + 'static) -> Watch {
                     }
                 }
             }
-            // Store/Steam yang hilang dari daftar aktif: selesai bila sudah hampir penuh atau Store menandai Completed
             for (k, d) in &prev {
                 if active.iter().any(|(ak, _)| ak == k) || k.starts_with("file:") {
                     continue;

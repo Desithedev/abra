@@ -1,7 +1,3 @@
-//! Pencarian Spotlight: skor fuzzy nama aplikasi dan kalkulator ekspresi sederhana. Murni.
-
-/// Skor kecocokan `query` terhadap `name` (lebih besar lebih baik), `None` bila tidak cocok.
-/// Urutan prioritas: sama persis > awalan nama > awalan kata > inisial kata > substring > subsekuens.
 pub fn score(query: &str, name: &str) -> Option<u32> {
     let q: Vec<char> = query.trim().to_lowercase().chars().collect();
     if q.is_empty() {
@@ -16,12 +12,10 @@ pub fn score(query: &str, name: &str) -> Option<u32> {
     if n_low.starts_with(&qs) {
         return Some(900 - (n.len() as u32).min(100));
     }
-    // awalan kata
     let words: Vec<&str> = n_low.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
     if let Some(i) = words.iter().position(|w| w.starts_with(&qs)) {
         return Some(800 - (i as u32 * 20).min(100));
     }
-    // inisial kata ("vsc" -> Visual Studio Code)
     let initials: String = words.iter().filter_map(|w| w.chars().next()).collect();
     if initials.starts_with(&qs) {
         return Some(700);
@@ -29,7 +23,6 @@ pub fn score(query: &str, name: &str) -> Option<u32> {
     if let Some(pos) = n_low.find(&qs) {
         return Some(600 - (pos as u32).min(100));
     }
-    // subsekuens
     let mut qi = 0;
     let mut gaps = 0u32;
     let mut last: Option<usize> = None;
@@ -45,15 +38,12 @@ pub fn score(query: &str, name: &str) -> Option<u32> {
     (qi == q.len()).then(|| 400u32.saturating_sub(gaps.min(300)))
 }
 
-/// Indeks `names` yang cocok, diurutkan skor menurun lalu nama menaik, maksimal `limit`.
 pub fn rank(query: &str, names: &[String], limit: usize) -> Vec<usize> {
     let mut v: Vec<(usize, u32)> = names.iter().enumerate().filter_map(|(i, n)| score(query, n).map(|s| (i, s))).collect();
     v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| names[a.0].to_lowercase().cmp(&names[b.0].to_lowercase())));
     v.into_iter().take(limit).map(|(i, _)| i).collect()
 }
 
-/// Hitung ekspresi aritmetika (+ - * / ^, kurung, desimal titik atau koma, minus unary, "x" sebagai kali).
-/// `None` bila bukan ekspresi.
 pub fn eval(expr: &str) -> Option<f64> {
     let s: Vec<char> = expr
         .chars()
@@ -154,7 +144,6 @@ impl Parser<'_> {
     }
 }
 
-/// Teks hasil kalkulator: bilangan bulat tanpa desimal, selain itu maksimal 10 angka di belakang koma.
 pub fn format_number(v: f64) -> String {
     if v.fract() == 0.0 && v.abs() < 1e15 {
         return format!("{}", v as i64);
@@ -180,7 +169,7 @@ mod tests {
     fn rank_orders_and_limits() {
         let names: Vec<String> = ["Notepad", "Note Taker", "Calculator", "Another Note"].iter().map(|s| s.to_string()).collect();
         let r = rank("note", &names, 3);
-        assert_eq!(names[r[0]], "Notepad"); // awalan, nama lebih pendek menang
+        assert_eq!(names[r[0]], "Notepad");
         assert_eq!(r.len(), 3);
     }
 

@@ -1,14 +1,3 @@
-//! Mengambil alih dan memulihkan taskbar Windows (SPEC §4.1).
-//!
-//! Aturan keselamatan, semuanya disengaja:
-//! 1. Marker + guard ditulis/dijalankan **sebelum** menyembunyikan apa pun. Bila salah satu
-//!    gagal, taskbar tidak disentuh.
-//! 2. `restore_marker` hanya butuh isi marker, sehingga proses guard dan start berikutnya
-//!    memakai jalur yang sama persis dengan keluar normal.
-//! 3. Marker hanya dihapus setelah taskbar terverifikasi terlihat dan terpasang di layar.
-//! 4. `HIDDEN` dimatikan **sebelum** menampilkan kembali, supaya penegak (hook WinEvent)
-//!    tidak menyembunyikannya lagi.
-
 use nacre_core::marker::{Marker, Rect};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -47,8 +36,6 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 pub fn is_hidden() -> bool {
     HIDDEN.load(Ordering::Relaxed)
 }
-
-// ---------- pembungkus Win32 kecil ----------
 
 fn class_of(hwnd: HWND) -> String {
     let mut buf = [0u16; 64];
@@ -106,14 +93,10 @@ fn abm_taskbar_pos(h: HWND) -> Option<Rect> {
     Some(Rect { left: d.rc.left, top: d.rc.top, right: d.rc.right, bottom: d.rc.bottom })
 }
 
-/// "Tersembunyi" cukup berarti tidak terlihat. Posisi tidak diperiksa: dalam mode auto-hide
-/// Explorer sendiri memindahkan window yang tak terlihat ke tepi layar, dan melawannya
-/// hanya membuat hook ini berputar. Bila Explorer menampilkannya (reveal auto-hide), kita sembunyikan lagi.
 fn is_parked(h: HWND) -> bool {
     unsafe { !IsWindowVisible(h).as_bool() }
 }
 
-/// Sembunyikan lalu pindahkan jauh di luar layar, agar tidak ada garis tipis/kedip.
 fn park(h: HWND) {
     unsafe {
         let _ = ShowWindow(h, SW_HIDE);
@@ -130,13 +113,10 @@ fn place_and_show(h: HWND, rect: Option<Rect>) {
     }
 }
 
-// ---------- marker di disk ----------
-
 pub fn read_marker(path: &Path) -> Option<Marker> {
     Marker::parse(&std::fs::read_to_string(path).ok()?)
 }
 
-/// Tulis berkas lengkap di folder yang sama lalu ganti; gagal di tengah tidak merusak marker lama.
 fn write_marker(path: &Path, m: &Marker) -> std::io::Result<()> {
     use std::io::Write;
     if let Some(dir) = path.parent() {
@@ -150,15 +130,10 @@ fn write_marker(path: &Path, m: &Marker) -> std::io::Result<()> {
     std::fs::rename(&tmp, path)
 }
 
-// ---------- API publik ----------
-
-/// Ada marker sisa dari sesi yang mati tanpa memulihkan taskbar?
 pub fn marker_exists(path: &Path) -> bool {
     path.exists()
 }
 
-/// Memulihkan taskbar murni dari isi marker. Dipakai: keluar normal, guard, dan start setelah crash.
-/// `true` hanya bila taskbar utama terlihat dan terpasang di layar (dan tiap sekunder yang ada juga).
 pub fn restore_marker(m: &Marker) -> bool {
     let Some(p) = primary() else { return false };
     HIDDEN.store(false, Ordering::Relaxed);
@@ -172,13 +147,10 @@ pub fn restore_marker(m: &Marker) -> bool {
     ok
 }
 
-/// Memulihkan sisa sesi sebelumnya (crash/dibunuh) dan menghapus marker bila berhasil.
 pub fn recover_leftover(path: &Path) -> bool {
     if !path.exists() {
         return true;
     }
-    // Marker rusak: kita tidak tahu posisi aslinya, tapi lebih baik menampilkan taskbar
-    // dengan tebakan aman (selalu di atas, posisi dibiarkan Explorer) daripada membiarkannya hilang.
     let m = read_marker(path).unwrap_or_else(|| Marker::new(-1, 0));
     if m.pid != 0 && m.pid != std::process::id() && crate::process::is_alive(m.pid) {
         crate::log::line("taskbar", "marker dimiliki proses Nacre lain yang masih hidup; tidak disentuh");
@@ -192,8 +164,6 @@ pub fn recover_leftover(path: &Path) -> bool {
     ok
 }
 
-/// Menyembunyikan taskbar. Gagal-tertutup: bila marker atau guard tidak bisa disiapkan,
-/// taskbar tidak diubah sama sekali.
 pub fn hide(marker_path: &Path, guard_exe: &Path) -> Result<(), String> {
     if is_hidden() {
         reassert();
@@ -231,7 +201,6 @@ pub fn hide(marker_path: &Path, guard_exe: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Menampilkan kembali taskbar dari keadaan di memori. Aman dipanggil berulang kali.
 pub fn restore() -> bool {
     let active = lock(&ACTIVE).take();
     remove_enforcer();
@@ -243,14 +212,12 @@ pub fn restore() -> bool {
     if ok {
         let _ = std::fs::remove_file(&a.path);
     } else {
-        // Biarkan marker dan state tetap ada: guard / percobaan berikutnya yang menyelesaikan.
         *lock(&ACTIVE) = Some(a);
     }
     crate::log::line("taskbar", &format!("restore ok={ok}"));
     ok
 }
 
-/// Dipanggil saat Explorer membuat ulang taskbar (pesan "TaskbarCreated") atau DPI berubah.
 pub fn reassert() {
     if !is_hidden() {
         return;
@@ -264,8 +231,6 @@ pub fn reassert() {
     }
     install_enforcer();
 }
-
-// ---------- penegak ----------
 
 unsafe extern "system" fn enforcer(
     _hook: HWINEVENTHOOK,
@@ -285,8 +250,6 @@ unsafe extern "system" fn enforcer(
     }
 }
 
-/// Hook hanya untuk proses Explorer pemilik taskbar, supaya event window lain tidak sampai ke sini.
-/// Hook WinEvent butuh message loop di thread pemasang (thread UI).
 fn install_enforcer() {
     remove_enforcer();
     let Some(p) = primary() else { return };

@@ -1,7 +1,3 @@
-﻿//! Fokus / minimize / tutup window (SPEC Â§4.5, alur fokus 5 langkah).
-//!
-//! Belum ada (M2b): koreksi posisi restore bila window minimize berada di luar layar.
-
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, FlashWindow, GetAncestor, GetForegroundWindow, IsIconic, IsWindow, IsWindowVisible,
@@ -16,7 +12,6 @@ pub fn is_alive(hwnd: isize) -> bool {
     unsafe { IsWindow(Some(h(hwnd))).as_bool() }
 }
 
-/// Judul window (kosong bila tidak ada).
 pub fn title(hwnd: isize) -> String {
     let mut buf = [0u16; 256];
     let n = unsafe { windows::Win32::UI::WindowsAndMessaging::GetWindowTextW(h(hwnd), &mut buf) };
@@ -31,8 +26,6 @@ pub fn foreground() -> isize {
     unsafe { GetForegroundWindow().0 as isize }
 }
 
-/// Mengaktifkan `target`. Mengembalikan `true` hanya bila hasilnya terverifikasi.
-/// `dock`: HWND dock sendiri; bila ia sempat jadi foreground, window luar terakhirlah yang dianggap di depan.
 pub fn activate(target: isize, dock: isize) -> bool {
     unsafe {
         let hwnd = h(target);
@@ -46,7 +39,6 @@ pub fn activate(target: isize, dock: isize) -> bool {
                 fg = h(last);
             }
         }
-        // Klik kedua pada window yang sudah di depan = minimize. Dialog/popup milik window itu dihitung sama.
         let is_front = fg == hwnd || GetAncestor(fg, GA_ROOTOWNER) == hwnd;
         if is_front && IsWindowVisible(hwnd).as_bool() && !IsIconic(hwnd).as_bool() {
             let _ = ShowWindow(hwnd, SW_MINIMIZE);
@@ -62,8 +54,6 @@ pub fn activate(target: isize, dock: isize) -> bool {
         if SetForegroundWindow(hwnd).as_bool() && GetForegroundWindow() == hwnd {
             return true;
         }
-        // Windows membatasi pengambilan foreground. Angkat ke atas dan coba sekali lagi;
-        // bila tetap gagal, minta perhatian (kedip) dan jangan mengaku sukses.
         let _ = BringWindowToTop(hwnd);
         if GetForegroundWindow() == hwnd || (SetForegroundWindow(hwnd).as_bool() && GetForegroundWindow() == hwnd) {
             return true;
@@ -73,18 +63,12 @@ pub fn activate(target: isize, dock: isize) -> bool {
     }
 }
 
-/// Minta window menutup diri (sama seperti tombol tutup; app boleh bertanya "simpan?").
 pub fn request_close(hwnd: isize) {
     unsafe {
         let _ = PostMessageW(Some(h(hwnd)), WM_CLOSE, WPARAM(0), LPARAM(0));
     }
 }
 
-
-
-/// Bawa `target` ke depan dengan paksa (tanpa perilaku "klik kedua = minimize" milik `activate`): dipakai Stage Manager,
-/// yang harus mengaktifkan jendela pilihan walau proses kita bukan foreground. Memakai AttachThreadInput ke thread
-/// foreground; bila masih gagal, mengetuk Alt sekali agar Windows melepas kunci foreground. Hasil diverifikasi.
 pub fn force_foreground(target: isize) -> bool {
     use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
     use windows::Win32::UI::Input::KeyboardAndMouse::{keybd_event, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, VK_MENU};
@@ -112,7 +96,6 @@ pub fn force_foreground(target: isize) -> bool {
             let _ = AttachThreadInput(me, other, false);
         }
         if !ok {
-            // ketukan Alt: Windows menganggap proses ini baru menerima input sehingga SetForegroundWindow diizinkan
             keybd_event(VK_MENU.0 as u8, 0, KEYBD_EVENT_FLAGS(0), 0);
             keybd_event(VK_MENU.0 as u8, 0, KEYEVENTF_KEYUP, 0);
             let _ = BringWindowToTop(hwnd);

@@ -1,8 +1,3 @@
-//! Pintasan ala Mac yang berlaku di semua app: `Alt+\`` berpindah antar jendela app yang sama (Cmd+\`), `Alt+Shift+\``
-//! mundur, `Ctrl+Alt+H` menyembunyikan (meminimalkan) semua jendela app aktif, `Ctrl+Alt+M` meminimalkan jendela aktif,
-//! dan `Ctrl+Alt+Q` menutup semua jendela app aktif dengan sopan (WM_CLOSE, app tetap boleh bertanya "simpan?").
-//! Hanya memakai pesan jendela standar; tidak menyuntik apa pun ke app lain. Bisa dimatikan di Pengaturan.
-
 use crate::prefs;
 use nacre_core::dock::ring::{next_in_ring, prev_in_ring};
 use nacre_platform::log;
@@ -13,7 +8,7 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, UnregisterHotKey, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-const VK_BACKTICK: u32 = 0xC0; // VK_OEM_3
+const VK_BACKTICK: u32 = 0xC0;
 const ID_NEXT: i32 = 0xAB20;
 const ID_PREV: i32 = 0xAB21;
 const ID_HIDE: i32 = 0xAB22;
@@ -27,7 +22,6 @@ fn exe_of(wins: &[nacre_core::dock::items::Win], hwnd: isize) -> Option<String> 
     wins.iter().find(|w| w.hwnd == hwnd).map(|w| w.path.to_lowercase()).filter(|p| !p.is_empty())
 }
 
-/// Pindah ke jendela berikut/sebelumnya milik app yang sedang aktif.
 pub fn cycle(back: bool) {
     let fg = focus::foreground();
     let wins = enumerate::list(std::process::id());
@@ -36,7 +30,6 @@ pub fn cycle(back: bool) {
     if group.len() < 2 {
         return;
     }
-    // paling baru difokus lebih dulu (untuk kasus jendela depan bukan bagian grup)
     group.sort_by_key(|h| std::cmp::Reverse(tracker::recent(*h)));
     let target = if back { prev_in_ring(&group, fg) } else { next_in_ring(&group, fg) };
     if let Some(t) = target {
@@ -44,7 +37,6 @@ pub fn cycle(back: bool) {
     }
 }
 
-/// Minimalkan semua jendela app aktif.
 pub fn hide_foreground_app() {
     let fg = focus::foreground();
     let wins = enumerate::list(std::process::id());
@@ -65,14 +57,12 @@ pub fn minimize_foreground() {
     }
 }
 
-/// Tutup semua jendela app aktif dengan WM_CLOSE (sopan). Shell Windows tidak pernah ditutup.
 pub fn quit_foreground_app() {
     let fg = focus::foreground();
     let wins = enumerate::list(std::process::id());
     let Some(cur) = exe_of(&wins, fg) else { return };
     let name = cur.rsplit(['\\', '/']).next().unwrap_or("");
     if matches!(name, "explorer.exe" | "dwm.exe" | "winlogon.exe" | "csrss.exe" | "searchhost.exe" | "shellexperiencehost.exe") && !wins.iter().any(|w| w.hwnd == fg && w.path.to_lowercase().ends_with("explorer.exe") && wins.len() > 1) {
-        // Explorer: hanya jendela aktif yang ditutup, bukan seluruh shell
         unsafe {
             let _ = PostMessageW(Some(HWND(fg as *mut _)), WM_CLOSE, WPARAM(0), LPARAM(0));
         }

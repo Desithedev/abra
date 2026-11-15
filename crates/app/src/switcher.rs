@@ -1,7 +1,3 @@
-//! Pengalih app ala macOS Cmd+Tab, menggantikan Alt+Tab bawaan Windows selama Stage Manager aktif.
-//! Hook keyboard low-level hanya terpasang saat Stage Manager menyala (nol biaya selain itu). Alt+Tab ditelan;
-//! Tab/Shift+Tab/panah memilih, Esc membatalkan, lepas Alt membawa app terpilih ke panggung.
-
 use crate::popup::Popup;
 use crate::{motion, prefs};
 use nacre_platform::icons::{self, Bitmap};
@@ -79,7 +75,6 @@ pub fn shutdown() {
     uninstall();
 }
 
-/// Pasang/lepas hook sesuai status Stage Manager (dan pengaturan).
 fn sync() {
     if prefs::get().stage && prefs::get().switcher {
         install();
@@ -174,7 +169,6 @@ impl Ctl {
     }
 
     fn open(&mut self, backwards: bool) {
-        // satu kartu per app (jendela terakhir dipakai), terurut dari yang terbaru
         let wins = enumerate::list(std::process::id());
         let mut apps: Vec<(i64, Entry)> = Vec::new();
         for w in &wins {
@@ -200,7 +194,7 @@ impl Ctl {
             return;
         }
         if self.gfx.is_none() {
-            self.gfx = Gfx::new(&self.comp).ok();
+            self.gfx = Gfx::shared(&self.comp).ok();
         }
         let Some(gfx) = self.gfx.as_ref() else { return };
         let comp = self.comp.clone();
@@ -212,8 +206,6 @@ impl Ctl {
             let dpi = unsafe { GetDpiForWindow(popup.hwnd) }.max(96) as f32 / 96.0;
             let (sw, sh) = nacre_platform::sys::screen_size();
 
-            // tangkapan jendela + rasio
-            // jendela yang diparkir Stage Manager tidak bisa ditangkap (hasilnya putih): pakai tangkapan tersimpan dari saat diparkir
             let shots: Vec<Option<Bitmap>> = entries
                 .iter()
                 .map(|e| {
@@ -221,7 +213,6 @@ impl Ctl {
                     live.or_else(|| crate::stage::shot_for(&e.path))
                 })
                 .collect();
-            // ukuran dasar (piksel layar @100%): kartu 296 tinggi (judul 38 + gambar 258), jarak 35, bantalan 58
             let (hdr, thumb_h, gap, pad) = (38.0f32, 258.0f32, 35.0f32, 58.0f32);
             let widths: Vec<f32> = shots
                 .iter()
@@ -235,7 +226,6 @@ impl Ctl {
             popup.panel.set_radius(10.0 * u)?;
             let content = popup.content.clone();
             let kids = content.Children()?;
-            // kerudung abu-abu seperti akrilik
             let rrect = |w: f32, h: f32, r: f32, c: Color| -> windows_core::Result<SpriteVisual> {
                 let v = comp.CreateSpriteVisual()?;
                 v.SetSize(Vector2 { X: w, Y: h })?;
@@ -249,7 +239,6 @@ impl Ctl {
                 Ok(v)
             };
             kids.InsertAtTop(&rrect(pw, ph, 10.0 * u, Color { A: 120, R: 128, G: 128, B: 128 })?)?;
-            // cincin pilihan (biru, dengan celah abu-abu di dalamnya)
             let ch = (thumb_h + hdr) * u;
             let ring = rrect(widths[0] * u + 14.0 * u, ch + 14.0 * u, 14.0 * u, Color { A: 255, R: 0, G: 103, B: 192 })?;
             let ring_in = rrect(widths[0] * u + 6.0 * u, ch + 6.0 * u, 11.0 * u, Color { A: 255, R: 116, G: 116, B: 116 })?;
@@ -351,7 +340,6 @@ impl Ctl {
                 let _ = motion::vec3(&comp, v, "Offset", from, to, motion::SWITCHER_MOVE_MS);
             }
             let _ = v.SetOffset(to);
-            // ukuran kartu berbeda-beda: sesuaikan sorotan beserta klipnya
             let _ = v.SetSize(size);
             if let Ok(g) = comp.CreateRoundedRectangleGeometry() {
                 let _ = g.SetSize(size);
