@@ -78,6 +78,8 @@ const T_SENDDONE: usize = 20;
 const T_TESTSEND: usize = 21;
 const T_PILL: usize = 22;
 const T_TODO: usize = 23;
+const T_CARET: usize = 24;
+const WM_TODO_EDIT: u32 = WM_APP + 28;
 const WM_PILLS: u32 = WM_APP + 26;
 const WM_TASKS: u32 = WM_APP + 27;
 const WM_DEVICECHANGE_MSG: u32 = 0x0219;
@@ -94,7 +96,7 @@ struct SendSess {
 }
 
 const WIN_W: f32 = 640.0;
-const WIN_H: f32 = 222.0;
+const WIN_H: f32 = 392.0;
 const SHADOW_PAD: f32 = 36.0;
 
 static NOTCH_HWND: AtomicIsize = AtomicIsize::new(0);
@@ -189,6 +191,15 @@ pub fn push_pill(kind: PillKind, key: &str, title: &str, sub: &str, linger: Opti
 
 pub fn dismiss_pill(key: &str) {
     send_pill_msg(PillMsg::Dismiss(key.to_string()));
+}
+
+pub fn begin_task_entry() -> bool {
+    let h = NOTCH_HWND.load(Ordering::Relaxed);
+    if h == 0 || !crate::prefs::get().notch_enabled {
+        return false;
+    }
+    post(h, WM_TODO_EDIT);
+    true
 }
 
 pub fn tasks_changed() {
@@ -317,7 +328,12 @@ pub struct Notch {
     tier: Tier,
     glass_override: Option<Tier>,
     pills: Pills,
-    glow_level: f32,
+    glow_level: [f32; 3],
+    todo_edit: Option<String>,
+    caret: bool,
+    edit_prev: isize,
+    surrogate: Option<u16>,
+    todo_draft: String,
     _bt: Option<nacre_platform::devices::Watchers>,
 }
 
@@ -450,7 +466,12 @@ impl Notch {
                 tier,
                 glass_override: opts.glass,
                 pills: Pills::default(),
-                glow_level: 0.0,
+                glow_level: [0.0; 3],
+                todo_edit: None,
+                caret: false,
+                edit_prev: 0,
+                surrogate: None,
+                todo_draft: String::new(),
                 _bt: None,
             });
             n.refresh();
@@ -491,7 +512,7 @@ impl Notch {
                 d.sync_download_watch();
             });
             crate::prefs::listen(hwnd);
-            if std::env::var_os("NACRE_TEST_SEND").is_some() {
+            if std::env::var_os("NACRE_TEST_SEND").is_some() || std::env::var_os("NACRE_TEST_OPEN").is_some() {
                 timer(hwnd, T_TESTSEND, 2500);
             }
             log::line("notch", &format!("dibuat tier={tier:?} dpi={dpi} jendela={win:?} layar_w={screen_w}"));
@@ -775,6 +796,9 @@ impl Notch {
     fn dispatch(&mut self, ev: Event) {
         let open_on = if crate::prefs::get().notch_hover_open { OpenOn::Hover } else { OpenOn::Click };
         let next = state::step(self.mode, ev, open_on, self.tracking);
+        if next != self.mode && next != Mode::Open(Tab::Todo) && self.todo_edit.is_some() {
+            self.suspend_edit();
+        }
         if next != self.mode {
             log::line("notch", &format!("{:?} --{ev:?}--> {next:?}", self.mode));
             self.mode = next;
@@ -784,7 +808,10 @@ impl Notch {
     }
 
     fn refresh(&mut self) {
-        let look = state::look(self.mode, state::activity(&self.live()));
+        let mut look = state::look(self.mode, state::activity(&self.live()));
+        if self.mode == Mode::Open(Tab::Todo) {
+            look.rows = crate::tasks::with(|l| l.tasks.len()).min(state::TODO_MAX_ROWS as usize) as u8 + u8::from(self.todo_edit.is_some());
+        }
         if look != self.look || self.first {
             self.transition(look);
         } else {
@@ -949,7 +976,10 @@ impl Notch {
             send_zone: crate::prefs::get().notch_send,
             pill: self.pills.current(now_ms).map(|p| views::PillView { kind: p.kind, title: p.title.clone(), sub: p.sub.clone() }),
             todo: if self.mode == Mode::Open(Tab::Todo) { Self::todo_rows() } else { Vec::new() },
-            todo_open: if self.mode == Mode::Open(Tab::Todo) { crate::tasks::with(|l| l.open_count()) } else { 0 },
+            todo_done: if self.mode == Mode::Open(Tab::Todo) { crate::tasks::with(|l| l.tasks.iter().filter(|t| t.done).count()) } else { 0 },
+            todo_total: if self.mode == Mode::Open(Tab::Todo) { crate::tasks::with(|l| l.tasks.len()) } else { 0 },
+            todo_more: if self.mode == Mode::Open(Tab::Todo) { crate::tasks::with(|l| l.tasks.len()).saturating_sub(state::TODO_MAX_ROWS as usize) } else { 0 },
+            todo_edit: self.todo_edit.clone().map(|t| (t, self.caret)),
         };
         views::draw(&mut self.paint, &c, self.look, f, &d, &mut self.regions, &mut self.live_vis);
         if let Some(r) = self.hover_act.and_then(|a| self.regions.iter().find(|r| r.action == a)) {
@@ -1161,7 +1191,7 @@ impl Notch {
             self.loopback = None;
         }
         if !want {
-            self.glow_level = 0.0;
+            self.glow_level = [0.0; 3];
         }
         self.paint_glow();
     }
@@ -1172,9 +1202,12 @@ impl Notch {
             let v = b.get(i).copied().unwrap_or(0.0).clamp(0.0, 1.0);
             let _ = bar.SetScale(Vector3 { X: 1.0, Y: 0.25 + 0.75 * v, Z: 1.0 });
         }
-        let level = b.iter().copied().fold(0.0f32, f32::max).clamp(0.0, 1.0);
-        self.glow_level = if level > self.glow_level { 0.55 * level + 0.45 * self.glow_level } else { 0.18 * level + 0.82 * self.glow_level };
-        self.paint_glow();
+        let pick = |i: usize| b.get(i).copied().unwrap_or(0.0).clamp(0.0, 1.0);
+        let target = [pick(0).max(pick(1)), pick(2), pick(3).max(pick(4))];
+        for (cur, t) in self.glow_level.iter_mut().zip(target) {
+            *cur = if t > *cur { 0.6 * t + 0.4 * *cur } else { 0.2 * t + 0.8 * *cur };
+        }
+        self.body.react(self.glow_level);
     }
 
     fn glow_on(&self) -> bool {
@@ -1182,16 +1215,8 @@ impl Notch {
     }
 
     fn paint_glow(&mut self) {
-        let on = self.glow_on();
-        let level = if on { self.glow_level } else { 0.0 };
-        let rgb = on.then(|| self.tint.unwrap_or_else(crate::prefs::accent));
-        let gap = island_gap(self.dpi);
-        let over = if gap > 0.0 { 0.0 } else { self.body.top_over };
-        let rect = (self.x0(), -over, self.size.w, self.size.h + over);
-        let (radius, dpi) = (self.size.radius, self.dpi);
-        if let Some(sh) = self.shadow.as_mut() {
-            sh.set_glow(&self.paint.gfx, rect, radius, 20.0 * dpi, rgb, 0.55 + 0.45 * level);
-        }
+        let rgb = self.glow_on().then(|| self.tint.unwrap_or_else(crate::prefs::accent));
+        self.body.set_aurora(rgb);
     }
 
     fn sync_progress(&self) {
@@ -1447,7 +1472,7 @@ impl Notch {
         crate::tasks::with(|l| {
             l.ordered()
                 .into_iter()
-                .take(4)
+                .take(state::TODO_MAX_ROWS as usize)
                 .map(|t| views::TodoRow {
                     id: t.id,
                     text: t.text.clone(),
@@ -1624,7 +1649,20 @@ impl Notch {
                 crate::tasks::with(|l| l.clear_done());
                 crate::tasks::changed();
             }
-            Action::TodoAdd => crate::spotlight::toggle_mode(nacre_core::spotlight::Mode::Tasks),
+            Action::NextTab => {
+                if let Mode::Open(cur) = self.mode {
+                    let i = Tab::ALL.iter().position(|t| *t == cur).unwrap_or(0);
+                    if self.todo_edit.is_some() {
+                        self.suspend_edit();
+                    }
+                    self.dispatch(Event::SelectTab(Tab::ALL[(i + 1) % Tab::ALL.len()]));
+                }
+            }
+            Action::TodoAdd | Action::TodoField => {
+                if self.todo_edit.is_none() {
+                    self.begin_edit();
+                }
+            }
             Action::CalDay(n) => {
                 self.cal_sel = (self.cal_sel + n).clamp(-3650, 3650);
                 self.render();
@@ -1699,7 +1737,105 @@ impl Notch {
     }
 
     fn interacting(&self) -> bool {
-        self.tracking || matches!(self.mode, Mode::Open(_) | Mode::Drop) || self.grace
+        self.tracking || matches!(self.mode, Mode::Open(_) | Mode::Drop) || self.grace || self.todo_edit.is_some()
+    }
+
+    fn begin_edit(&mut self) {
+        if self.mode != Mode::Open(Tab::Todo) {
+            if !matches!(self.mode, Mode::Open(_)) {
+                self.dispatch(Event::Click);
+            }
+            self.dispatch(Event::SelectTab(Tab::Todo));
+        }
+        kill(self.hwnd, T_LEAVE);
+        self.todo_edit = Some(std::mem::take(&mut self.todo_draft));
+        self.caret = true;
+        self.surrogate = None;
+        unsafe {
+            let fg = GetForegroundWindow();
+            self.edit_prev = if fg == self.hwnd { 0 } else { fg.0 as isize };
+            let ex = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE);
+            SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, ex & !(WS_EX_NOACTIVATE.0 as isize));
+            let _ = SetForegroundWindow(self.hwnd);
+            let _ = windows::Win32::UI::Input::KeyboardAndMouse::SetFocus(Some(self.hwnd));
+        }
+        timer(self.hwnd, T_CARET, 530);
+        self.update_visibility();
+        self.refresh();
+    }
+
+    fn suspend_edit(&mut self) {
+        if let Some(t) = self.todo_edit.as_ref() {
+            self.todo_draft = t.clone();
+        }
+        self.end_edit();
+    }
+
+    fn end_edit(&mut self) {
+        if self.todo_edit.take().is_none() {
+            return;
+        }
+        kill(self.hwnd, T_CARET);
+        unsafe {
+            let ex = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE);
+            SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, ex | WS_EX_NOACTIVATE.0 as isize);
+            let prev = std::mem::take(&mut self.edit_prev);
+            if GetForegroundWindow() == self.hwnd && prev != 0 && IsWindow(Some(HWND(prev as *mut _))).as_bool() {
+                let _ = SetForegroundWindow(HWND(prev as *mut _));
+            }
+        }
+        if !self.tracking && matches!(self.mode, Mode::Open(_)) {
+            timer(self.hwnd, T_LEAVE, motion::LEAVE_GRACE_MS);
+        }
+        self.refresh();
+    }
+
+    fn on_char(&mut self, unit: u16) {
+        let Some(text) = self.todo_edit.as_mut() else { return };
+        match unit {
+            8 => {
+                text.pop();
+            }
+            13 => {
+                let t = std::mem::take(text);
+                if t.trim().is_empty() {
+                    self.end_edit();
+                    return;
+                }
+                if let Some(id) = crate::tasks::with(|l| l.add(&t, crate::tasks::now())) {
+                    log::line("tugas", &format!("tugas #{id} ditambahkan dari Visor"));
+                    crate::tasks::changed();
+                }
+            }
+            27 => {
+                self.end_edit();
+                return;
+            }
+            0xD800..=0xDBFF => {
+                self.surrogate = Some(unit);
+                return;
+            }
+            0xDC00..=0xDFFF => {
+                if let Some(hi) = self.surrogate.take() {
+                    if let Ok(s) = String::from_utf16(&[hi, unit]) {
+                        if text.chars().count() < 160 {
+                            text.push_str(&s);
+                        }
+                    }
+                }
+            }
+            u if u >= 32 => {
+                if let Some(ch) = char::from_u32(u as u32) {
+                    if text.chars().count() < 160 {
+                        text.push(ch);
+                    }
+                }
+            }
+            _ => return,
+        }
+        self.caret = true;
+        timer(self.hwnd, T_CARET, 530);
+        self.render();
     }
 
     fn update_visibility(&mut self) {
@@ -1861,8 +1997,17 @@ impl Notch {
                     self.dispatch(Event::Dwell);
                 }
             }
+            T_CARET => {
+                if self.todo_edit.is_some() {
+                    self.caret = !self.caret;
+                    timer(self.hwnd, T_CARET, 530);
+                    if self.mode == Mode::Open(Tab::Todo) {
+                        self.render();
+                    }
+                }
+            }
             T_LEAVE => {
-                if !self.tracking && !self.send_pinned() {
+                if !self.tracking && !self.send_pinned() && self.todo_edit.is_none() {
                     self.dispatch(Event::Leave);
                 }
             }
@@ -1926,6 +2071,16 @@ impl Notch {
                 kill(self.hwnd, T_TESTSEND);
                 if let Ok(p) = std::env::var("NACRE_TEST_SEND") {
                     self.start_send(p.split(';').map(|s| s.to_string()).collect());
+                }
+                if let Ok(t) = std::env::var("NACRE_TEST_OPEN") {
+                    let tab = match t.as_str() {
+                        "shelf" => Tab::Shelf,
+                        "timer" => Tab::Timer,
+                        "todo" => Tab::Todo,
+                        _ => Tab::Play,
+                    };
+                    self.dispatch(Event::Click);
+                    self.dispatch(Event::SelectTab(tab));
                 }
             }
             T_DLDONE => {
@@ -1998,7 +2153,39 @@ fn xy(lp: LPARAM) -> (f32, f32) {
 
 unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     match msg {
-        WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
+        WM_MOUSEACTIVATE => {
+            if with(hwnd, |d| d.todo_edit.is_some()).unwrap_or(false) {
+                LRESULT(MA_ACTIVATE as isize)
+            } else {
+                LRESULT(MA_NOACTIVATE as isize)
+            }
+        }
+        WM_CHAR => {
+            with(hwnd, |d| d.on_char(wp.0 as u16));
+            LRESULT(0)
+        }
+        WM_KEYDOWN if wp.0 as u16 == 0x1B => {
+            with(hwnd, |d| d.end_edit());
+            LRESULT(0)
+        }
+        WM_ACTIVATE => {
+            if (wp.0 & 0xFFFF) == 0 {
+                with(hwnd, |d| {
+                    if d.todo_edit.is_some() {
+                        d.suspend_edit();
+                    }
+                });
+            }
+            DefWindowProcW(hwnd, msg, wp, lp)
+        }
+        WM_TODO_EDIT => {
+            with(hwnd, |d| {
+                if d.todo_edit.is_none() && !d.off {
+                    d.begin_edit();
+                }
+            });
+            LRESULT(0)
+        }
         WM_LBUTTONDOWN => {
             let (x, y) = xy(lp);
             if with(hwnd, |d| d.on_down(x, y)).unwrap_or(false) {
@@ -2061,7 +2248,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             with(hwnd, |d| {
                 d.schedule_tasks();
                 if d.mode == Mode::Open(Tab::Todo) {
-                    d.render();
+                    d.refresh();
                 }
             });
             LRESULT(0)

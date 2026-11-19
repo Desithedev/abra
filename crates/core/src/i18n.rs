@@ -294,7 +294,7 @@ const EN: &[(&str, &str)] = &[
     ("Pengingat tugas", "Task reminders"),
     ("Shortcut Ctrl+Alt+N untuk menambah tugas", "Ctrl+Alt+N shortcut to add a task"),
     ("Perangkat Bluetooth & flashdisk tersambung", "Bluetooth devices & USB drives connecting"),
-    ("Glow warna album saat musik main", "Album-colour glow while music plays"),
+    ("Aurora warna album saat musik main", "Album-colour aurora while music plays"),
     ("Data rilis tidak terbaca", "Release data could not be read"),
     ("Tidak tersambung ke internet", "No internet connection"),
     ("Installer gagal dijalankan", "The installer could not be started"),

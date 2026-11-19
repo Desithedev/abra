@@ -808,7 +808,7 @@ impl Win {
                     RowDef::Toggle(prefs::tr("Pengingat tugas"), s.pill_reminders, Action::PillReminders),
                     RowDef::Toggle(prefs::tr("Shortcut Ctrl+Alt+N untuk menambah tugas"), s.todo_hotkey, Action::TodoHotkey),
                     RowDef::Toggle(prefs::tr("Perangkat Bluetooth & flashdisk tersambung"), s.pill_devices, Action::PillDevices),
-                    RowDef::Toggle(prefs::tr("Glow warna album saat musik main"), s.notch_glow, Action::NotchGlow),
+                    RowDef::Toggle(prefs::tr("Aurora warna album saat musik main"), s.notch_glow, Action::NotchGlow),
                 ],
             )],
             3 => {

@@ -170,9 +170,13 @@ Lirik tanpa cap waktu hanya tampil di kartu Lirik. Baris lirik di Visor tertutup
 
 ### Tab Tugas dan pengingat
 
-Tab **Tugas** berisi daftar tugas Anda. Klik sebuah tugas untuk mencentangnya; **Hapus yang selesai** membersihkan yang sudah
-dicentang. Tombol **+ Tambah** (atau `Ctrl+Alt+N` dari mana saja) membuka Quick Search dalam mode **Tugas**: ketik lalu tekan
-Enter. Di mode itu Enter juga mencentang tugas yang dipilih dan Delete menghapusnya.
+Halaman **Tugas** berisi daftar tugas Anda dengan angka besar jumlah yang sudah selesai. Klik sebuah tugas untuk mencentangnya;
+**Hapus yang selesai** membersihkan yang sudah dicentang. Tombol **Tambah tugas** (atau `Ctrl+Alt+N` dari mana saja) berubah
+menjadi kolom ketik langsung di Visor: ketik lalu tekan Enter (kolomnya tetap terbuka untuk tugas berikutnya), Esc untuk menutup.
+Saat Anda mengetik, Visor langsung menampilkan jam pengingat yang dikenali. Bila Visor dimatikan, `Ctrl+Alt+N` membuka Quick Search
+dalam mode **Tugas** sebagai gantinya.
+
+Pindah halaman Visor (Putar, Rak, Timer, Tugas) lewat titik di bagian bawah atau roda mouse; tiap halaman punya warnanya sendiri.
 
 Waktu di awal teks menjadikannya pengingat:
 - `15:30 rapat tim` – hari ini pukul 15.30 (besok bila jamnya sudah lewat), `09.15` juga bisa;
@@ -186,8 +190,8 @@ sedang layar penuh, pengingat muncul sebagai balon di area tray. Tugas disimpan 
 
 Pill adalah kabar singkat di Visor: pengingat, pembaruan, dan perangkat yang tersambung atau terputus (earbuds, mouse, keyboard
 Bluetooth, flashdisk). Klik pill untuk menindaklanjutinya (mis. membuka flashdisk), klik kanan untuk menutupnya. Pilih yang ingin
-tampil di Pengaturan → Visor → **Pill & Konteks**. Di sana juga ada **Glow warna album**: saat musik main, Visor dan Capsule berpendar
-lembut dengan warna sampul album dan berdenyut mengikuti irama.
+tampil di Pengaturan → Visor → **Pill & Konteks**. Di sana juga ada **Aurora warna album**: saat musik main, gelombang cahaya
+lembut berwarna sampul album bergerak di bagian bawah Visor dan Capsule, naik-turun mengikuti bass, vokal, dan treble.
 
 ### Ukuran dan jarak
 

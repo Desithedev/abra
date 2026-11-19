@@ -139,15 +139,24 @@ pub enum View {
 pub struct Look {
     pub view: View,
     pub peek: bool,
+    pub rows: u8,
+}
+
+pub const TODO_MAX_ROWS: u8 = 7;
+pub const TODO_ROW: f32 = 38.0;
+
+pub fn todo_height(rows: u8) -> f32 {
+    let list = rows.min(TODO_MAX_ROWS + 1) as f32 * TODO_ROW;
+    48.0 + list.max(140.0) + 30.0
 }
 
 pub fn look(mode: Mode, act: Option<Activity>) -> Look {
-    let collapsed = |peek| Look { view: act.map_or(View::Rest, View::Compact), peek };
+    let collapsed = |peek| Look { view: act.map_or(View::Rest, View::Compact), peek, rows: 0 };
     match mode {
         Mode::Rest => collapsed(false),
         Mode::Peek => collapsed(true),
-        Mode::Open(t) => Look { view: View::Open(t), peek: false },
-        Mode::Drop => Look { view: View::Drop, peek: false },
+        Mode::Open(t) => Look { view: View::Open(t), peek: false, rows: 0 },
+        Mode::Drop => Look { view: View::Drop, peek: false, rows: 0 },
     }
 }
 
@@ -169,8 +178,9 @@ pub fn size(l: Look, dpi: f32) -> Size {
         View::Compact(Activity::Pill) => (330.0, 36.0, 18.0),
         View::Compact(Activity::Player) => (540.0, 100.0, 30.0),
         View::Compact(_) => (292.0, 30.0, 15.0),
-        View::Open(Tab::Play) => (600.0, 214.0, 28.0),
-        View::Open(_) => (600.0, 176.0, 28.0),
+        View::Open(Tab::Play) => (600.0, 226.0, 28.0),
+        View::Open(Tab::Todo) => (600.0, todo_height(l.rows), 28.0),
+        View::Open(_) => (600.0, 188.0, 28.0),
         View::Drop => (520.0, 120.0, 28.0),
     };
     if l.peek && matches!(l.view, View::Rest | View::Compact(_)) {
@@ -292,10 +302,15 @@ mod tests {
         assert!(music.w > rest.w && music.h == rest.h);
         assert!(lyr.w > music.w && lyr.h >= music.h && lyr.h < 40.0, "lirik ringkas: satu baris yang lebih lebar");
         let open = size(look(Mode::Open(Tab::Play), Some(Activity::Music)), 1.0);
-        assert_eq!((open.w, open.h, open.radius), (600.0, 214.0, 28.0));
+        assert_eq!((open.w, open.h, open.radius), (600.0, 226.0, 28.0));
         for t in Tab::ALL {
             assert_eq!(size(look(Mode::Open(t), None), 1.0).w, 600.0);
         }
+        let few = size(Look { rows: 2, ..look(Mode::Open(Tab::Todo), None) }, 1.0);
+        let many = size(Look { rows: 6, ..look(Mode::Open(Tab::Todo), None) }, 1.0);
+        let capped = size(Look { rows: 30, ..look(Mode::Open(Tab::Todo), None) }, 1.0);
+        assert_eq!(few.h, 48.0 + 140.0 + 30.0);
+        assert!(many.h > few.h && capped.h == todo_height(TODO_MAX_ROWS + 1) && capped.h <= 384.0);
         let b = size(look(Mode::Open(Tab::Play), None), 1.5);
         assert_eq!((b.w, b.radius), (900.0, 42.0));
     }

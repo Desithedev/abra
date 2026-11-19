@@ -28,6 +28,8 @@ pub enum Action {
     TodoToggle(u32),
     TodoAdd,
     TodoClear,
+    TodoField,
+    NextTab,
 }
 
 pub struct Region {
@@ -95,7 +97,10 @@ pub struct Data<'a> {
     pub send_zone: bool,
     pub pill: Option<PillView>,
     pub todo: Vec<TodoRow>,
-    pub todo_open: usize,
+    pub todo_done: usize,
+    pub todo_total: usize,
+    pub todo_more: usize,
+    pub todo_edit: Option<(String, bool)>,
 }
 
 pub struct PillView {
@@ -182,9 +187,85 @@ pub struct Live {
 const ORANGE: [u8; 3] = [255, 159, 10];
 const GREEN: [u8; 3] = [48, 209, 88];
 const INK: [u8; 3] = [22, 22, 24];
+const PURPLE: [u8; 3] = [175, 110, 255];
+const SURFACE: Color = Color { A: 255, R: 27, G: 27, B: 31 };
+
+fn surface(p: &Painter, c: &ContainerVisual, x: f32, y: f32, w: f32, h: f32, r: f32) {
+    p.rect(c, x, y, w, h, r, SURFACE);
+}
+
+fn next_button(p: &mut Painter, c: &ContainerVisual, f: Frame, accent: [u8; 3], regions: &mut Vec<Region>) {
+    let d = p.px(26.0);
+    let cx = f.x0 + f.w - p.px(19.0);
+    let cy = p.px(48.0) + (f.h - p.px(48.0) - p.px(22.0)) / 2.0;
+    let n0 = kids(c);
+    p.rect(c, cx - d / 2.0, cy - d / 2.0, d, d, d / 2.0, SURFACE);
+    p.rect(c, cx - d / 2.0, cy - d / 2.0, d, d, d / 2.0, rgb(accent, 46));
+    p.sym(c, Sym::ChevronRight, cx + p.px(0.5), cy, 11.0, WHITE, 0.92);
+    regions.push(Region { x: cx - d / 2.0 - p.px(4.0), y: cy - d / 2.0 - p.px(6.0), w: d + p.px(8.0), h: d + p.px(12.0), action: Action::NextTab, vis: group_since(c, n0) });
+}
+
+fn tab_accent(t: Tab, d: &Data) -> [u8; 3] {
+    match t {
+        Tab::Play => d.media.as_ref().and_then(|m| m.tint).unwrap_or_else(crate::prefs::accent),
+        Tab::Shelf => ORANGE,
+        Tab::Timer => PURPLE,
+        Tab::Todo => GREEN,
+    }
+}
+
+fn tab_title(t: Tab) -> (&'static str, &'static str) {
+    let en = crate::prefs::get().lang == nacre_core::i18n::Lang::En;
+    match (t, en) {
+        (Tab::Play, false) => ("Sedang", "Diputar"),
+        (Tab::Play, true) => ("Now", "Playing"),
+        (Tab::Shelf, false) => ("Rak", "Berkas"),
+        (Tab::Shelf, true) => ("File", "Shelf"),
+        (Tab::Timer, false) => ("Timer", "& Kalender"),
+        (Tab::Timer, true) => ("Timer", "& Calendar"),
+        (Tab::Todo, false) => ("Daftar", "Tugas"),
+        (Tab::Todo, true) => ("Task", "List"),
+    }
+}
+
+fn rgb(c: [u8; 3], a: u8) -> Color {
+    Color { A: a, R: c[0], G: c[1], B: c[2] }
+}
+
+fn clock_parts() -> (String, String) {
+    let n = nacre_platform::time::local_now();
+    let s = crate::prefs::get();
+    let lang = s.lang;
+    let wd = nacre_core::island::calendar::weekday(n.year, n.month, n.day) as usize;
+    let days = nacre_core::i18n::weekday_labels(lang, false, nacre_core::island::calendar::weekday_labels(false));
+    let months_en = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    let months_id = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+    let mon = if lang == nacre_core::i18n::Lang::En { months_en } else { months_id }[(n.month as usize + 11) % 12];
+    let date = format!("{} {} {}", days[wd % 7], n.day, mon);
+    let time = if s.clock_24h {
+        format!("{:02}.{:02}", n.hour, n.minute)
+    } else {
+        format!("{}:{:02} {}", if n.hour % 12 == 0 { 12 } else { n.hour % 12 }, n.minute, if n.hour < 12 { "AM" } else { "PM" })
+    };
+    (date, time)
+}
+
+fn page_dots(p: &mut Painter, c: &ContainerVisual, f: Frame, cur: Tab, accent: [u8; 3], regions: &mut Vec<Region>) {
+    let cy = f.h - p.px(9.0);
+    let (dot, long, gap) = (p.px(5.0), p.px(16.0), p.px(5.0));
+    let total: f32 = Tab::ALL.iter().map(|t| if *t == cur { long } else { dot }).sum::<f32>() + gap * (Tab::ALL.len() as f32 - 1.0);
+    let mut x = f.x0 + f.w / 2.0 - total / 2.0;
+    for t in Tab::ALL {
+        let w = if t == cur { long } else { dot };
+        let n0 = kids(c);
+        p.rect(c, x, cy - dot / 2.0, w, dot, dot / 2.0, if t == cur { rgb(accent, 255) } else { white(70) });
+        regions.push(Region { x: x - gap / 2.0, y: cy - p.px(8.0), w: w + gap, h: p.px(16.0), action: Action::Tab(t), vis: group_since(c, n0) });
+        x += w + gap;
+    }
+}
 
 fn card(p: &Painter, c: &ContainerVisual, x: f32, y: f32, w: f32, h: f32) {
-    p.rect(c, x, y, w, h, p.px(18.0), white(18));
+    surface(p, c, x, y, w, h, p.px(18.0));
 }
 
 pub fn draw(p: &mut Painter, c: &ContainerVisual, look: Look, f: Frame, d: &Data, regions: &mut Vec<Region>, live: &mut Live) {
@@ -204,14 +285,16 @@ pub fn draw(p: &mut Painter, c: &ContainerVisual, look: Look, f: Frame, d: &Data
         View::Compact(Activity::Pill) => compact_pill(p, c, f, d),
         View::Open(tab) => {
             header(p, c, f, tab, d, regions);
+            let inner = Frame { w: f.w - p.px(30.0), ..f };
             match tab {
-                Tab::Play => play(p, c, f, d, regions, live),
-                Tab::Shelf if d.send.is_some() => send_card(p, c, f, d, regions),
-                Tab::Shelf if d.shelf.is_empty() => shelf_empty(p, c, f),
-                Tab::Shelf => shelf_tab(p, c, f, d, regions),
-                Tab::Timer => timer(p, c, f, d, regions),
-                Tab::Todo => todo_tab(p, c, f, d, regions),
+                Tab::Play => play(p, c, inner, d, regions, live),
+                Tab::Shelf if d.send.is_some() => send_card(p, c, inner, d, regions),
+                Tab::Shelf if d.shelf.is_empty() => shelf_empty(p, c, inner),
+                Tab::Shelf => shelf_tab(p, c, inner, d, regions),
+                Tab::Timer => timer(p, c, inner, d, regions),
+                Tab::Todo => todo_tab(p, c, inner, d, regions),
             }
+            next_button(p, c, f, tab_accent(tab, d), regions);
         }
         View::Drop => drop_zones(p, c, f, d, regions),
     }
@@ -457,6 +540,7 @@ fn music_card(p: &mut Painter, c: &ContainerVisual, x: f32, y: f32, w: f32, h: f
         Some(t) => Color { A: 48, R: t[0], G: t[1], B: t[2] },
         None => white(18),
     };
+    surface(p, c, x, y, w, h, p.px(18.0));
     p.rect(c, x, y, w, h, p.px(18.0), bg);
     let pad = p.px(14.0);
     let art = p.px(64.0);
@@ -640,71 +724,147 @@ fn compact_pill(p: &mut Painter, c: &ContainerVisual, f: Frame, d: &Data) {
 }
 
 fn todo_tab(p: &mut Painter, c: &ContainerVisual, f: Frame, d: &Data, regions: &mut Vec<Region>) {
-    let pad = p.px(14.0);
-    let (top, h) = (p.px(48.0), f.h - p.px(48.0) - pad);
-    let (x0, w) = (f.x0 + pad, f.w - 2.0 * pad);
-    card(p, c, x0, top, w, h);
-    let accent = crate::prefs::accent();
+    use nacre_core::notch::state::TODO_ROW;
     let en = crate::prefs::get().lang == nacre_core::i18n::Lang::En;
-    let add = tr("Tambah");
-    let (bw, bh) = (p.measure(add, 12.0, 600) + p.px(40.0), p.px(26.0));
-    let (bx, by) = (x0 + w - p.px(10.0) - bw, top + p.px(10.0));
-    let n0 = kids(c);
-    p.rect(c, bx, by, bw, bh, bh / 2.0, Color { A: 255, R: accent[0], G: accent[1], B: accent[2] });
-    p.sym(c, Sym::Plus, bx + p.px(15.0), by + bh / 2.0, 11.0, WHITE, 1.0);
-    let th = p.px(12.0) * 1.3;
-    p.text(c, add, bx + p.px(26.0), by + bh / 2.0 - th / 2.0, 12.0, 600, WHITE, 1.0, Anchor::Left, bw);
-    regions.push(Region { x: bx, y: by, w: bw, h: bh, action: Action::TodoAdd, vis: group_since(c, n0) });
-    if d.todo.is_empty() {
-        let mh = p.px(13.0) * 1.3;
-        p.text(c, tr("Belum ada tugas"), x0 + p.px(16.0), top + p.px(14.0), 13.0, 600, WHITE, 0.9, Anchor::Left, w - bw - p.px(30.0));
-        let hint = if en { "Ctrl+Alt+N \u{00B7} try \u{201C}15:30 meeting\u{201D} or \u{201C}10m stretch\u{201D}" } else { "Ctrl+Alt+N \u{00B7} coba \u{201C}15:30 rapat\u{201D} atau \u{201C}10m minum\u{201D}" };
-        p.text(c, hint, x0 + p.px(16.0), top + p.px(14.0) + mh + p.px(4.0), 11.5, 500, WHITE, 0.55, Anchor::Left, w - p.px(32.0));
-        return;
+    let pad = p.px(20.0);
+    let top = p.px(50.0);
+    let lw = p.px(150.0);
+    let lx = f.x0 + pad;
+    if d.todo_total > 0 {
+        let hero = format!("{}", d.todo_done);
+        let hw = p.measure(&hero, 38.0, 800);
+        p.text(c, &hero, lx, top - p.px(4.0), 38.0, 800, WHITE, 1.0, Anchor::Left, hw + p.px(6.0));
+        p.text(c, &format!("/{}", d.todo_total), lx + hw + p.px(2.0), top + p.px(7.0), 22.0, 700, GREEN, 0.95, Anchor::Left, p.px(80.0));
+        let sub = if en { "tasks done" } else { "tugas selesai" };
+        p.text(c, sub, lx + p.px(2.0), top + p.px(42.0), 12.5, 500, WHITE, 0.55, Anchor::Left, lw);
+    } else {
+        p.sym(c, Sym::Check, lx + p.px(14.0), top + p.px(14.0), 20.0, GREEN, 0.9);
+        let msg = if en { "No tasks yet" } else { "Belum ada tugas" };
+        p.text(c, msg, lx, top + p.px(34.0), 13.0, 600, WHITE, 0.85, Anchor::Left, lw);
+        let hint = if en { "Or press Ctrl+Alt+N" } else { "Atau tekan Ctrl+Alt+N" };
+        p.text(c, hint, lx, top + p.px(52.0), 11.5, 500, WHITE, 0.5, Anchor::Left, lw);
     }
-    let done_n = d.todo.iter().filter(|t| t.done).count();
-    let left = if en { format!("{} open", d.todo_open) } else { format!("{} belum selesai", d.todo_open) };
-    let lh = p.px(11.5) * 1.3;
-    p.text(c, &left, x0 + p.px(16.0), by + bh / 2.0 - lh / 2.0, 11.5, 600, WHITE, 0.55, Anchor::Left, p.px(160.0));
-    if done_n > 0 {
+    let mut ly = top + p.px(66.0);
+    {
+        let (bh, editing) = (p.px(30.0), d.todo_edit.is_some());
+        let n0 = kids(c);
+        surface(p, c, lx, ly, lw, bh, bh / 2.0);
+        p.rect(c, lx, ly, lw, bh, bh / 2.0, rgb(GREEN, if editing { 110 } else { 52 }));
+        let r = p.px(9.0);
+        let ck = lx + p.px(6.0) + r;
+        let cy = ly + bh / 2.0;
+        p.rect(c, ck - r, cy - r, 2.0 * r, 2.0 * r, r, rgb(GREEN, 255));
+        p.sym(c, Sym::Plus, ck, cy, 10.0, WHITE, 1.0);
+        let label = if en { "Add a task" } else { "Tambah tugas" };
+        let th = p.px(13.0) * 1.3;
+        p.text(c, label, ck + r + p.px(9.0), cy - th / 2.0, 13.0, 700, if editing { WHITE } else { GREEN }, 1.0, Anchor::Left, lw - p.px(40.0));
+        regions.push(Region { x: lx, y: ly, w: lw, h: bh, action: Action::TodoField, vis: group_since(c, n0) });
+        ly += bh + p.px(8.0);
+    }
+    if d.todo_done > 0 && d.todo_edit.is_none() {
         let clear = tr("Hapus yang selesai");
         let cw = p.measure(clear, 11.5, 600) + p.px(20.0);
-        let cx = bx - p.px(8.0) - cw;
+        let ch = p.px(24.0);
         let n0 = kids(c);
-        p.rect(c, cx, by, cw, bh, bh / 2.0, white(26));
-        p.text(c, clear, cx + cw / 2.0, by + bh / 2.0 - lh / 2.0, 11.5, 600, WHITE, 0.85, Anchor::Center, cw);
-        regions.push(Region { x: cx, y: by, w: cw, h: bh, action: Action::TodoClear, vis: group_since(c, n0) });
+        surface(p, c, lx, ly, cw, ch, ch / 2.0);
+        p.rect(c, lx, ly, cw, ch, ch / 2.0, white(20));
+        let th = p.px(11.5) * 1.3;
+        p.text(c, clear, lx + cw / 2.0, ly + ch / 2.0 - th / 2.0, 11.5, 600, WHITE, 0.85, Anchor::Center, cw);
+        regions.push(Region { x: lx, y: ly, w: cw, h: ch, action: Action::TodoClear, vis: group_since(c, n0) });
+        ly += ch + p.px(8.0);
     }
-    let row_h = p.px(20.0);
-    let mut y = by + bh + p.px(6.0);
+    if d.todo_more > 0 {
+        let more = if en { format!("+{} more", d.todo_more) } else { format!("+{} lainnya", d.todo_more) };
+        p.text(c, &more, lx + p.px(2.0), ly, 11.5, 600, WHITE, 0.5, Anchor::Left, lw);
+    }
+    let rx = lx + lw + p.px(14.0);
+    let rw = f.x0 + f.w - pad - rx;
+    let step = p.px(TODO_ROW);
+    let row_h = step - p.px(6.0);
+    let mut y = top;
     for t in &d.todo {
-        if y + row_h > top + h - p.px(4.0) {
-            break;
-        }
-        let cy = y + row_h / 2.0;
         let n0 = kids(c);
-        let r = p.px(7.0);
-        let cxk = x0 + p.px(16.0) + r;
+        let cy = y + row_h / 2.0;
+        surface(p, c, rx, y, rw, row_h, row_h / 2.0);
+        p.rect(c, rx, y, rw, row_h, row_h / 2.0, if t.done { rgb(GREEN, 44) } else { white(14) });
+        let r = p.px(10.0);
+        let ck = rx + p.px(9.0) + r;
         if t.done {
-            p.rect(c, cxk - r, cy - r, 2.0 * r, 2.0 * r, r, Color { A: 255, R: GREEN[0], G: GREEN[1], B: GREEN[2] });
-            p.sym(c, Sym::Check, cxk, cy, 9.0, WHITE, 1.0);
+            p.rect(c, ck - r, cy - r, 2.0 * r, 2.0 * r, r, rgb(GREEN, 255));
+            p.sym(c, Sym::Check, ck, cy, 11.0, WHITE, 1.0);
         } else {
-            p.rect(c, cxk - r, cy - r, 2.0 * r, 2.0 * r, r, white(60));
-            p.rect(c, cxk - r + p.px(1.5), cy - r + p.px(1.5), 2.0 * r - p.px(3.0), 2.0 * r - p.px(3.0), r - p.px(1.5), Color { A: 255, R: 30, G: 30, B: 32 });
+            p.rect(c, ck - r, cy - r, 2.0 * r, 2.0 * r, r, white(110));
+            let i = p.px(2.0);
+            p.rect(c, ck - r + i, cy - r + i, 2.0 * (r - i), 2.0 * (r - i), r - i, SURFACE);
         }
-        let due_w = if t.due.is_empty() { 0.0 } else { p.measure(&t.due, 11.0, 600) + p.px(6.0) };
-        let tx = cxk + r + p.px(10.0);
-        let tw = x0 + w - p.px(16.0) - due_w - p.px(8.0) - tx;
-        let rh = p.px(12.5) * 1.3;
-        p.text(c, &p.fit(&t.text, 12.5, 500, tw), tx, cy - rh / 2.0, 12.5, 500, WHITE, if t.done { 0.45 } else { 0.95 }, Anchor::Left, tw + p.px(4.0));
+        let due_w = if t.due.is_empty() { 0.0 } else { p.measure(&t.due, 12.0, 700) + p.px(6.0) };
+        let tx = ck + r + p.px(11.0);
+        let tw = rx + rw - p.px(14.0) - due_w - p.px(6.0) - tx;
+        let lh = p.px(14.0) * 1.3;
+        let label = p.fit(&t.text, 14.0, 600, tw);
+        p.text(c, &label, tx, cy - lh / 2.0, 14.0, 600, WHITE, if t.done { 0.5 } else { 0.97 }, Anchor::Left, tw + p.px(4.0));
+        if t.done {
+            let sw = p.measure(&label, 14.0, 600).min(tw);
+            p.rect(c, tx, cy - p.px(0.7), sw, p.px(1.4), p.px(0.7), white(150));
+        }
         if !t.due.is_empty() {
-            let dh = p.px(11.0) * 1.3;
-            let col = if t.late { ORANGE } else { WHITE };
-            p.text(c, &t.due, x0 + w - p.px(16.0), cy - dh / 2.0, 11.0, 600, col, if t.done { 0.4 } else { 0.8 }, Anchor::Right, due_w + p.px(4.0));
+            let dh = p.px(12.0) * 1.3;
+            p.text(c, &t.due, rx + rw - p.px(14.0), cy - dh / 2.0, 12.0, 700, if t.late { ORANGE } else { WHITE }, if t.done { 0.4 } else { 0.85 }, Anchor::Right, due_w + p.px(4.0));
         }
-        regions.push(Region { x: x0, y, w, h: row_h, action: Action::TodoToggle(t.id), vis: group_since(c, n0) });
-        y += row_h + p.px(2.0);
+        regions.push(Region { x: rx, y, w: rw, h: row_h, action: Action::TodoToggle(t.id), vis: group_since(c, n0) });
+        y += step;
     }
+    let n0 = kids(c);
+    let cy = y + row_h / 2.0;
+    let lh = p.px(14.0) * 1.3;
+    match &d.todo_edit {
+        None => {
+            if d.todo.is_empty() {
+                let mh = p.px(13.0) * 1.3;
+                let msg = if en { "Your list is empty. Enjoy the quiet." } else { "Daftarmu kosong. Santai dulu." };
+                p.text(c, msg, rx + rw / 2.0, top + p.px(52.0) - mh / 2.0, 13.0, 500, WHITE, 0.5, Anchor::Center, rw);
+            }
+            return;
+        }
+        Some((text, caret)) => {
+            surface(p, c, rx, y, rw, row_h, row_h / 2.0);
+            p.rect(c, rx, y, rw, row_h, row_h / 2.0, rgb(GREEN, 120));
+            p.rect(c, rx + p.px(1.5), y + p.px(1.5), rw - p.px(3.0), row_h - p.px(3.0), row_h / 2.0 - p.px(1.5), SURFACE);
+            let now = crate::tasks::now();
+            let (_, due) = nacre_core::todo::parse(text, now);
+            let chip = due.map(|m| nacre_core::todo::due_label(m, now, en));
+            let chip_w = chip.as_ref().map_or(0.0, |t| p.measure(t, 11.5, 700) + p.px(30.0));
+            let tx = rx + p.px(16.0);
+            let avail = rw - p.px(30.0) - chip_w;
+            let caret_h = row_h - p.px(14.0);
+            if text.is_empty() {
+                let ph = if en { "Type a task \u{00B7} e.g. 15:30 meeting" } else { "Ketik tugas \u{00B7} mis. 15:30 rapat" };
+                p.text(c, ph, tx, cy - lh / 2.0, 14.0, 500, WHITE, 0.4, Anchor::Left, avail);
+                if *caret {
+                    p.rect(c, tx, cy - caret_h / 2.0, p.px(1.8), caret_h, p.px(0.9), rgb(GREEN, 255));
+                }
+            } else {
+                let mut shown: String = text.clone();
+                while p.measure(&shown, 14.0, 500) > avail - p.px(8.0) && shown.chars().count() > 1 {
+                    shown = shown.chars().skip(1).collect();
+                }
+                p.text(c, &shown, tx, cy - lh / 2.0, 14.0, 500, WHITE, 0.97, Anchor::Left, avail + p.px(4.0));
+                if *caret {
+                    let cx = tx + p.measure(&shown, 14.0, 500) + p.px(1.5);
+                    p.rect(c, cx, cy - caret_h / 2.0, p.px(1.8), caret_h, p.px(0.9), rgb(GREEN, 255));
+                }
+            }
+            if let Some(t) = chip {
+                let cx = rx + rw - p.px(6.0) - chip_w;
+                let chh = row_h - p.px(12.0);
+                p.rect(c, cx, cy - chh / 2.0, chip_w, chh, chh / 2.0, rgb(ORANGE, 60));
+                p.sym(c, Sym::Clock, cx + p.px(12.0), cy, 10.0, ORANGE, 1.0);
+                let ch = p.px(11.5) * 1.3;
+                p.text(c, &t, cx + p.px(22.0), cy - ch / 2.0, 11.5, 700, ORANGE, 1.0, Anchor::Left, chip_w);
+            }
+        }
+    }
+    regions.push(Region { x: rx, y, w: rw, h: row_h, action: Action::TodoField, vis: group_since(c, n0) });
 }
 
 fn compact_charging(p: &mut Painter, c: &ContainerVisual, f: Frame, d: &Data) {
@@ -716,31 +876,32 @@ fn compact_charging(p: &mut Painter, c: &ContainerVisual, f: Frame, d: &Data) {
 }
 
 fn header(p: &mut Painter, c: &ContainerVisual, f: Frame, cur: Tab, d: &Data, regions: &mut Vec<Region>) {
-    let (cy, bh, pad) = (p.px(25.0), p.px(26.0), p.px(3.0));
-    let widths: Vec<f32> = Tab::ALL.iter().map(|t| (p.measure(tr(t.title()), 12.5, 600) + p.px(28.0)).max(p.px(60.0))).collect();
-    let total: f32 = widths.iter().sum::<f32>() + 2.0 * pad;
-    let x = f.x0 + p.px(16.0);
-    p.rect(c, x, cy - bh / 2.0, total, bh, bh / 2.0, white(26));
-    let mut sx = x + pad;
-    let th = p.px(12.5) * 1.3;
-    for (t, w) in Tab::ALL.iter().zip(&widths) {
-        let on = *t == cur;
-        let n0 = kids(c);
-        if on {
-            p.rect(c, sx, cy - bh / 2.0 + pad, *w, bh - 2.0 * pad, (bh - 2.0 * pad) / 2.0, white(236));
-        }
-        p.text(c, tr(t.title()), sx + w / 2.0, cy - th / 2.0, 12.5, 600, if on { INK } else { WHITE }, if on { 1.0 } else { 0.78 }, Anchor::Center, *w);
-        regions.push(Region { x: sx, y: cy - bh / 2.0 - pad, w: *w, h: bh + 2.0 * pad, action: Action::Tab(*t), vis: group_since(c, n0) });
-        sx += w;
-    }
+    let cy = p.px(25.0);
+    let accent = tab_accent(cur, d);
+    let (a, b) = tab_title(cur);
+    let x = f.x0 + p.px(20.0);
+    let th = p.px(15.0) * 1.3;
+    let aw = p.measure(a, 15.0, 700);
+    p.text(c, a, x, cy - th / 2.0, 15.0, 700, WHITE, 1.0, Anchor::Left, aw + p.px(4.0));
+    p.text(c, b, x + aw + p.px(5.0), cy - th / 2.0, 15.0, 700, accent, 1.0, Anchor::Left, p.px(160.0));
+    let (date, time) = clock_parts();
+    let (dw, tw) = (p.measure(&date, 12.5, 500), p.measure(&time, 13.0, 700));
+    let gap = p.px(8.0);
+    let cx = f.x0 + f.w / 2.0 + p.px(20.0) - (dw + gap + tw) / 2.0;
+    let sh = p.px(12.5) * 1.3;
+    p.text(c, &date, cx, cy - sh / 2.0, 12.5, 500, WHITE, 0.62, Anchor::Left, dw + p.px(4.0));
+    let bh = p.px(13.0) * 1.3;
+    p.text(c, &time, cx + dw + gap, cy - bh / 2.0, 13.0, 700, WHITE, 0.95, Anchor::Left, tw + p.px(4.0));
     let gx = f.x0 + f.w - p.px(28.0);
     let n0 = kids(c);
-    p.sym(c, Sym::Gear, gx, cy, 16.0, WHITE, 0.7);
+    p.sym(c, Sym::Gear, gx, cy, 15.0, WHITE, 0.62);
     regions.push(Region { x: gx - p.px(16.0), y: cy - p.px(15.0), w: p.px(32.0), h: p.px(30.0), action: Action::Settings, vis: group_since(c, n0) });
     if let Some((pct, charging)) = d.battery {
         let label = if charging { format!("\u{26A1}{pct}%") } else { format!("{pct}%") };
-        p.text(c, &label, gx - p.px(18.0), cy - th / 2.0, 12.5, 600, if charging { GREEN } else { WHITE }, 0.82, Anchor::Right, p.px(80.0));
+        let lh = p.px(12.0) * 1.3;
+        p.text(c, &label, gx - p.px(18.0), cy - lh / 2.0, 12.0, 600, if charging { GREEN } else { WHITE }, 0.7, Anchor::Right, p.px(80.0));
     }
+    page_dots(p, c, f, cur, accent, regions);
 }
 
 fn play(p: &mut Painter, c: &ContainerVisual, f: Frame, d: &Data, regions: &mut Vec<Region>, live: &mut Live) {
@@ -758,7 +919,7 @@ fn play(p: &mut Painter, c: &ContainerVisual, f: Frame, d: &Data, regions: &mut 
             p.text(c, tr("Tidak diputar"), mx + mw / 2.0, top + h / 2.0 + p.px(8.0), 12.5, 500, WHITE, 0.6, Anchor::Center, mw - p.px(20.0));
         }
     }
-    lyrics_flow(p, c, lx, top, lw, h, d, live, Flow { size: 17.0, pad: 16.0, anchor: 0.30, card: true });
+    lyrics_flow(p, c, lx, top, lw, h, d, live, Flow { size: 17.0, pad: 16.0, anchor: 0.30, card: false });
 }
 
 #[derive(Clone, Copy)]
@@ -873,6 +1034,9 @@ fn shelf_empty(p: &mut Painter, c: &ContainerVisual, f: Frame) {
 }
 
 fn round_button(p: &mut Painter, c: &ContainerVisual, cx: f32, cy: f32, d: f32, fill: Color) {
+    if fill.A < 255 {
+        p.rect(c, cx - d / 2.0, cy - d / 2.0, d, d, d / 2.0, SURFACE);
+    }
     p.rect(c, cx - d / 2.0, cy - d / 2.0, d, d, d / 2.0, fill);
 }
 

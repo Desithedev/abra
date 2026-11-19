@@ -64,10 +64,14 @@ It is one small native program: no Electron, no web view, no background services
 
 - **Built‑in updates**: ABRA checks GitHub for a new release, shows it in the Visor and installs it with one click
   (*Settings → General → About*). The installer is checked against its SHA‑256 fingerprint before it runs.
-- **Tasks & reminders**: press `Ctrl` + `Alt` + `N`, type `15:30 meeting`, `10m stretch` or `tomorrow 08:00 report` and
-  press Enter. A new **Tasks** tab in the Visor lists them, and reminders pop up in the Visor when they are due.
+- **Tasks & reminders**: press `Ctrl` + `Alt` + `N` (or **Add a task** in the Visor), type `15:30 meeting`,
+  `10m stretch` or `tomorrow 08:00 report` right in the Visor and press Enter. The new **Tasks** page lists them, and
+  reminders pop up in the Visor when they are due.
 - **Visor pills**: short notices when Bluetooth earbuds, a mouse or a USB drive connects or disconnects.
-- **Album glow**: while music plays, the Visor and Capsule glow softly in the colour of the album art, pulsing with the beat.
+- **Aurora**: while music plays, soft waves of light in the colours of the album art move along the bottom of the Visor
+  and Capsule and rise with the bass, mids and treble — the Visor now has real depth.
+- **A fresh look for the open Visor**: a two‑tone page title, the date and time in the middle, page dots instead of tabs,
+  a colour for every page and no more grey boxes.
 - **Visor & Capsule**: adjustable **size**, adjustable **distance from the top edge** for the Capsule, and a springy
   “water drop” animation when switching between them. **Send** now has a **Cancel** button.
 - **Rail**: a **behaviour** setting like the Deck’s (Fixed · Overlay · Smart), **menus that match the app**
@@ -235,8 +239,11 @@ The glass pill at the top center of the screen. Choose **Visor** (attached to th
 </p>
 
 - **Timer tab**: a timer next to a calendar strip with your Windows calendar events.
-- **Tasks tab**: your to‑do list. Click a task to tick it off, **+ Add** opens Quick Search in Tasks mode. A time at the
-  start of a task makes it a reminder: `15:30 …`, `10m …` / `2h …`, `tomorrow 08:00 …`.
+- **Tasks page**: your to‑do list with a big done counter. Click a task to tick it off. **Add a task** (or `Ctrl` + `Alt`
+  + `N`) turns into a text field right in the Visor: type, press Enter to add (and keep typing the next one), Esc to
+  close. A time at the start makes it a reminder: `15:30 …`, `10m …` / `2h …`, `tomorrow 08:00 …`; the Visor shows the
+  time it understood as you type.
+- **Pages**: switch with the dots at the bottom or the mouse wheel. Each page has its own colour.
 - **Pills**: reminders, available updates and connected devices appear briefly in the Visor. Click a pill to act on it,
   right‑click to dismiss it. Choose which ones you want in *Settings → Visor → Pills & Context*.
 - **Size and Capsule distance**: *Settings → Visor → Size* and *Distance from top edge*.

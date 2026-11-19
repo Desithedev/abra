@@ -1612,7 +1612,9 @@ unsafe extern "system" fn ctl_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             if wp.0 as i32 == HOTKEY_APPS {
                 toggle_mode(Mode::Apps);
             } else if wp.0 as i32 == HOTKEY_TASKS {
-                toggle_mode(Mode::Tasks);
+                if !crate::notch::begin_task_entry() {
+                    toggle_mode(Mode::Tasks);
+                }
             } else {
                 toggle();
             }

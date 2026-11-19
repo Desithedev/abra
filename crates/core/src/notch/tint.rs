@@ -55,6 +55,29 @@ pub fn from_art(bgra: &[u8], w: u32, h: u32) -> Option<[u8; 3]> {
     Some([(c[0] * f).round().min(255.0) as u8, (c[1] * f).round().min(255.0) as u8, (c[2] * f).round().min(255.0) as u8])
 }
 
+fn rgb_from_hsv(h: f32, s: f32, v: f32) -> [u8; 3] {
+    let c = v * s;
+    let hp = h.rem_euclid(360.0) / 60.0;
+    let x = c * (1.0 - (hp % 2.0 - 1.0).abs());
+    let (r, g, b) = match hp as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = v - c;
+    [((r + m) * 255.0).round() as u8, ((g + m) * 255.0).round() as u8, ((b + m) * 255.0).round() as u8]
+}
+
+pub fn aurora(base: [u8; 3]) -> [[u8; 3]; 3] {
+    let (h, s, v) = hsv(base[0] as f32 / 255.0, base[1] as f32 / 255.0, base[2] as f32 / 255.0);
+    let s = s.max(0.55);
+    let v = v.max(0.75);
+    [rgb_from_hsv(h, s, v), rgb_from_hsv(h + 28.0, (s * 0.9).max(0.5), v), rgb_from_hsv(h - 32.0, s, (v * 0.92).max(0.7))]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -93,5 +116,17 @@ mod tests {
         let big = img(600, 600, |_, _| [30, 160, 90]);
         let c = from_art(&big, 600, 600).unwrap();
         assert_eq!(c[1], 235);
+    }
+
+    #[test]
+    fn aurora_palette_stays_near_the_album_colour() {
+        let p = aurora([200, 40, 40]);
+        assert_eq!(p[0], [200, 40, 40]);
+        assert_ne!(p[1], p[0]);
+        assert_ne!(p[2], p[0]);
+        let dull = aurora([60, 60, 70]);
+        assert!(dull.iter().all(|c| c.iter().copied().max().unwrap() >= 178));
+        assert_eq!(rgb_from_hsv(120.0, 1.0, 1.0), [0, 255, 0]);
+        assert_eq!(rgb_from_hsv(-120.0, 1.0, 1.0), [0, 0, 255]);
     }
 }
