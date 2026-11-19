@@ -25,7 +25,7 @@ use windows_numerics::{Vector2, Vector3};
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const WM_APPCHG: u32 = WM_APP + 70;
 const WM_CLICKWIN: u32 = WM_APP + 74;
-static MOUSE_HOOK: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+static MOUSE_HOOK: std::sync::Mutex<Option<nacre_platform::hookthread::HookThread>> = std::sync::Mutex::new(None);
 static BAR_CTL: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
 const WM_NOTCH: u32 = WM_APP + 71;
 const WM_TEST_NET: u32 = WM_APP + 75;
@@ -196,9 +196,7 @@ pub fn init(comp: &Compositor) -> windows_core::Result<()> {
         tracker::install(noop_fg);
         tracker::install_fx(loc_hook);
         BAR_CTL.store(hwnd.0 as isize, std::sync::atomic::Ordering::Relaxed);
-        if let Ok(h) = SetWindowsHookExW(WH_MOUSE_LL, Some(ll_mouse), None, 0) {
-            MOUSE_HOOK.store(h.0 as isize, std::sync::atomic::Ordering::Relaxed);
-        }
+        *MOUSE_HOOK.lock().unwrap_or_else(|e| e.into_inner()) = nacre_platform::hookthread::HookThread::start(nacre_platform::hookthread::Kind::Mouse, Some(ll_mouse));
         apply_prefs();
     }
     Ok(())

@@ -13,6 +13,7 @@ pub const WM_TRAY: u32 = WM_APP + 1;
 const ID_TOGGLE_TASKBAR: usize = 1;
 pub const ID_QUIT: usize = 2;
 const TIMER_EXIT: usize = 1;
+const TIMER_BLOCK: usize = 2;
 
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
 static MAIN: AtomicIsize = AtomicIsize::new(0);
@@ -31,6 +32,14 @@ pub fn create() -> windows::core::Result<HWND> {
             0, 0, 0, 0,
             None, None, Some(hi), None,
         )
+    }
+}
+
+pub fn set_test_block(hwnd: HWND) {
+    if std::env::var("NACRE_TEST_BLOCK_UI").is_ok() {
+        unsafe {
+            SetTimer(Some(hwnd), TIMER_BLOCK, 4000, None);
+        }
     }
 }
 
@@ -115,13 +124,16 @@ pub fn apply_autostart() {
     use nacre_platform::startup;
     let want = crate::prefs::get().autostart;
     let Ok(exe) = std::env::current_exe() else { return };
-    let cur = startup::current();
-    let ok = match (want, &cur) {
-        (true, Some(c)) if *c == startup::command_for(&exe) => return,
-        (false, None) => return,
-        _ => startup::set(want, &exe),
-    };
-    nacre_platform::log::line("startup", &format!("autostart={want} hasil={ok:?}"));
+    let _ = std::thread::Builder::new().name("abra-autostart".into()).spawn(move || {
+        let task = startup::task_command(startup::TASK);
+        let run = startup::current();
+        let ok = match (want, &task, &run) {
+            (true, Some(c), _) if *c == startup::command_for(&exe) && startup::run_value_absent() => return,
+            (false, None, None) => return,
+            _ => startup::set(want, &exe),
+        };
+        nacre_platform::log::line("startup", &format!("autostart={want} hasil={ok:?}"));
+    });
 }
 
 pub fn set_taskbar_hidden(on: bool) {
@@ -191,6 +203,15 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         }
         single_instance::WM_WAKE => {
             nacre_platform::log::line("instance", "peluncuran kedua terdeteksi");
+            LRESULT(0)
+        }
+        WM_TIMER if wp.0 == TIMER_BLOCK => {
+            let _ = KillTimer(Some(hwnd), TIMER_BLOCK);
+            if let Some(ms) = std::env::var("NACRE_TEST_BLOCK_UI").ok().and_then(|v| v.parse::<u64>().ok()) {
+                nacre_platform::log::line("uji", &format!("thread UI diblokir {ms} ms"));
+                std::thread::sleep(std::time::Duration::from_millis(ms.min(60_000)));
+                nacre_platform::log::line("uji", "thread UI dilepas");
+            }
             LRESULT(0)
         }
         WM_TIMER if wp.0 == TIMER_EXIT => {

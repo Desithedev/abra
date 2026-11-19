@@ -91,6 +91,7 @@ fn release_all(why: &str) {
     log::line("exit", why);
     nacre_platform::shell::appbar::release();
     log::line("exit", "appbar ok");
+    nacre_platform::brightness::restore();
     fx::restore_all();
     log::line("exit", "fx ok");
     taskbar::restore();
@@ -156,6 +157,7 @@ fn main() {
     if let Some(s) = args.exit_after {
         mainwin::set_exit_timer(main_hwnd, s);
     }
+    mainwin::set_test_block(main_hwnd);
 
     if !args.no_dock {
         let created = dock::Dock::create(&host, main_hwnd, dock::Options {

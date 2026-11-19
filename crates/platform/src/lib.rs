@@ -11,6 +11,7 @@ pub mod dlwatch;
 pub mod downloads;
 pub mod filesearch;
 pub mod iconpack;
+pub mod hookthread;
 pub mod icons;
 pub mod input;
 pub mod keys;

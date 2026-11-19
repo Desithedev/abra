@@ -12,7 +12,36 @@ pub const ICON_FACE: &str = "Segoe Fluent Icons";
 
 pub fn text_face() -> &'static str {
     static FACE: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
-    FACE.get_or_init(|| pick_face(load_bundled_fonts(), font_exists("Segoe UI Variable Text")))
+    FACE.get_or_init(|| {
+        let first = pick_face(load_bundled_fonts(), font_exists("Segoe UI Variable Text"));
+        for f in [first, "Segoe UI Variable Text", "Segoe UI", "Arial"] {
+            if renders_latin(f) {
+                if f != first {
+                    crate::log::line("font", &format!("{first} tidak bisa menggambar huruf Latin; memakai {f}"));
+                }
+                return f;
+            }
+        }
+        "Segoe UI"
+    })
+}
+
+const SAMPLE: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+pub fn renders_latin(face: &str) -> bool {
+    use windows::Win32::Graphics::Gdi::{GetGlyphIndicesW, GGI_MARK_NONEXISTING_GLYPHS};
+    unsafe {
+        let dc = CreateCompatibleDC(None);
+        let f = font(&Style { px: 16, weight: 400 }, face);
+        let old = SelectObject(dc, HGDIOBJ(f.0));
+        let wide: Vec<u16> = SAMPLE.encode_utf16().collect();
+        let mut out = vec![0u16; wide.len()];
+        let n = GetGlyphIndicesW(dc, &HSTRING::from(SAMPLE), wide.len() as i32, out.as_mut_ptr(), GGI_MARK_NONEXISTING_GLYPHS);
+        SelectObject(dc, old);
+        let _ = DeleteObject(HGDIOBJ(f.0));
+        let _ = DeleteDC(dc);
+        n as usize == wide.len() && out.iter().all(|g| *g != 0xFFFF)
+    }
 }
 
 pub fn pick_face(bundled_inter: bool, segoe_variable: bool) -> &'static str {
@@ -188,7 +217,7 @@ fn render_raw(text: &str, style: &Style, face: &str, w: i32, h: i32) -> Option<B
 
 #[cfg(test)]
 mod tests {
-    use super::pick_face;
+    use super::{pick_face, renders_latin, text_face};
 
     #[test]
     fn never_picks_fonts_installed_by_the_user() {
@@ -198,5 +227,13 @@ mod tests {
         for f in [pick_face(true, false), pick_face(false, true), pick_face(false, false)] {
             assert!(!f.contains("SF Pro"));
         }
+    }
+
+    #[test]
+    fn real_faces_render_latin_and_a_missing_face_still_falls_back() {
+        assert!(renders_latin("Segoe UI"));
+        assert!(renders_latin("Arial"));
+        assert!(!text_face().is_empty());
+        assert!(renders_latin(text_face()));
     }
 }

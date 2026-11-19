@@ -51,6 +51,9 @@ Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: startmenu
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "ABRA"; ValueData: """{app}\{#AppExe}"""; Flags: uninsdeletevalue; Tasks: autostart
 
+[UninstallRun]
+Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""ABRA Autostart"" /F"; Flags: runhidden; RunOnceId: "RemoveAbraTask"
+
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "Launch ABRA now"; Flags: nowait postinstall skipifsilent
 Filename: "{app}\{#AppExe}"; Flags: nowait; Check: IsRelaunch

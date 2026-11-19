@@ -10,7 +10,7 @@ use windows::core::w;
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_ESCAPE, VK_LEFT, VK_LMENU, VK_RIGHT, VK_RMENU, VK_SHIFT, VK_TAB};
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_ESCAPE, VK_LEFT, VK_LMENU, VK_RIGHT, VK_RMENU, VK_SHIFT, VK_TAB};
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::UI::Color;
 use windows::UI::Composition::{CompositionStretch, Compositor, SpriteVisual};
@@ -22,7 +22,7 @@ const WM_COMMIT: u32 = WM_APP + 122;
 const WM_CANCEL: u32 = WM_APP + 123;
 const WM_INSTALL: u32 = WM_APP + 124;
 
-static HOOK: AtomicIsize = AtomicIsize::new(0);
+static HOOK: std::sync::Mutex<Option<nacre_platform::hookthread::HookThread>> = std::sync::Mutex::new(None);
 static OPEN: AtomicBool = AtomicBool::new(false);
 static TARGET: AtomicIsize = AtomicIsize::new(0);
 
@@ -85,24 +85,15 @@ fn sync() {
 }
 
 fn install() {
-    if HOOK.load(Ordering::Relaxed) != 0 {
-        return;
-    }
-    unsafe {
-        let hi = GetModuleHandleW(None).ok().map(|m| HINSTANCE(m.0));
-        if let Ok(h) = SetWindowsHookExW(WH_KEYBOARD_LL, Some(ll_proc), hi, 0) {
-            HOOK.store(h.0 as isize, Ordering::Relaxed);
-        }
+    let mut g = HOOK.lock().unwrap_or_else(|e| e.into_inner());
+    if g.is_none() {
+        *g = nacre_platform::hookthread::HookThread::start(nacre_platform::hookthread::Kind::Keyboard, Some(ll_proc));
     }
 }
 
 fn uninstall() {
-    let h = HOOK.swap(0, Ordering::Relaxed);
-    if h != 0 {
-        unsafe {
-            let _ = UnhookWindowsHookEx(HHOOK(h as *mut _));
-        }
-    }
+    let h = HOOK.lock().unwrap_or_else(|e| e.into_inner()).take();
+    drop(h);
     OPEN.store(false, Ordering::Relaxed);
 }
 
@@ -117,7 +108,7 @@ unsafe extern "system" fn ll_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT 
         if !target.0.is_null() {
             let vk = k.vkCode as u16;
             if vk == VK_TAB.0 && down && (alt || open) {
-                let shift = GetKeyState(VK_SHIFT.0 as i32) < 0;
+                let shift = GetAsyncKeyState(VK_SHIFT.0 as i32) < 0;
                 let _ = PostMessageW(Some(target), if shift { WM_PREV } else { WM_NEXT }, WPARAM(0), LPARAM(0));
                 return LRESULT(1);
             }
