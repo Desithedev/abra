@@ -12,11 +12,29 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 pub const WM_TRAY: u32 = WM_APP + 1;
 const ID_TOGGLE_TASKBAR: usize = 1;
 pub const ID_QUIT: usize = 2;
+const ID_SETTINGS: usize = 3;
 const TIMER_EXIT: usize = 1;
 const TIMER_BLOCK: usize = 2;
+const TIMER_TRAY: usize = 3;
+const TRAY_TRIES: u32 = 30;
 
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
 static MAIN: AtomicIsize = AtomicIsize::new(0);
+static TRAY_LEFT: AtomicU32 = AtomicU32::new(TRAY_TRIES);
+
+thread_local! {
+    static COMP: std::cell::RefCell<Option<windows::UI::Composition::Compositor>> = const { std::cell::RefCell::new(None) };
+}
+
+pub fn set_compositor(c: &windows::UI::Composition::Compositor) {
+    COMP.with(|s| *s.borrow_mut() = Some(c.clone()));
+}
+
+fn open_settings() {
+    if let Some(c) = COMP.with(|s| s.borrow().clone()) {
+        crate::settings_win::open(&c);
+    }
+}
 
 pub fn create() -> windows::core::Result<HWND> {
     unsafe {
@@ -79,8 +97,18 @@ fn tray_data(hwnd: HWND) -> NOTIFYICONDATAW {
 pub fn add_tray(hwnd: HWND) {
     MAIN.store(hwnd.0 as isize, Ordering::Relaxed);
     let nid = tray_data(hwnd);
-    unsafe {
-        let _ = Shell_NotifyIconW(NIM_ADD, &nid);
+    let ok = unsafe { Shell_NotifyIconW(NIM_ADD, &nid).as_bool() || Shell_NotifyIconW(NIM_MODIFY, &nid).as_bool() };
+    if ok {
+        TRAY_LEFT.store(TRAY_TRIES, Ordering::Relaxed);
+        return;
+    }
+    let left = TRAY_LEFT.load(Ordering::Relaxed);
+    nacre_platform::log::line("tray", &format!("ikon tray belum bisa dipasang, sisa coba {left}"));
+    if left > 0 {
+        TRAY_LEFT.store(left - 1, Ordering::Relaxed);
+        unsafe {
+            SetTimer(Some(hwnd), TIMER_TRAY, 2000, None);
+        }
     }
 }
 
@@ -151,9 +179,11 @@ fn show_menu(hwnd: HWND) {
     unsafe {
         let Ok(menu) = CreatePopupMenu() else { return };
         let check = if taskbar::is_hidden() { MF_CHECKED } else { MF_UNCHECKED };
-        let _ = AppendMenuW(menu, MF_STRING | check, ID_TOGGLE_TASKBAR, w!("Sembunyikan taskbar (uji)"));
+        let tr = |s: &'static str| windows::core::HSTRING::from(crate::prefs::tr(s));
+        let _ = AppendMenuW(menu, MF_STRING | MF_DEFAULT, ID_SETTINGS, &tr("Pengaturan ABRA…"));
+        let _ = AppendMenuW(menu, MF_STRING | check, ID_TOGGLE_TASKBAR, &tr("Sembunyikan taskbar Windows"));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-        let _ = AppendMenuW(menu, MF_STRING, ID_QUIT, w!("Keluar dari ABRA"));
+        let _ = AppendMenuW(menu, MF_STRING, ID_QUIT, &tr("Keluar dari ABRA"));
         let mut pt = POINT::default();
         let _ = GetCursorPos(&mut pt);
         let _ = SetForegroundWindow(hwnd);
@@ -186,14 +216,29 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             LRESULT(0)
         }
         WM_TRAY => {
-            if (lp.0 as u32 & 0xFFFF) == WM_RBUTTONUP || (lp.0 as u32 & 0xFFFF) == WM_CONTEXTMENU {
-                show_menu(hwnd);
+            match lp.0 as u32 & 0xFFFF {
+                WM_RBUTTONUP | WM_CONTEXTMENU => show_menu(hwnd),
+                WM_LBUTTONUP => open_settings(),
+                _ => {}
             }
+            LRESULT(0)
+        }
+        WM_TIMER if wp.0 == TIMER_TRAY => {
+            let _ = KillTimer(Some(hwnd), TIMER_TRAY);
+            add_tray(hwnd);
             LRESULT(0)
         }
         WM_COMMAND => {
             match wp.0 & 0xFFFF {
-                ID_TOGGLE_TASKBAR => set_taskbar_hidden(!taskbar::is_hidden()),
+                ID_SETTINGS => open_settings(),
+                ID_TOGGLE_TASKBAR => {
+                    if TAKEOVER_ALLOWED.load(Ordering::Relaxed) {
+                        let hide = !taskbar::is_hidden();
+                        crate::prefs::update(|s| s.takeover = hide);
+                    } else {
+                        set_taskbar_hidden(!taskbar::is_hidden());
+                    }
+                }
                 ID_QUIT => {
                     let _ = DestroyWindow(hwnd);
                 }
@@ -203,6 +248,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         }
         single_instance::WM_WAKE => {
             nacre_platform::log::line("instance", "peluncuran kedua terdeteksi");
+            open_settings();
             LRESULT(0)
         }
         WM_TIMER if wp.0 == TIMER_BLOCK => {

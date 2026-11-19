@@ -80,6 +80,17 @@ It is one small native program: no Electron, no web view, no background services
 - **Fullscreen**: the Rail, Visor and Deck now hide during fullscreen videos and games.
 - **Fixes**: the Windows taskbar stays hidden after a restart, maximized apps no longer get an extra gap under the Rail,
   the Smart Visor reappears at the top edge reliably, and the Visor follows the app that is actually playing music.
+- **Fixes from your reports**:
+  - ABRA starts right after sign‑in instead of minutes later;
+  - no more cursor stutter or freezes from ABRA’s input hooks;
+  - brightness works on laptops where Windows can’t set it, using a gentle software dimmer instead;
+  - Task Manager, Calculator and Notepad open again from ABRA;
+  - smoother minimize and restore animations;
+  - the Clock widget category shows a clock;
+  - Settings closes with ✕ or `Esc`;
+  - the tray icon opens Settings with a left click;
+  - Quick Panel sliders follow the pointer all the way to both ends;
+  - Settings → Appearance explains why the Deck looks solid when Windows transparency or battery saver is on.
 
 <details>
 <summary><b>In 0.4.1</b></summary>
@@ -157,6 +168,22 @@ Download from the **[Releases](https://github.com/abdeealfarizi/abra/releases)**
 1. Run `ABRA-Setup-0.5.0.exe`.
 2. Windows SmartScreen may warn about an unsigned app: choose **More info → Run anyway** (only for files from this repository).
 3. Pick the options you want (Start menu shortcut, launch at sign‑in) and finish. ABRA starts.
+
+### “My antivirus says it’s a virus”
+
+Some antivirus engines flag ABRA (for example on VirusTotal). It’s a **false positive**: ABRA is unsigned, new, and does
+things that look unusual to a heuristic scanner, because a desktop shell has to do them — hiding the taskbar, a keyboard hook for
+Alt+Tab, moving other apps’ windows, and starting at sign‑in. There is no telemetry and the full source is in this repository.
+
+To make sure your copy is the real one:
+
+1. Download only from the **[Releases](https://github.com/abdeealfarizi/abra/releases)** page of this repository.
+2. In PowerShell run `Get-FileHash .\ABRA-Setup-0.5.0.exe -Algorithm SHA256` and compare the result with the
+   **sha256** shown next to the file on the Releases page. They must match exactly.
+3. If you prefer, build ABRA yourself from source (see below).
+
+If Windows Defender quarantines the file, you can restore it from *Windows Security → Virus & threat protection →
+Protection history*, but only after the fingerprint check above matches.
 
 ### Portable
 

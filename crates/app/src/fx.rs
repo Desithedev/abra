@@ -605,9 +605,11 @@ impl Fx {
         if h == 0 || !enabled() || !eligible(h) || focus::is_minimized(h) || park::is_parked(h) {
             return;
         }
+        let t0 = std::time::Instant::now();
         let Some(shot) = snapshot::capture(h, 1) else { return };
+        let t_cap = t0.elapsed();
         if let Ok(surface) = self.gfx.surface_from_bgra(shot.bmp.w, shot.bmp.h, &shot.bmp.bgra) {
-            log::line("fx", &format!("tangkap hwnd={h} {}x{} (px {}x{})", shot.rect.2, shot.rect.3, shot.bmp.w, shot.bmp.h));
+            log::line("fx", &format!("tangkap hwnd={h} {}x{} (px {}x{}) ambil={}ms unggah={}ms", shot.rect.2, shot.rect.3, shot.bmp.w, shot.bmp.h, t_cap.as_millis(), (t0.elapsed() - t_cap).as_millis()));
             self.snap = Some(Snap { hwnd: h, rect: shot.rect, surface });
         }
     }

@@ -1356,7 +1356,7 @@ impl Notch {
         let Some(path) = self.shelf.items().get(i).map(|it| it.path.clone()) else { return };
         match id {
             1 => nacre_platform::launch::open(&path),
-            2 => nacre_platform::launch::run("explorer.exe", &format!("/select,\"{path}\"")),
+            2 => nacre_platform::launch::show("explorer.exe", &format!("/select,\"{path}\"")),
             3 => {
                 let _ = nacre_platform::clipboard::copy_text(&path);
             }

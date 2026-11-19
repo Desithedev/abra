@@ -707,7 +707,7 @@ impl Cc {
                 let _ = self.rrect(c, (tx, top, tw, th), tw / 2.0, Color { A: 45, R: 255, G: 255, B: 255 });
                 let frac = if k == Kind::Display { brightness::latest().map(|v| v as f32 / 100.0).unwrap_or(0.5) } else { audio::latest().level };
                 let (kw, kh) = (KNOB.1 * dpi, KNOB.0 * dpi);
-                let ky = (top + th * (1.0 - frac)).clamp(top + kh / 2.0, top + th - kh / 2.0);
+                let ky = nacre_core::hud::slider::pos_of(frac, top + kh / 2.0, (th - kh).max(1.0), true);
                 let fill = self.rrect(c, (tx, ky, tw, (top + th - ky).max(tw)), tw / 2.0, Color { A: 240, R: 255, G: 255, B: 255 });
                 let sym = if k == Kind::Display { Sym::Sun } else { Sym::SpeakerWave };
                 self.symbol(c, sym, px(17.0), WHITE, r.0 + r.2 / 2.0, r.1 + r.3 - 21.0 * dpi, 0.85);
@@ -740,7 +740,7 @@ impl Cc {
                 let _ = self.rrect(c, (tx, ty, tw, th), th / 2.0, Color { A: 45, R: 255, G: 255, B: 255 });
                 let frac = if k == Kind::Display { brightness::latest().map(|v| v as f32 / 100.0).unwrap_or(0.5) } else { audio::latest().level };
                 let (kw, kh) = (KNOB.0 * dpi, KNOB.1 * dpi);
-                let kx = (tx + tw * frac).clamp(tx + kw / 2.0, tx + tw - kw / 2.0);
+                let kx = nacre_core::hud::slider::pos_of(frac, tx + kw / 2.0, (tw - kw).max(1.0), false);
                 let fill = self.rrect(c, (tx, ty, (kx - tx).max(th), th), th / 2.0, Color { A: 240, R: 255, G: 255, B: 255 });
                 let (lo, hi, lo_px, hi_px) = if k == Kind::Display { (Sym::SunSmall, Sym::Sun, 15, 19) } else { (Sym::Speaker, Sym::SpeakerWave, 19, 25) };
                 self.symbol(c, lo, px(lo_px as f32), WHITE, r.0 + 23.0 * dpi, cy, 0.85);
@@ -1035,7 +1035,7 @@ impl Cc {
         let Some(p) = self.panel.as_ref() else { return };
         let Some(m) = p.mods.get(i) else { return };
         let Some(t) = m.track else { return };
-        let frac = if m.vertical { (1.0 - (y - t.1) / t.3).clamp(0.0, 1.0) } else { ((x - t.0) / t.2).clamp(0.0, 1.0) };
+        let frac = slider_value(t, m.vertical, x, y, p.dpi);
         if let Some(f) = &m.fill {
             if m.vertical {
                 place_slider_v(f, &m.thumb, t, frac, p.dpi);
@@ -1309,7 +1309,7 @@ impl Cc {
                     Kind::Lock => launch::run("rundll32.exe", "user32.dll,LockWorkStation"),
                     Kind::Mission => crate::mission::toggle(),
                     Kind::Apps => crate::launchpad::toggle(),
-                    Kind::Calculator => launch::run("calc.exe", ""),
+                    Kind::Calculator => launch::show("calc.exe", ""),
                     Kind::Timer => launch::open("ms-clock:"),
                     _ => {}
                 }
@@ -1522,10 +1522,21 @@ impl Cc {
     }
 }
 
+fn slider_value(t: Rect, vertical: bool, x: f32, y: f32, dpi: f32) -> f32 {
+    use nacre_core::hud::slider::value_at;
+    if vertical {
+        let kh = KNOB.0 * dpi;
+        value_at(y, t.1 + kh / 2.0, (t.3 - kh).max(1.0), true)
+    } else {
+        let kw = KNOB.0 * dpi;
+        value_at(x, t.0 + kw / 2.0, (t.2 - kw).max(1.0), false)
+    }
+}
+
 fn place_slider(fill: &SpriteVisual, thumb: &[SpriteVisual], t: Rect, frac: f32, dpi: f32) {
     let th = t.3 - 20.0 * dpi;
     let (kw, kh) = (KNOB.0 * dpi, KNOB.1 * dpi);
-    let kx = (t.0 + t.2 * frac).clamp(t.0 + kw / 2.0, t.0 + t.2 - kw / 2.0);
+    let kx = nacre_core::hud::slider::pos_of(frac, t.0 + kw / 2.0, (t.2 - kw).max(1.0), false);
     let cy = t.1 + t.3 / 2.0;
     let _ = fill.SetSize(Vector2 { X: (kx - t.0).max(th), Y: th });
     for (j, s) in thumb.iter().enumerate() {
@@ -1537,7 +1548,7 @@ fn place_slider(fill: &SpriteVisual, thumb: &[SpriteVisual], t: Rect, frac: f32,
 fn place_slider_v(fill: &SpriteVisual, thumb: &[SpriteVisual], t: Rect, frac: f32, dpi: f32) {
     let tw = t.2 - 28.0 * dpi;
     let (kw, kh) = (KNOB.1 * dpi, KNOB.0 * dpi);
-    let ky = (t.1 + t.3 * (1.0 - frac)).clamp(t.1 + kh / 2.0, t.1 + t.3 - kh / 2.0);
+    let ky = nacre_core::hud::slider::pos_of(frac, t.1 + kh / 2.0, (t.3 - kh).max(1.0), true);
     let cx = t.0 + t.2 / 2.0;
     let _ = fill.SetOffset(Vector3 { X: cx - tw / 2.0, Y: ky, Z: 0.0 });
     let _ = fill.SetSize(Vector2 { X: tw, Y: (t.1 + t.3 - ky).max(tw) });

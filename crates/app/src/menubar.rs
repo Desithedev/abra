@@ -1298,7 +1298,7 @@ impl Bar {
             101 => launch::open("ms-settings:"),
             102 => launch::open("ms-windows-store:"),
             103 => crate::settings_win::open(&self.comp),
-            104 => launch::run("taskmgr.exe", ""),
+            104 => launch::show("taskmgr.exe", ""),
             105 => crate::launchpad::toggle(),
             106 => crate::mission::toggle(),
             110 => confirm_power("Tidur sekarang?", "rundll32.exe", "powrprof.dll,SetSuspendState 0,1,0"),

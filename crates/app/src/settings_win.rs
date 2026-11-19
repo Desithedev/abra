@@ -84,6 +84,8 @@ enum Action {
     NotchSend,
     LyricsOnline,
     LyricsDir,
+    WinColors,
+    WinPower,
     Donate,
     UpdateCheck,
     UpdateAct,
@@ -180,6 +182,10 @@ fn row_label(r: &RowDef) -> &'static str {
 
 const DONATE_URL: &str = "https://saweria.co/kreativadev";
 
+fn close_button(d: f32) -> (f32, f32, f32) {
+    (W * d - 44.0 * d, 13.0 * d, 28.0 * d)
+}
+
 fn user_name() -> String {
     std::env::var("USERNAME").ok().filter(|u| !u.is_empty()).unwrap_or_else(|| "ABRA".to_string())
 }
@@ -223,6 +229,7 @@ pub fn open(comp: &Compositor) {
     if let Some(h) = existing {
         unsafe {
             let _ = SetWindowPos(h, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            let _ = SetForegroundWindow(h);
         }
         return;
     }
@@ -252,6 +259,9 @@ fn create(comp: &Compositor) -> windows_core::Result<()> {
     win.popup.set_rect((sw - w) / 2, top, w, h)?;
     win.frame();
     win.popup.show();
+    unsafe {
+        let _ = SetForegroundWindow(win.popup.hwnd);
+    }
     prefs::listen(win.popup.hwnd);
     WIN.with(|s| *s.borrow_mut() = Some(win));
     Ok(())
@@ -916,6 +926,21 @@ impl Win {
                     113..=137 => 1,
                     _ => 2,
                 };
+                let mut glass_rows = vec![
+                    RowDef::Seg(prefs::tr("Material"), mat_opts(true), mat_idx(s.dock_material)),
+                    RowDef::Seg(prefs::tr("Material Visor"), mat_opts(false), mat_idx(s.notch_material)),
+                    RowDef::Slider(prefs::tr("Tingkat blur"), s.blur, 0),
+                    RowDef::Slider(prefs::tr("Transparansi"), s.transparency, 1),
+                    RowDef::Toggle(prefs::tr("Refraksi tepi kaca (Deck)"), s.refraction, Action::Refraction),
+                ];
+                {
+                    let c = sys::conditions();
+                    if !c.transparency {
+                        glass_rows.insert(0, RowDef::Pick(prefs::tr("Efek transparansi Windows mati, Deck tampil solid"), prefs::tr("Nyalakan").to_string(), Action::WinColors));
+                    } else if c.battery_saver {
+                        glass_rows.insert(0, RowDef::Pick(prefs::tr("Penghemat baterai aktif, Deck tampil solid"), prefs::tr("Buka").to_string(), Action::WinPower));
+                    }
+                }
                 vec![
                     (
                         None,
@@ -938,16 +963,7 @@ impl Win {
                         )],
                     ),
                     (Some(prefs::tr("Tema")), theme),
-                    (
-                        Some(prefs::tr("Kaca")),
-                        vec![
-                            RowDef::Seg(prefs::tr("Material"), mat_opts(true), mat_idx(s.dock_material)),
-                            RowDef::Seg(prefs::tr("Material Visor"), mat_opts(false), mat_idx(s.notch_material)),
-                            RowDef::Slider(prefs::tr("Tingkat blur"), s.blur, 0),
-                            RowDef::Slider(prefs::tr("Transparansi"), s.transparency, 1),
-                            RowDef::Toggle(prefs::tr("Refraksi tepi kaca (Deck)"), s.refraction, Action::Refraction),
-                        ],
-                    ),
+                    (Some(prefs::tr("Kaca")), glass_rows),
                 ]
             }
             5 => vec![
@@ -1007,6 +1023,10 @@ impl Win {
             self.rect(c, cx - 6.0 * d, cy - 6.0 * d, 12.0 * d, 12.0 * d, 6.0 * d, col(*rgb, 255));
         }
         self.region_fixed(18.0 * d, 17.0 * d, 20.0 * d, 20.0 * d, Action::Close);
+        let (bx, by, bs) = close_button(d);
+        self.rect(c, bx, by, bs, bs, bs / 2.0, col(look.fg, 22));
+        self.glyph_icon(c, "\u{E711}", bx + bs / 2.0, by + bs / 2.0, 11.0, look.fg);
+        self.region_fixed(bx, by, bs, bs, Action::Close);
 
         let (fx, fy, fw, fh) = (16.0 * d, 48.0 * d, (SIDEBAR_W - 32.0) * d, 30.0 * d);
         self.rect(c, fx, fy, fw, fh, 9.0 * d, col(look.fg, if self.search_focus { 36 } else { 22 }));
@@ -1288,6 +1308,11 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             let (px, py) = ((lp.0 as i16) as i32, ((lp.0 >> 16) as i16) as i32);
             let drag = with_win(|w| {
                 let d = w.dpi;
+                let (bx, by, bs) = close_button(d);
+                let (lx, ly) = ((px - r.left) as f32, (py - r.top) as f32);
+                if lx >= bx && lx < bx + bs && ly >= by && ly < by + bs {
+                    return false;
+                }
                 py - r.top < (VIEW_TOP * d) as i32 && px - r.left > ((CONTENT_X + 70.0) * d) as i32
             })
             .unwrap_or(false);
@@ -1314,6 +1339,9 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         }
         WM_LBUTTONDOWN => {
             let (x, y) = xy(lp);
+            if GetForegroundWindow() != hwnd {
+                let _ = SetForegroundWindow(hwnd);
+            }
             let grabbed = with_win(|w| {
                 let Some((r, th)) = w.side_bar else { return false };
                 if !(x >= r.0 && x < r.0 + r.2 && y >= r.1 && y < r.1 + r.3) {
@@ -1417,6 +1445,9 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                     return;
                 }
                 if !w.search_focus {
+                    if vk == 0x1B {
+                        let _ = PostMessageW(Some(hwnd), WM_CLOSE_SELF, WPARAM(0), LPARAM(0));
+                    }
                     return;
                 }
                 match vk {
@@ -1531,6 +1562,8 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                     let _ = std::fs::create_dir_all(&dir);
                     nacre_platform::launch::open(&dir.to_string_lossy());
                 }
+                Some(Action::WinColors) => nacre_platform::launch::open("ms-settings:personalization-colors"),
+                Some(Action::WinPower) => nacre_platform::launch::open("ms-settings:batterysaver"),
                 Some(Action::Search) => {
                     with_win(|w| {
                         w.search_focus = true;
@@ -1641,6 +1674,10 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 let base = nacre_ui::glass::GlassParams::dark((10.0, 10.0), 24.0 * w.dpi);
                 let _ = w.popup.panel.set_params(side_glass(prefs::apply(base, &themed)));
             });
+            LRESULT(0)
+        }
+        WM_CLOSE => {
+            let _ = PostMessageW(Some(hwnd), WM_CLOSE_SELF, WPARAM(0), LPARAM(0));
             LRESULT(0)
         }
         WM_CLOSE_SELF => {

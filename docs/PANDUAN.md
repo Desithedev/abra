@@ -45,9 +45,24 @@ Administrator; ABRA dipasang untuk pengguna Anda saja.
 > Berkas ABRA belum ditandatangani secara digital, jadi Windows SmartScreen mungkin menampilkan "Windows protected your PC".
 > Pilih **More info → Run anyway** bila Anda memang mengunduhnya dari halaman resmi proyek.
 
+**"Antivirus bilang ABRA virus/trojan."** Itu *false positive*. ABRA belum bertanda tangan digital, masih baru, dan melakukan hal
+yang memang wajib dilakukan sebuah shell desktop tapi terlihat mencurigakan bagi pemindai heuristik: menyembunyikan taskbar,
+hook keyboard untuk Alt+Tab, memindahkan jendela app lain, dan berjalan saat login. ABRA tidak punya telemetri dan seluruh kode
+sumbernya terbuka. Cara memastikan berkas Anda asli:
+
+1. Unduh hanya dari halaman **Releases** proyek ini.
+2. Di PowerShell jalankan `Get-FileHash .\ABRA-Setup-<versi>.exe -Algorithm SHA256`, lalu bandingkan hasilnya dengan nilai
+   **sha256** di samping berkas pada halaman Releases. Harus sama persis.
+3. Atau build sendiri dari kode sumber.
+
+Bila Windows Defender mengarantina berkasnya, pulihkan dari *Keamanan Windows → Perlindungan virus & ancaman → Riwayat
+perlindungan*, tapi hanya setelah sidik jarinya cocok.
+
 Begitu `abra.exe` dijalankan, taskbar bawaan Windows disembunyikan lalu Rail, Visor, dan Deck muncul. Deck bersembunyi sampai kursor dibawa ke tepi bawah layar.
 
 - **Keluar:** klik kanan ikon di Deck atau ikon ABRA di area tray → **Keluar dari ABRA**. Taskbar dipulihkan otomatis.
+- **Ikon tray:** klik kiri membuka Pengaturan, klik kanan membuka menu (Pengaturan, Sembunyikan taskbar Windows, Keluar). Di
+  Windows 11 ikon baru biasanya masuk ke panah `^` dulu; seret keluar bila ingin selalu terlihat.
 - **Bila ABRA mati mendadak:** `abra-guard.exe` otomatis memulihkan taskbar (dan jendela yang sedang diparkir Scene). Bila
   tidak, jalankan `abra.exe` lagi lalu keluar secara normal.
 - **Buka pengaturan:** klik kanan Deck → **Pengaturan ABRA…**, ikon roda gigi di Deck, atau logo bulat di Rail → **Pengaturan ABRA…**.
@@ -57,7 +72,7 @@ Begitu `abra.exe` dijalankan, taskbar bawaan Windows disembunyikan lalu Rail, Vi
   sidik jari SHA-256-nya dengan yang tercatat di GitHub (installer yang tidak cocok ditolak), memasangnya, lalu membuka ABRA lagi.
   Versi portabel (zip) hanya membuka halaman unduhan. Pemeriksaan otomatis bisa dimatikan di tempat yang sama.
 
-Hanya satu ABRA yang berjalan; menjalankannya lagi hanya membangunkan yang sudah ada. Taskbar Windows tidak dimatikan selamanya: ia
+Hanya satu ABRA yang berjalan; menjalankannya lagi membuka Pengaturan ABRA yang sudah berjalan. Taskbar Windows tidak dimatikan selamanya: ia
 hanya disembunyikan selama ABRA berjalan (bisa dimatikan di Pengaturan → Umum → **Sembunyikan taskbar Windows**).
 
 ## 2. Deck
@@ -336,7 +351,7 @@ diabaikan saat tombol mouse ditekan, jadi aman saat menyeret jendela.
 
 ## 11. Pengaturan
 
-Jendela Pengaturan ABRA bergaya panel pengaturan modern: sidebar berikon warna di kiri dan halaman berisi kartu grup di kanan (gulir dengan roda mouse bila isinya panjang). Lampu merah di kiri atas menutup jendela; judul bisa diseret. Di sidebar ada kolom **Cari** (ketik untuk menyaring halaman; `Enter` membuka yang pertama, `Esc` menghapus) dan kartu akun Windows; tombol **◀ ▶** di bilah judul kembali/maju antar halaman yang sudah dibuka.
+Jendela Pengaturan ABRA bergaya panel pengaturan modern: sidebar berikon warna di kiri dan halaman berisi kartu grup di kanan (gulir dengan roda mouse bila isinya panjang). Tutup jendela dengan tombol **✕** di kanan atas, lampu merah di kiri atas, atau `Esc`; judul bisa diseret. Di sidebar ada kolom **Cari** (ketik untuk menyaring halaman; `Enter` membuka yang pertama, `Esc` menghapus) dan kartu akun Windows; tombol **◀ ▶** di bilah judul kembali/maju antar halaman yang sudah dibuka.
 
 | Halaman | Isi |
 |---|---|
@@ -408,8 +423,9 @@ Pintasan lain (screen corner) diatur di Pengaturan. Bila sebuah pintasan tidak b
 - **Perintah sistem** (kunci layar, kalkulator, dsb.) dijalankan dari jalur absolut `System32`, bukan lewat PATH, sehingga tidak bisa dibajak oleh berkas dengan nama sama.
 - **Memindahkan jendela.** Scene memindahkan jendela app lain ke luar layar dan mengembalikannya. Tidak ada isi jendela yang
   disimpan di disk selain daftar posisi sementara (`parked.txt`) agar jendela bisa dipulihkan.
-- **Mulai otomatis** memakai nilai `ABRA` di `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` (tanpa hak Administrator); bisa
-  dimatikan dari Pengaturan ABRA atau Pengaturan Windows → Aplikasi → Startup.
+- **Mulai otomatis** memakai tugas Task Scheduler pengguna bernama `ABRA Autostart` (tanpa hak Administrator) supaya ABRA langsung
+  muncul setelah login; bila tugas tidak bisa dibuat, ABRA memakai nilai `ABRA` di
+  `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. Matikan dari Pengaturan ABRA.
 - Perangkat lunak ini disediakan **apa adanya** tanpa jaminan (lihat [LICENSE](../LICENSE.md)). Kode sumbernya terbuka untuk
   diperiksa.
 
@@ -421,7 +437,9 @@ Pintasan lain (screen corner) diatur di Pengaturan. Bila sebuah pintasan tidak b
 | Ada jendela yang "hilang" | Kemungkinan diparkir Scene. Jalankan ABRA lagi (ia memulihkan jendela terparkir saat mulai), atau matikan Scene. |
 | Pintasan tidak bekerja | Program lain mungkin memakai kombinasi yang sama; cek `abra.log`. |
 | Menu app tidak muncul di Rail | App itu tidak memakai menu Win32 klasik, jadi menu standar dipakai. |
-| Rail/Deck tidak terlihat di layar penuh | Aktifkan Pengaturan → Umum → **Selalu di atas jendela layar penuh** (bawaan aktif). Game dengan layar penuh eksklusif tidak bisa ditimpa. |
+| Rail/Deck tidak terlihat di layar penuh | Itu bawaan: Rail, Visor, dan Deck bersembunyi saat video atau game layar penuh. Bila ingin tetap tampil, aktifkan Pengaturan → Umum → **Selalu di atas jendela layar penuh**. Game dengan layar penuh eksklusif tidak bisa ditimpa. |
+| Deck tidak transparan | Efek transparansi Windows mati atau penghemat baterai aktif, jadi ABRA tampil solid. Pengaturan → Tampilan → Kaca menampilkan tombol untuk membuka pengaturan Windows yang terkait. |
+| Task Manager tidak terbuka dari ABRA | Sudah diperbaiki di 0.5.0. |
 | Ikon desktop tidak terlihat | Pengaturan → Umum → matikan **Sembunyikan ikon desktop saat ABRA berjalan**. Ikon kembali saat ABRA ditutup. |
 | Ikon Deck terlihat berbeda dari aslinya | Matikan **Ikon seragam** di tab DECK dan setel **Gaya ikon** ke Bawaan. |
 | Kursor tetap bulat setelah ABRA mati | Jalankan ABRA lagi dan keluar normal, atau biarkan `abra-guard.exe` memulihkannya; bisa juga dengan Pengaturan Windows → Bluetooth & perangkat → Mouse → Penunjuk mouse. |

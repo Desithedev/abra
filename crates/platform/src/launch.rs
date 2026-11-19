@@ -90,6 +90,17 @@ pub fn run_visible(file: &str, params: &str) -> bool {
     }
 }
 
+pub fn show(file: &str, params: &str) {
+    let file = system_tool(file);
+    let params = params.to_string();
+    off_thread(move || unsafe {
+        let r = ShellExecuteW(None, w!("open"), &HSTRING::from(file.as_str()), &HSTRING::from(params.as_str()), None, SW_SHOWNORMAL);
+        if r.0 as isize <= 32 {
+            crate::log::line("launch", &format!("{file} gagal dibuka (kode {})", r.0 as isize));
+        }
+    });
+}
+
 pub fn run(file: &str, params: &str) {
     let file = system_tool(file);
     let params = params.to_string();

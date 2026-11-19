@@ -1576,7 +1576,7 @@ fn clip_time(at: i64) -> String {
 
 fn run_action(id: &str) {
     match id {
-        "note" => launch::run("notepad.exe", ""),
+        "note" => launch::show("notepad.exe", ""),
         "timer" => launch::open("ms-clock:"),
         "email" => launch::open("mailto:"),
         "screenshot" => keys::chord(&[keys::WIN, keys::SHIFT, 0x53]),
@@ -1587,8 +1587,8 @@ fn run_action(id: &str) {
         }),
         "stage" => prefs::update(|s| s.stage = !s.stage),
         "mission" => crate::mission::toggle(),
-        "calc" => launch::run("calc.exe", ""),
-        "taskmgr" => launch::run("taskmgr.exe", ""),
+        "calc" => launch::show("calc.exe", ""),
+        "taskmgr" => launch::show("taskmgr.exe", ""),
         "settings" => launch::open("ms-settings:"),
         "clearclip" => clipboard::clear(),
         _ => {}
