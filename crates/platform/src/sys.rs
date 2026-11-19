@@ -32,7 +32,18 @@ pub fn conditions() -> Conditions {
     Conditions { transparency, battery_saver, remote_session }
 }
 
+fn fake_battery() -> Option<(u8, bool)> {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let start = *START.get_or_init(std::time::Instant::now);
+    let base = std::env::var("NACRE_FAKE_BATTERY").ok()?.parse::<u8>().ok()?.min(100);
+    let drop = (start.elapsed().as_secs() / 60) as u8;
+    Some((base.saturating_sub(drop), false))
+}
+
 pub fn battery() -> Option<(u8, bool)> {
+    if let Some(f) = fake_battery() {
+        return Some(f);
+    }
     let mut ps = SYSTEM_POWER_STATUS::default();
     unsafe { GetSystemPowerStatus(&mut ps).ok()? };
     if ps.BatteryFlag & 128 != 0 || ps.BatteryLifePercent > 100 {

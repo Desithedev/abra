@@ -1,4 +1,9 @@
 use std::sync::Once;
+use windows::core::implement;
+use windows::Win32::System::Com::{IDataObject, DVASPECT_CONTENT, FORMATETC, TYMED_HGLOBAL};
+use windows::Win32::System::Ole::{IDropTarget, IDropTarget_Impl, OleInitialize, RegisterDragDrop, RevokeDragDrop, CF_HDROP, DROPEFFECT, DROPEFFECT_NONE};
+use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
+use windows::Win32::Foundation::POINTL;
 use windows::core::w;
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{GetStockObject, BLACK_BRUSH, HBRUSH};
@@ -57,13 +62,58 @@ unsafe extern "system" fn proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESULT
     }
 }
 
+#[implement(IDropTarget)]
+struct DragProbe {
+    target: isize,
+    msg: u32,
+}
+
+impl IDropTarget_Impl for DragProbe_Impl {
+    fn DragEnter(&self, data: windows_core::Ref<IDataObject>, _keys: MODIFIERKEYS_FLAGS, _pt: &POINTL, effect: *mut DROPEFFECT) -> windows_core::Result<()> {
+        let fmt = FORMATETC { cfFormat: CF_HDROP.0, ptd: std::ptr::null_mut(), dwAspect: DVASPECT_CONTENT.0, lindex: -1, tymed: TYMED_HGLOBAL.0 as u32 };
+        let files = data.as_ref().is_some_and(|d| unsafe { d.QueryGetData(&fmt).is_ok() });
+        if files {
+            unsafe {
+                let _ = PostMessageW(Some(HWND(self.target as *mut _)), self.msg, WPARAM(0), LPARAM(0));
+            }
+        }
+        if !effect.is_null() {
+            unsafe { *effect = DROPEFFECT_NONE };
+        }
+        Ok(())
+    }
+
+    fn DragOver(&self, _keys: MODIFIERKEYS_FLAGS, _pt: &POINTL, effect: *mut DROPEFFECT) -> windows_core::Result<()> {
+        if !effect.is_null() {
+            unsafe { *effect = DROPEFFECT_NONE };
+        }
+        Ok(())
+    }
+
+    fn DragLeave(&self) -> windows_core::Result<()> {
+        Ok(())
+    }
+
+    fn Drop(&self, _data: windows_core::Ref<IDataObject>, _keys: MODIFIERKEYS_FLAGS, _pt: &POINTL, effect: *mut DROPEFFECT) -> windows_core::Result<()> {
+        if !effect.is_null() {
+            unsafe { *effect = DROPEFFECT_NONE };
+        }
+        Ok(())
+    }
+}
+
 pub struct Strip {
     hwnd: HWND,
+    target: HWND,
+    drag: Option<IDropTarget>,
 }
 
 impl Drop for Strip {
     fn drop(&mut self) {
         unsafe {
+            if self.drag.take().is_some() {
+                let _ = RevokeDragDrop(self.hwnd);
+            }
             let _ = DestroyWindow(self.hwnd);
         }
     }
@@ -93,8 +143,19 @@ impl Strip {
             )?;
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(Box::new(State { target, enter, leave, inside: false, last: 0 })) as isize);
             SetLayeredWindowAttributes(hwnd, COLORREF(0), 1, LWA_ALPHA)?;
-            Ok(Strip { hwnd })
+            Ok(Strip { hwnd, target, drag: None })
         }
+    }
+
+    pub fn on_file_drag(mut self, msg: u32) -> Strip {
+        unsafe {
+            let _ = OleInitialize(None);
+            let t: IDropTarget = DragProbe { target: self.target.0 as isize, msg }.into();
+            if RegisterDragDrop(self.hwnd, &t).is_ok() {
+                self.drag = Some(t);
+            }
+        }
+        self
     }
 
     pub fn place(&self, x: i32, y: i32, w: i32, h: i32) {

@@ -82,6 +82,7 @@ const T_CARET: usize = 24;
 const WM_TODO_EDIT: u32 = WM_APP + 28;
 const WM_PILLS: u32 = WM_APP + 26;
 const WM_TASKS: u32 = WM_APP + 27;
+const STRIP_DRAG: u32 = WM_APP + 29;
 const WM_DEVICECHANGE_MSG: u32 = 0x0219;
 const SEND_IDLE: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
@@ -501,7 +502,7 @@ impl Notch {
                 }
                 d.place_shadow_window();
                 if d.vis != Vis::Always {
-                    d.strip = Strip::new(hwnd, STRIP_ENTER, STRIP_LEAVE).ok();
+                    d.strip = Strip::new(hwnd, STRIP_ENTER, STRIP_LEAVE).ok().map(|s| s.on_file_drag(STRIP_DRAG));
                     d.place_strip();
                 }
                 if opts.reserve && !d.off && !crate::prefs::get().menubar {
@@ -1906,7 +1907,7 @@ impl Notch {
                 self.strip = None;
                 self.edge_armed = false;
             } else if self.strip.is_none() {
-                self.strip = Strip::new(self.hwnd, STRIP_ENTER, STRIP_LEAVE).ok();
+                self.strip = Strip::new(self.hwnd, STRIP_ENTER, STRIP_LEAVE).ok().map(|s| s.on_file_drag(STRIP_DRAG));
                 self.place_strip();
             }
         }
@@ -2098,7 +2099,7 @@ impl Notch {
             T_MINUTE => {
                 if sys::battery() != self.battery {
                     self.on_power();
-                } else if self.look.view == View::Compact(state::Activity::Glance) {
+                } else if matches!(self.look.view, View::Compact(state::Activity::Glance) | View::Open(_)) && self.todo_edit.is_none() {
                     self.render();
                 }
                 timer(self.hwnd, T_MINUTE, nacre_platform::time::ms_to_next_minute());
@@ -2309,6 +2310,18 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             with(hwnd, |d| {
                 if d.vis != Vis::Always {
                     timer(hwnd, T_EDGE, 200);
+                }
+            });
+            LRESULT(0)
+        }
+        STRIP_DRAG => {
+            with(hwnd, |d| {
+                if d.vis != Vis::Always && !d.off {
+                    kill(hwnd, T_EDGE);
+                    d.grace = true;
+                    timer(hwnd, T_GRACE, 3000);
+                    log::line("notch", "file diseret ke tepi atas: Visor dimunculkan");
+                    d.update_visibility();
                 }
             });
             LRESULT(0)
