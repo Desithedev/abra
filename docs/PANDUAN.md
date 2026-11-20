@@ -357,9 +357,9 @@ Jendela Pengaturan ABRA bergaya panel pengaturan modern: sidebar berikon warna d
 |---|---|
 | **Umum** | Bahasa (Indonesia/English), jalankan saat login, sembunyikan taskbar Windows, sembunyikan ikon desktop, selalu di atas jendela layar penuh, animasi jendela, bayangan jendela aktif |
 | **Deck** | Aktifkan Deck, perilaku, **Tampilkan di** (bila ada lebih dari satu layar), ikon seragam, ukuran ikon, jarak, zoom, jarak dari tepi, kebulatan sudut |
-| **Visor** | Aktifkan Visor, bentuk, perilaku, **Tampilkan di**, kebulatan sudut, buka otomatis saat kursor di Visor |
+| **Visor** | Aktifkan Visor, bentuk, perilaku, **Tampilkan di**, **Visualizer musik** (Batang, Spektrum, Gelombang, Titik), kebulatan sudut, buka otomatis saat kursor di Visor |
 | **Rail** | Aktifkan Rail, perilaku, **Tampilkan di**, latar (Transparan, Terang, Gelap, Material), jam 24 jam |
-| **Tampilan** | Kartu pratinjau **Otomatis · Terang · Gelap**; **Tema**: warna aksen (Multiwarna = ikut warna aksen Windows, lalu 8 warna), kartu **gaya ikon & widget** Bawaan · Gelap · Bening · Berwarna dengan pilihan Terang · Gelap · Otomatis, warna tint, paket ikon; **Kaca**: material global (Blur, Crystal, Hitam buram), material Visor, tingkat blur, transparansi, refraksi tepi kaca |
+| **Tampilan** | **Preset** (Bawaan, Prism, Neon, Aurora, Stealth, Pixel: sekali klik mengubah warna, material, sudut, dan visualizer Deck, Rail, dan Visor; semua tetap bisa diatur ulang sesudahnya); **Huruf dan gerak**: font (Inter, Segoe UI, Bahnschrift, Mono; berlaku setelah tombol **Buka ulang**) dan **Kurangi gerakan** (visualizer, cahaya Aurora, dan animasi Visor berhenti); kartu pratinjau **Otomatis · Terang · Gelap**; **Tema**: warna aksen (Multiwarna = ikut warna aksen Windows, lalu 8 warna), kartu **gaya ikon & widget** Bawaan · Gelap · Bening · Berwarna dengan pilihan Terang · Gelap · Otomatis, warna tint, paket ikon; **Kaca**: material global (Blur, Crystal, Hitam buram), material Visor, tingkat blur, transparansi, refraksi tepi kaca |
 | **Scene** | Semua pengaturan Scene |
 | **Screen Corners** | Aksi untuk empat screen corner |
 | **Quick Search** | Riwayat Papan Klip |

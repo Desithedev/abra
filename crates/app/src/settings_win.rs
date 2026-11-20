@@ -100,6 +100,11 @@ enum Action {
     Notch(Behavior),
     Rail(Behavior),
     Screen(u8, nacre_core::display::Screen),
+    Preset(nacre_core::theme::Preset),
+    Visualizer(nacre_core::theme::VisStyle),
+    Font(nacre_core::theme::FontChoice),
+    ReduceMotion,
+    Relaunch,
     Theme(Theme),
     Lang(Lang),
     Tab(u8),
@@ -811,6 +816,11 @@ impl Win {
                     RowDef::Seg(prefs::tr("Bentuk"), vec![(prefs::tr("Visor"), Action::NotchShape(false)), (prefs::tr("Capsule"), Action::NotchShape(true))], if s.notch_island { 1 } else { 0 }),
                     RowDef::Seg(prefs::tr("Perilaku"), behaviors(false), beh_idx(s.notch)),
                     RowDef::Slider(prefs::tr("Ukuran"), s.notch_scale, 12),
+                    RowDef::Seg(
+                        prefs::tr("Visualizer musik"),
+                        nacre_core::theme::VisStyle::ALL.iter().map(|v| (prefs::tr(v.title()), Action::Visualizer(*v))).collect(),
+                        nacre_core::theme::VisStyle::ALL.iter().position(|v| *v == s.visualizer).unwrap_or(0),
+                    ),
                     RowDef::Slider(prefs::tr("Kebulatan sudut"), s.notch_round, 3),
                 ]
                 .into_iter()
@@ -983,6 +993,14 @@ impl Win {
                     (
                         None,
                         vec![RowDef::Seg(
+                            prefs::tr("Preset"),
+                            nacre_core::theme::Preset::ALL.iter().map(|p| (prefs::tr(p.title()), Action::Preset(*p))).collect(),
+                            nacre_core::theme::Preset::ALL.iter().position(|p| *p == s.preset).unwrap_or(0),
+                        )],
+                    ),
+                    (
+                        None,
+                        vec![RowDef::Seg(
                             prefs::tr("Skala Deck, Visor, Rail & Quick Panel"),
                             vec![("100%", Action::UiScale(100)), ("125%", Action::UiScale(125)), ("150%", Action::UiScale(150))],
                             scale_idx,
@@ -1002,6 +1020,17 @@ impl Win {
                     ),
                     (Some(prefs::tr("Tema")), theme),
                     (Some(prefs::tr("Kaca")), glass_rows),
+                    (Some(prefs::tr("Huruf dan gerak")), {
+                        use nacre_core::theme::FontChoice;
+                        let mut rows = vec![
+                            RowDef::Seg(prefs::tr("Font"), FontChoice::ALL.iter().map(|f| (f.title(), Action::Font(*f))).collect(), FontChoice::ALL.iter().position(|f| *f == s.font).unwrap_or(0)),
+                            RowDef::Toggle(prefs::tr("Kurangi gerakan"), s.reduce_motion, Action::ReduceMotion),
+                        ];
+                        if s.font != prefs::launch_font() {
+                            rows.insert(1, RowDef::Pick(prefs::tr("Font baru berlaku setelah ABRA dibuka ulang"), prefs::tr("Buka ulang").to_string(), Action::Relaunch));
+                        }
+                        rows
+                    }),
                 ]
             }
             5 => vec![
@@ -1637,6 +1666,11 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 Some(Action::Dock(b)) => prefs::update(|s| s.dock = b),
                 Some(Action::Notch(b)) => prefs::update(|s| s.notch = b),
                 Some(Action::Rail(b)) => prefs::update(|s| s.rail = b),
+                Some(Action::Preset(p)) => prefs::update(|s| nacre_core::theme::apply(s, p)),
+                Some(Action::Visualizer(v)) => prefs::update(|s| s.visualizer = v),
+                Some(Action::Font(f)) => prefs::update(|s| s.font = f),
+                Some(Action::ReduceMotion) => prefs::update(|s| s.reduce_motion = !s.reduce_motion),
+                Some(Action::Relaunch) => crate::mainwin::relaunch(),
                 Some(Action::Screen(part, v)) => prefs::update(|s| match part {
                     0 => s.deck_screen = v,
                     1 => s.rail_screen = v,

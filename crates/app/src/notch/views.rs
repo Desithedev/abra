@@ -179,6 +179,7 @@ pub struct MediaView<'a> {
 #[derive(Default)]
 pub struct Live {
     pub bars: Vec<SpriteVisual>,
+    pub vis: nacre_core::theme::VisStyle,
     pub lyric: Option<SpriteVisual>,
     pub lyric_scroll: Option<windows::UI::Composition::ContainerVisual>,
     pub lyric_shift: f32,
@@ -516,13 +517,25 @@ fn compact_music(p: &mut Painter, c: &ContainerVisual, f: Frame, d: &Data, live:
         }
     }
     let rgb = accent_or(m.tint);
-    let (bw, gap, bh) = (p.px(3.0), p.px(3.0), p.px(14.0));
+    let prefs = crate::prefs::get();
+    let style = prefs.visualizer;
+    let square = prefs.preset == nacre_core::theme::Preset::Pixel;
+    live.vis = style;
+    let n = style.count();
+    let (bw, gap, bh) = match style {
+        nacre_core::theme::VisStyle::Bars => (p.px(3.0), p.px(3.0), p.px(14.0)),
+        nacre_core::theme::VisStyle::Spectrum => (p.px(1.6), p.px(0.8), p.px(14.0)),
+        nacre_core::theme::VisStyle::Wave => (p.px(1.0), p.px(0.5), p.px(15.0)),
+        nacre_core::theme::VisStyle::Dots => (p.px(3.6), p.px(1.2), p.px(3.6)),
+    };
     let right = f.x0 + f.w - p.px(14.0);
-    let x0 = right - 5.0 * bw - 4.0 * gap;
-    for i in 0..5 {
-        if let Some(v) = p.rect(c, x0 + i as f32 * (bw + gap), cy - bh / 2.0, bw, bh, bw / 2.0, Color { A: 240, R: rgb[0], G: rgb[1], B: rgb[2] }) {
+    let x0 = right - n as f32 * bw - (n as f32 - 1.0) * gap;
+    let radius = if square { 0.0 } else { bw / 2.0 };
+    for i in 0..n {
+        if let Some(v) = p.rect(c, x0 + i as f32 * (bw + gap), cy - bh / 2.0, bw, bh, radius, Color { A: 240, R: rgb[0], G: rgb[1], B: rgb[2] }) {
             let _ = v.SetCenterPoint(Vector3 { X: bw / 2.0, Y: bh / 2.0, Z: 0.0 });
-            let _ = v.SetScale(Vector3 { X: 1.0, Y: 0.3, Z: 1.0 });
+            let start = if style == nacre_core::theme::VisStyle::Dots { Vector3 { X: 0.7, Y: 0.7, Z: 1.0 } } else { Vector3 { X: 1.0, Y: 0.3, Z: 1.0 } };
+            let _ = v.SetScale(start);
             live.bars.push(v);
         }
     }

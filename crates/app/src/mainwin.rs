@@ -156,6 +156,28 @@ pub fn balloon(title: &str, text: &str) {
     }
 }
 
+pub fn relaunch() {
+    let Ok(exe) = std::env::current_exe() else { return };
+    let mut args: Vec<String> = Vec::new();
+    let mut it = std::env::args().skip(1);
+    while let Some(a) = it.next() {
+        if a == "--after" || a == "--exit-after" {
+            it.next();
+            continue;
+        }
+        args.push(a);
+    }
+    args.push("--after".into());
+    args.push(std::process::id().to_string());
+    match std::process::Command::new(exe).args(&args).spawn() {
+        Ok(_) => {
+            nacre_platform::log::line("start", "membuka ulang ABRA");
+            request_quit();
+        }
+        Err(e) => nacre_platform::log::line("start", &format!("gagal membuka ulang: {e}")),
+    }
+}
+
 pub fn request_quit() -> bool {
     let h = MAIN.load(Ordering::Relaxed);
     if h == 0 {

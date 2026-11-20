@@ -65,6 +65,12 @@ It is one small native program: no Electron, no web view, no background services
 - **More than one screen**: choose where the Deck, Rail, Visor and desktop widgets appear (*Main*, *Screen 1*, *Screen 2*…)
   under **Show on** in each page of Settings. Unplug a screen and everything moves to the main one; plug it back in and
   it returns. Mixed scaling (for example 100% and 150%) is handled per screen.
+- **Presets**: one click restyles the Deck, Rail and Visor together — *Default*, *Prism* (bright glass), *Neon* (black with
+  a glowing edge), *Aurora* (soft violet glass), *Stealth* (pure black, minimal) and *Pixel* (retro, square corners,
+  monospace). *Settings → Appearance → Preset*; you can still fine‑tune everything afterwards.
+- **Music visualizer styles** in the Visor: *Bars*, a 16‑band *Spectrum*, *Wave* and *Dots* (*Settings → Visor*).
+- **Fonts**: Inter, Segoe UI, Bahnschrift or a monospace font, applied after a one‑click restart, plus **Reduce motion**
+  to keep the visualizer, Aurora light and Visor morph still (*Settings → Appearance → Text and motion*).
 
 ### 🆕 New in 0.5.0
 

@@ -10,10 +10,24 @@ use windows::Win32::Graphics::Gdi::{
 
 pub const ICON_FACE: &str = "Segoe Fluent Icons";
 
+static PREFERRED: std::sync::OnceLock<&'static [&'static str]> = std::sync::OnceLock::new();
+
+pub fn prefer(faces: &'static [&'static str]) {
+    let _ = PREFERRED.set(faces);
+}
+
 pub fn text_face() -> &'static str {
     static FACE: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
     FACE.get_or_init(|| {
-        let first = pick_face(load_bundled_fonts(), font_exists("Segoe UI Variable Text"));
+        let bundled = load_bundled_fonts();
+        let first = pick_face(bundled, font_exists("Segoe UI Variable Text"));
+        let wanted = PREFERRED.get().and_then(|list| list.iter().copied().find(|f| (*f == "Inter" && bundled) || (*f != "Inter" && font_exists(f))));
+        if let Some(w) = wanted.filter(|w| *w != first) {
+            if renders_latin(w) {
+                crate::log::line("font", &format!("memakai font pilihan {w}"));
+                return w;
+            }
+        }
         for f in [first, "Segoe UI Variable Text", "Segoe UI", "Arial"] {
             if renders_latin(f) {
                 if f != first {

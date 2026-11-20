@@ -1205,10 +1205,33 @@ impl Notch {
     }
 
     fn on_bands(&mut self) {
+        use nacre_core::theme::{quantize, VisStyle};
         let b = loopback::latest();
+        let spec = loopback::spectrum();
+        let prefs = crate::prefs::get();
+        let n = self.live_vis.bars.len();
         for (i, bar) in self.live_vis.bars.iter().enumerate() {
-            let v = b.get(i).copied().unwrap_or(0.0).clamp(0.0, 1.0);
-            let _ = bar.SetScale(Vector3 { X: 1.0, Y: 0.25 + 0.75 * v, Z: 1.0 });
+            let raw = match self.live_vis.vis {
+                VisStyle::Bars => b.get(i).copied().unwrap_or(0.0),
+                VisStyle::Spectrum => spec.get(i).copied().unwrap_or(0.0),
+                VisStyle::Wave => {
+                    let half = (n.max(1) - 1) as f32 / 2.0;
+                    let k = ((i as f32 - half).abs() / half.max(1.0) * (spec.len() - 1) as f32).round() as usize;
+                    spec.get(k).copied().unwrap_or(0.0)
+                }
+                VisStyle::Dots => {
+                    let k = i * 2;
+                    (spec.get(k).copied().unwrap_or(0.0) + spec.get(k + 1).copied().unwrap_or(0.0)) / 2.0
+                }
+            };
+            let v = if prefs.reduce_motion { 0.35 } else { quantize(raw.clamp(0.0, 1.0), prefs.preset) };
+            if self.live_vis.vis == VisStyle::Dots {
+                let s = 0.55 + 0.75 * v;
+                let _ = bar.SetScale(Vector3 { X: s, Y: s, Z: 1.0 });
+                let _ = bar.SetOpacity(0.35 + 0.65 * v);
+            } else {
+                let _ = bar.SetScale(Vector3 { X: 1.0, Y: 0.25 + 0.75 * v, Z: 1.0 });
+            }
         }
         let pick = |i: usize| b.get(i).copied().unwrap_or(0.0).clamp(0.0, 1.0);
         let target = [pick(0).max(pick(1)), pick(2), pick(3).max(pick(4))];
@@ -1219,7 +1242,7 @@ impl Notch {
     }
 
     fn glow_on(&self) -> bool {
-        crate::prefs::get().notch_glow && self.has_media && self.playing && self.shown && !self.off && !self.overlap.fullscreen && crate::prefs::get().anim
+        crate::prefs::get().notch_glow && self.has_media && self.playing && self.shown && !self.off && !self.overlap.fullscreen && crate::prefs::get().anim && !crate::prefs::get().reduce_motion
     }
 
     fn paint_glow(&mut self) {
@@ -1945,7 +1968,7 @@ impl Notch {
     }
 
     fn morph(&mut self, to_island: bool) {
-        if !crate::prefs::get().anim || !self.shown {
+        if !crate::prefs::get().anim || crate::prefs::get().reduce_motion || !self.shown {
             return;
         }
         let Ok(comp) = self.body.stage.Compositor() else { return };

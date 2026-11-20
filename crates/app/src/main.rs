@@ -55,6 +55,7 @@ struct Args {
     set_icon: Option<(String, String)>,
     glass: Option<Tier>,
     exit_after: Option<u32>,
+    after: Option<u32>,
 }
 
 fn flag_value(v: &[String], name: &str) -> Option<String> {
@@ -84,6 +85,7 @@ fn parse_args() -> Args {
             _ => None,
         }),
         exit_after: v.iter().position(|a| a == "--exit-after").and_then(|i| v.get(i + 1)).and_then(|s| s.parse().ok()),
+        after: flag_value(&v, "--after").and_then(|s| s.parse().ok()),
     }
 }
 
@@ -118,10 +120,23 @@ fn main() {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     }
     log::init(paths::log());
+    if let Some(pid) = args.after {
+        let mut waited = 0;
+        while waited < 150 && nacre_platform::process::is_alive(pid) {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            waited += 1;
+        }
+        log::line("start", &format!("menunggu proses {pid} selesai: {} ms", waited * 100));
+    }
 
-    let (mutex, event) = match single_instance::acquire() {
-        single_instance::Role::Secondary => return,
-        single_instance::Role::Primary(m, e) => (m, e),
+    let mut tries = if args.after.is_some() { 25 } else { 1 };
+    let (mutex, event) = loop {
+        tries -= 1;
+        match single_instance::acquire() {
+            single_instance::Role::Primary(m, e) => break (m, e),
+            single_instance::Role::Secondary if tries > 0 => std::thread::sleep(std::time::Duration::from_millis(200)),
+            single_instance::Role::Secondary => return,
+        }
     };
     let _keep = mutex;
     log::line("start", &format!("hide={} demo={}", args.hide_taskbar, args.demo_surface));
@@ -142,6 +157,7 @@ fn main() {
     }
 
     prefs::init();
+    nacre_platform::text::prefer(prefs::get().font.faces());
     let pref = prefs::get();
     let host = match nacre_ui::host::Host::new() {
         Ok(h) => h,

@@ -1,4 +1,5 @@
 use crate::display::Screen;
+use crate::theme::{FontChoice, Preset, VisStyle};
 use crate::i18n::Lang;
 use crate::visibility::policy::Mode;
 
@@ -334,6 +335,10 @@ pub struct Settings {
     pub rail_screen: Screen,
     pub notch_screen: Screen,
     pub widget_screen: Screen,
+    pub preset: Preset,
+    pub visualizer: VisStyle,
+    pub font: FontChoice,
+    pub reduce_motion: bool,
 }
 
 impl Default for Settings {
@@ -416,6 +421,10 @@ impl Default for Settings {
             rail_screen: Screen::Primary,
             notch_screen: Screen::Primary,
             widget_screen: Screen::Primary,
+            preset: Preset::Default,
+            visualizer: VisStyle::Bars,
+            font: FontChoice::Inter,
+            reduce_motion: false,
         }
     }
 }
@@ -637,6 +646,10 @@ impl Settings {
                 "rail_screen" => s.rail_screen = Screen::parse(v).unwrap_or(s.rail_screen),
                 "notch_screen" => s.notch_screen = Screen::parse(v).unwrap_or(s.notch_screen),
                 "widget_screen" => s.widget_screen = Screen::parse(v).unwrap_or(s.widget_screen),
+                "preset" => s.preset = Preset::parse(v).unwrap_or(s.preset),
+                "visualizer" => s.visualizer = VisStyle::parse(v).unwrap_or(s.visualizer),
+                "font" => s.font = FontChoice::parse(v).unwrap_or(s.font),
+                "reduce_motion" => s.reduce_motion = parse_bool(v).unwrap_or(s.reduce_motion),
                 "autostart" => {
                     if let Some(b) = parse_bool(v) {
                         s.autostart = b;
@@ -653,7 +666,7 @@ impl Settings {
 
     pub fn serialize(&self) -> String {
         format!(
-            "# ABRA settings\ntakeover={}\ndock={}\nnotch={}\nblur={}\nstyle={}\ntransparency={}\ntheme={}\nlang={}\ndock_material={}\ndock_round={}\nnotch_material={}\nnotch_round={}\nautostart={}\ndock_size={}\ndock_gap={}\ndock_zoom={}\ndock_margin={}\nanim={}\nrefraction={}\ndock_enabled={}\nnotch_enabled={}\nnotch_hover_open={}\nwin_shadow={}\nmenubar={}\nclock_24h={}\nmenubar_glass={}\nhot_tl={}\nhot_tr={}\nhot_bl={}\nhot_br={}\nstage={}\nswitcher={}\nstage_right={}\nstage_size={}\nstage_gap={}\nstage_count={}\nstage_speed={}\nstage_desktop_click={}\nstage_media={}\nstage_icons={}\nstage_titles={}\nhide_desktop_icons={}\nmenubar_style={}\ndock_plates={}\nover_fullscreen={}\nclipboard_history={}\nicon_style={}\nicon_tint={}\naccent={}\nmac_shortcuts={}\ndownloads_stack={}\nrecent_apps={}\nicon_pack={}\nmenubar_material={}\nicon_variant={}\nmin_effect={}\nnotch_idle={}\ngreet_name={}\ngreet_text={}\nlyrics_compact={}\nlyrics_online={}\nnotch_downloads={}\nnotch_send={}\nui_scale={}\nnotch_island={}\nwidget_style={}\nbattery_pct={}\nrail={}\nnotch_scale={}\nisland_gap={}\nupdate_check={}\nnotch_glow={}\npill_devices={}\npill_notices={}\npill_reminders={}\ntodo_hotkey={}\ndeck_screen={}\nrail_screen={}\nnotch_screen={}\nwidget_screen={}\n",
+            "# ABRA settings\ntakeover={}\ndock={}\nnotch={}\nblur={}\nstyle={}\ntransparency={}\ntheme={}\nlang={}\ndock_material={}\ndock_round={}\nnotch_material={}\nnotch_round={}\nautostart={}\ndock_size={}\ndock_gap={}\ndock_zoom={}\ndock_margin={}\nanim={}\nrefraction={}\ndock_enabled={}\nnotch_enabled={}\nnotch_hover_open={}\nwin_shadow={}\nmenubar={}\nclock_24h={}\nmenubar_glass={}\nhot_tl={}\nhot_tr={}\nhot_bl={}\nhot_br={}\nstage={}\nswitcher={}\nstage_right={}\nstage_size={}\nstage_gap={}\nstage_count={}\nstage_speed={}\nstage_desktop_click={}\nstage_media={}\nstage_icons={}\nstage_titles={}\nhide_desktop_icons={}\nmenubar_style={}\ndock_plates={}\nover_fullscreen={}\nclipboard_history={}\nicon_style={}\nicon_tint={}\naccent={}\nmac_shortcuts={}\ndownloads_stack={}\nrecent_apps={}\nicon_pack={}\nmenubar_material={}\nicon_variant={}\nmin_effect={}\nnotch_idle={}\ngreet_name={}\ngreet_text={}\nlyrics_compact={}\nlyrics_online={}\nnotch_downloads={}\nnotch_send={}\nui_scale={}\nnotch_island={}\nwidget_style={}\nbattery_pct={}\nrail={}\nnotch_scale={}\nisland_gap={}\nupdate_check={}\nnotch_glow={}\npill_devices={}\npill_notices={}\npill_reminders={}\ntodo_hotkey={}\ndeck_screen={}\nrail_screen={}\nnotch_screen={}\nwidget_screen={}\npreset={}\nvisualizer={}\nfont={}\nreduce_motion={}\n",
             self.takeover,
             self.dock.key(),
             self.notch.key(),
@@ -733,7 +746,11 @@ impl Settings {
             self.deck_screen.key(),
             self.rail_screen.key(),
             self.notch_screen.key(),
-            self.widget_screen.key()
+            self.widget_screen.key(),
+            self.preset.key(),
+            self.visualizer.key(),
+            self.font.key(),
+            self.reduce_motion
         )
     }
 }
@@ -818,7 +835,9 @@ pub fn look(s: &Settings, system_dark: bool, material: Material) -> Look {
         }
     }
     let liquify = material == Material::Glass && s.refraction;
-    Look { dark, blur_sigma, saturation, tint: [a.round() as u8, tr, tg, tb], rim, solid, highlight, fg, liquify }
+    let mut l = Look { dark, blur_sigma, saturation, tint: [a.round() as u8, tr, tg, tb], rim, solid, highlight, fg, liquify };
+    crate::theme::tune(&mut l, s.preset);
+    l
 }
 
 pub fn bar_look(s: &Settings, system_dark: bool) -> Look {
@@ -1034,5 +1053,13 @@ menubar_material=true
         let f = Settings::parse(&Settings::parse("deck_screen=2\nrail_screen=1\nnotch_screen=primary\nwidget_screen=3\n").serialize());
         assert_eq!((f.deck_screen, f.rail_screen, f.notch_screen, f.widget_screen), (Screen::Nth(2), Screen::Nth(1), Screen::Primary, Screen::Nth(3)));
         assert_eq!(Settings::parse("deck_screen=9\n").deck_screen, Screen::Primary);
+    }
+
+    #[test]
+    fn appearance_settings_round_trip() {
+        let d = Settings::default();
+        assert_eq!((d.preset, d.visualizer, d.font, d.reduce_motion), (Preset::Default, VisStyle::Bars, FontChoice::Inter, false));
+        let f = Settings::parse(&Settings::parse("preset=neon\nvisualizer=wave_\nvisualizer=dots\nfont=mono\nreduce_motion=1\n").serialize());
+        assert_eq!((f.preset, f.visualizer, f.font, f.reduce_motion), (Preset::Neon, VisStyle::Dots, FontChoice::Mono, true));
     }
 }
