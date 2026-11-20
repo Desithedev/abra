@@ -60,6 +60,12 @@ It is one small native program: no Electron, no web view, no background services
   <img src="assets/screenshots/desktop.png" alt="ABRA desktop: Deck, Rail, Visor and widgets" width="900">
 </p>
 
+### 🧪 Coming in 0.6.0 (in development)
+
+- **More than one screen**: choose where the Deck, Rail, Visor and desktop widgets appear (*Main*, *Screen 1*, *Screen 2*…)
+  under **Show on** in each page of Settings. Unplug a screen and everything moves to the main one; plug it back in and
+  it returns. Mixed scaling (for example 100% and 150%) is handled per screen.
+
 ### 🆕 New in 0.5.0
 
 - **Built‑in updates**: ABRA checks GitHub for a new release, shows it in the Visor and installs it with one click
@@ -491,6 +497,11 @@ Useful flags: `--keep-taskbar`, `--no-dock`, `--no-island`, `--no-hud`, `--open-
 
 > With Scene on, ABRA moves your real windows. Let a test instance exit normally (`--exit-after`) instead of killing it.
 
+Testing several screens on one display: set `NACRE_FAKE_MONITORS_FILE` to a text file such as
+`0,0,960,1080;960,0,960,1080@144` (each screen is `x,y,width,height`, optional `@dpi`, the first one is the main screen).
+ABRA splits your display into those screens and re‑reads the file every second, so editing it simulates plugging or
+unplugging a screen.
+
 </details>
 
 ### Project layout
@@ -523,8 +534,8 @@ Settings live in `%APPDATA%\ABRA\settings.cfg` (plain `key=value`), next to `pin
 
 **Known limitations**: dragging a Scene card onto the stage isn’t implemented (Shift‑click to group); Focus, Hotspot,
 Nearby Sharing and Airplane mode open the matching Windows Settings page; only Bluetooth audio devices connect from the menu;
-*Send to phone* sends files, not folders; the World Clock uses fixed time zones without daylight saving; tested on Windows 11
-with a single primary display.
+*Send to phone* sends files, not folders; the World Clock uses fixed time zones without daylight saving; multi‑screen support is new and
+has been tested with simulated screens, so please report how it behaves on your setup.
 
 ---
 

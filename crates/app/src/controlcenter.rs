@@ -559,8 +559,8 @@ impl Cc {
         let inuse = if self.edit { Vec::new() } else { nacre_platform::privacy::active() };
         let top = if inuse.is_empty() { 0.0 } else { 36.0 * dpi };
         let (pw, ph) = (gw, top + gh + 14.0 * dpi + btn_h + 4.0 * dpi);
-        let (sw, _) = nacre_platform::sys::screen_size();
-        let x = (sw as f32 - pw - 10.0 * dpi) as i32;
+        let mon = crate::services::rail_area().unwrap_or_else(|| nacre_platform::monitors::under_cursor().area);
+        let x = (mon.right() as f32 - pw - 10.0 * dpi) as i32;
         let y = self.top + (6.0 * dpi) as i32;
         let m = (8.0 * dpi).round();
         PAD.store(m.to_bits(), std::sync::atomic::Ordering::Relaxed);
@@ -1062,7 +1062,7 @@ impl Cc {
         let (rect, dpi, hwnd) = (p.popup.rect, p.dpi, p.popup.hwnd);
         let Some(gfx) = self.gfx.as_ref() else { return };
         if self.menu.is_none() {
-            match Menu::new(&self.comp, hwnd, dpi, nacre_platform::sys::screen_size(), Tier::Full) {
+            match Menu::new(&self.comp, hwnd, dpi, Tier::Full) {
                 Ok(m) => self.menu = Some(m),
                 Err(_) => return,
             }

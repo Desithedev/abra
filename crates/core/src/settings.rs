@@ -1,3 +1,4 @@
+use crate::display::Screen;
 use crate::i18n::Lang;
 use crate::visibility::policy::Mode;
 
@@ -329,6 +330,10 @@ pub struct Settings {
     pub pill_notices: bool,
     pub pill_reminders: bool,
     pub todo_hotkey: bool,
+    pub deck_screen: Screen,
+    pub rail_screen: Screen,
+    pub notch_screen: Screen,
+    pub widget_screen: Screen,
 }
 
 impl Default for Settings {
@@ -407,6 +412,10 @@ impl Default for Settings {
             pill_notices: false,
             pill_reminders: true,
             todo_hotkey: true,
+            deck_screen: Screen::Primary,
+            rail_screen: Screen::Primary,
+            notch_screen: Screen::Primary,
+            widget_screen: Screen::Primary,
         }
     }
 }
@@ -624,6 +633,10 @@ impl Settings {
                 "pill_notices" => s.pill_notices = parse_bool(v).unwrap_or(s.pill_notices),
                 "pill_reminders" => s.pill_reminders = parse_bool(v).unwrap_or(s.pill_reminders),
                 "todo_hotkey" => s.todo_hotkey = parse_bool(v).unwrap_or(s.todo_hotkey),
+                "deck_screen" => s.deck_screen = Screen::parse(v).unwrap_or(s.deck_screen),
+                "rail_screen" => s.rail_screen = Screen::parse(v).unwrap_or(s.rail_screen),
+                "notch_screen" => s.notch_screen = Screen::parse(v).unwrap_or(s.notch_screen),
+                "widget_screen" => s.widget_screen = Screen::parse(v).unwrap_or(s.widget_screen),
                 "autostart" => {
                     if let Some(b) = parse_bool(v) {
                         s.autostart = b;
@@ -640,7 +653,7 @@ impl Settings {
 
     pub fn serialize(&self) -> String {
         format!(
-            "# ABRA settings\ntakeover={}\ndock={}\nnotch={}\nblur={}\nstyle={}\ntransparency={}\ntheme={}\nlang={}\ndock_material={}\ndock_round={}\nnotch_material={}\nnotch_round={}\nautostart={}\ndock_size={}\ndock_gap={}\ndock_zoom={}\ndock_margin={}\nanim={}\nrefraction={}\ndock_enabled={}\nnotch_enabled={}\nnotch_hover_open={}\nwin_shadow={}\nmenubar={}\nclock_24h={}\nmenubar_glass={}\nhot_tl={}\nhot_tr={}\nhot_bl={}\nhot_br={}\nstage={}\nswitcher={}\nstage_right={}\nstage_size={}\nstage_gap={}\nstage_count={}\nstage_speed={}\nstage_desktop_click={}\nstage_media={}\nstage_icons={}\nstage_titles={}\nhide_desktop_icons={}\nmenubar_style={}\ndock_plates={}\nover_fullscreen={}\nclipboard_history={}\nicon_style={}\nicon_tint={}\naccent={}\nmac_shortcuts={}\ndownloads_stack={}\nrecent_apps={}\nicon_pack={}\nmenubar_material={}\nicon_variant={}\nmin_effect={}\nnotch_idle={}\ngreet_name={}\ngreet_text={}\nlyrics_compact={}\nlyrics_online={}\nnotch_downloads={}\nnotch_send={}\nui_scale={}\nnotch_island={}\nwidget_style={}\nbattery_pct={}\nrail={}\nnotch_scale={}\nisland_gap={}\nupdate_check={}\nnotch_glow={}\npill_devices={}\npill_notices={}\npill_reminders={}\ntodo_hotkey={}\n",
+            "# ABRA settings\ntakeover={}\ndock={}\nnotch={}\nblur={}\nstyle={}\ntransparency={}\ntheme={}\nlang={}\ndock_material={}\ndock_round={}\nnotch_material={}\nnotch_round={}\nautostart={}\ndock_size={}\ndock_gap={}\ndock_zoom={}\ndock_margin={}\nanim={}\nrefraction={}\ndock_enabled={}\nnotch_enabled={}\nnotch_hover_open={}\nwin_shadow={}\nmenubar={}\nclock_24h={}\nmenubar_glass={}\nhot_tl={}\nhot_tr={}\nhot_bl={}\nhot_br={}\nstage={}\nswitcher={}\nstage_right={}\nstage_size={}\nstage_gap={}\nstage_count={}\nstage_speed={}\nstage_desktop_click={}\nstage_media={}\nstage_icons={}\nstage_titles={}\nhide_desktop_icons={}\nmenubar_style={}\ndock_plates={}\nover_fullscreen={}\nclipboard_history={}\nicon_style={}\nicon_tint={}\naccent={}\nmac_shortcuts={}\ndownloads_stack={}\nrecent_apps={}\nicon_pack={}\nmenubar_material={}\nicon_variant={}\nmin_effect={}\nnotch_idle={}\ngreet_name={}\ngreet_text={}\nlyrics_compact={}\nlyrics_online={}\nnotch_downloads={}\nnotch_send={}\nui_scale={}\nnotch_island={}\nwidget_style={}\nbattery_pct={}\nrail={}\nnotch_scale={}\nisland_gap={}\nupdate_check={}\nnotch_glow={}\npill_devices={}\npill_notices={}\npill_reminders={}\ntodo_hotkey={}\ndeck_screen={}\nrail_screen={}\nnotch_screen={}\nwidget_screen={}\n",
             self.takeover,
             self.dock.key(),
             self.notch.key(),
@@ -716,7 +729,11 @@ impl Settings {
             self.pill_devices,
             self.pill_notices,
             self.pill_reminders,
-            self.todo_hotkey
+            self.todo_hotkey,
+            self.deck_screen.key(),
+            self.rail_screen.key(),
+            self.notch_screen.key(),
+            self.widget_screen.key()
         )
     }
 }
@@ -1008,5 +1025,14 @@ menubar_material=true
         assert_eq!((d.update_check, d.notch_glow, d.pill_devices, d.pill_notices, d.pill_reminders, d.todo_hotkey), (true, true, true, false, true, true));
         let f = Settings::parse(&Settings::parse("update_check=0\nnotch_glow=0\npill_devices=0\npill_notices=1\npill_reminders=0\ntodo_hotkey=0\n").serialize());
         assert_eq!((f.update_check, f.notch_glow, f.pill_devices, f.pill_notices, f.pill_reminders, f.todo_hotkey), (false, false, false, true, false, false));
+    }
+
+    #[test]
+    fn screen_choices_default_to_primary_and_round_trip() {
+        let d = Settings::default();
+        assert_eq!((d.deck_screen, d.rail_screen, d.notch_screen, d.widget_screen), (Screen::Primary, Screen::Primary, Screen::Primary, Screen::Primary));
+        let f = Settings::parse(&Settings::parse("deck_screen=2\nrail_screen=1\nnotch_screen=primary\nwidget_screen=3\n").serialize());
+        assert_eq!((f.deck_screen, f.rail_screen, f.notch_screen, f.widget_screen), (Screen::Nth(2), Screen::Nth(1), Screen::Primary, Screen::Nth(3)));
+        assert_eq!(Settings::parse("deck_screen=9\n").deck_screen, Screen::Primary);
     }
 }

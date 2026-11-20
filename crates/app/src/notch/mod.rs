@@ -31,7 +31,6 @@ use windows::UI::Composition::{AnimationDelayBehavior, CompositionDrawingSurface
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{CreateRectRgn, SetWindowRgn};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows_core::{Interface, HSTRING};
@@ -239,8 +238,12 @@ fn island_gap(dpi: f32) -> f32 {
     }
 }
 
-fn notch_dpi(hwnd: HWND) -> f32 {
-    unsafe { GetDpiForWindow(hwnd) }.max(96) as f32 / 96.0 * crate::prefs::ui_scale() * crate::prefs::get().notch_scale as f32 / 100.0
+fn notch_monitor() -> nacre_core::display::Monitor {
+    nacre_platform::monitors::target(crate::prefs::get().notch_screen)
+}
+
+fn notch_dpi(mon: &nacre_core::display::Monitor) -> f32 {
+    mon.scale() * crate::prefs::ui_scale() * crate::prefs::get().notch_scale as f32 / 100.0
 }
 
 fn win_size(dpi: f32, screen_w: i32) -> (i32, i32) {
@@ -256,6 +259,7 @@ pub struct Notch {
     dpi: f32,
     win: (i32, i32),
     screen_w: i32,
+    area: nacre_core::display::Area,
 
     mode: Mode,
     look: Look,
@@ -358,10 +362,12 @@ impl Notch {
                 0, 0, 400, 200,
                 None, None, Some(hi), None,
             )?;
-            let dpi = notch_dpi(hwnd);
-            let screen_w = sys::screen_size().0;
+            let mon = notch_monitor();
+            let dpi = notch_dpi(&mon);
+            let area = mon.area;
+            let screen_w = area.w;
             let win = win_size(dpi, screen_w);
-            let _ = SetWindowPos(hwnd, None, (screen_w - win.0) / 2, 0, win.0, win.1, SWP_NOACTIVATE | SWP_NOZORDER);
+            let _ = SetWindowPos(hwnd, None, area.x + (screen_w - win.0) / 2, area.y, win.0, win.1, SWP_NOACTIVATE | SWP_NOZORDER);
             let comp = host.compositor.clone();
             let surface = host.attach(hwnd, (win.0 as f32, win.1 as f32))?;
             let tier = auto_tier(opts.glass);
@@ -385,6 +391,7 @@ impl Notch {
                 dpi,
                 win,
                 screen_w,
+                area,
                 mode: Mode::Rest,
                 look: rest,
                 size: state::size(rest, dpi),
@@ -1284,7 +1291,7 @@ impl Notch {
 
     fn on_dnd(&mut self, kind: usize, lp: LPARAM) {
         let (sx, sy) = ((lp.0 as u32 & 0xFFFF) as u16 as i16 as f32, ((lp.0 as u32 >> 16) & 0xFFFF) as u16 as i16 as f32);
-        let (cx, cy) = (sx - ((self.screen_w - self.win.0) / 2) as f32, sy);
+        let (cx, cy) = (sx - self.win_x() as f32, sy - self.area.y as f32);
         match kind {
             drop::ENTER => {
                 self.drop_zone = None;
@@ -1327,7 +1334,7 @@ impl Notch {
 
     fn shelf_menu(&mut self, i: usize, x: f32, y: f32) {
         if self.menu.is_none() {
-            match Menu::new(&self.paint.comp, self.hwnd, self.dpi, sys::screen_size(), Tier::Full) {
+            match Menu::new(&self.paint.comp, self.hwnd, self.dpi, Tier::Full) {
                 Ok(m) => self.menu = Some(m),
                 Err(_) => return,
             }
@@ -1342,9 +1349,9 @@ impl Notch {
             MItem::action(4, tr("Hapus dari Rak"), true),
         ];
         self.menu_item = Some(i);
-        let wx = (self.screen_w - self.win.0) / 2;
+        let (wx, wy) = (self.win_x(), self.area.y);
         if let Some(m) = self.menu.as_mut() {
-            let _ = m.show(&self.paint.comp, &self.paint.gfx, items, wx + x as i32, y as i32);
+            let _ = m.show(&self.paint.comp, &self.paint.gfx, items, wx + x as i32, wy + y as i32);
         }
     }
 
@@ -1716,23 +1723,27 @@ impl Notch {
 
     fn pill_screen_rect(&self) -> (i32, i32, i32, i32) {
         let base = state::size(state::look(Mode::Rest, None), self.dpi);
-        let l = ((sys::screen_size().0 as f32 - base.w) / 2.0) as i32;
-        (l, 0, l + base.w as i32, (base.h + 4.0 * self.dpi) as i32)
+        let l = self.area.x + ((self.area.w as f32 - base.w) / 2.0) as i32;
+        (l, self.area.y, l + base.w as i32, self.area.y + (base.h + 4.0 * self.dpi) as i32)
     }
 
     fn place_strip(&self) {
         if let Some(s) = &self.strip {
             let (l, _, r, _) = self.pill_screen_rect();
             let pad = (60.0 * self.dpi) as i32;
-            s.place(l - pad, 0, r - l + 2 * pad, 2);
+            s.place(l - pad, self.area.y, r - l + 2 * pad, 2);
             s.set_visible(!self.overlap.fullscreen && !self.off);
         }
     }
 
+    fn win_x(&self) -> i32 {
+        self.area.x + (self.area.w - self.win.0) / 2
+    }
+
     fn place_shadow_window(&self) {
         if let Some(sh) = &self.shadow {
-            let x = (self.screen_w - self.win.0) / 2 - sh.pad as i32;
-            sh.place_window(self.hwnd, x, 0, self.win.0 + 2 * sh.pad as i32, self.win.1 + sh.pad as i32);
+            let x = self.win_x() - sh.pad as i32;
+            sh.place_window(self.hwnd, x, self.area.y, self.win.0 + 2 * sh.pad as i32, self.win.1 + sh.pad as i32);
             sh.set_visible(self.shown && !self.off);
         }
     }
@@ -1879,18 +1890,18 @@ impl Notch {
 
     fn publish_notch(&self) {
         if self.off {
-            crate::services::set_notch(0, 0, 0);
+            crate::services::set_notch(0, 0, 0, 0);
             return;
         }
-        let (l, _, r, h) = self.pill_screen_rect();
-        crate::services::set_notch(l, r, h - (4.0 * self.dpi) as i32);
+        let (l, t, r, b) = self.pill_screen_rect();
+        crate::services::set_notch(l, r, b - t - (4.0 * self.dpi) as i32, t);
     }
 
     fn set_reserved(&mut self, on: bool) {
         self.reserved = on;
         if on {
             let strip = (34.0 * self.dpi).ceil() as i32;
-            let r = nacre_platform::shell::appbar::reserve_top(self.hwnd, self.screen_w, strip);
+            let r = nacre_platform::shell::appbar::reserve_top(self.hwnd, self.area, strip);
             log::line("appbar", &format!("atas strip={strip} hasil={r:?}"));
         } else {
             nacre_platform::shell::appbar::release_top_if(self.hwnd);
@@ -1900,7 +1911,8 @@ impl Notch {
     fn apply_prefs(&mut self) {
         let s = crate::prefs::get();
         self.off = !s.notch_enabled;
-        let (vis, reserve) = (s.notch.mode(), s.notch.reserves() && s.notch_enabled && !s.menubar);
+        let rail_here = s.menubar && nacre_platform::monitors::target(s.rail_screen).area == notch_monitor().area;
+        let (vis, reserve) = (s.notch.mode(), s.notch.reserves() && s.notch_enabled && !rail_here);
         if vis != self.vis {
             self.vis = vis;
             if vis == Vis::Always {
@@ -1957,19 +1969,25 @@ impl Notch {
     }
 
     fn on_reconfigure(&mut self) {
-        let screen_w = sys::screen_size().0;
-        let dpi = notch_dpi(self.hwnd);
+        let mon = notch_monitor();
+        let screen_w = mon.area.w;
+        let dpi = notch_dpi(&mon);
         let win = win_size(dpi, screen_w);
-        if win == self.win && screen_w == self.screen_w && (dpi - self.dpi).abs() < 0.01 {
+        if win == self.win && mon.area == self.area && (dpi - self.dpi).abs() < 0.01 {
             return;
         }
         log::line("notch", &format!("konfigurasi ulang layar_w={screen_w} dpi={dpi}"));
         let dpi_changed = (dpi - self.dpi).abs() >= 0.01;
+        let moved = mon.area != self.area;
         self.screen_w = screen_w;
+        self.area = mon.area;
         self.dpi = dpi;
         self.win = win;
         unsafe {
-            let _ = SetWindowPos(self.hwnd, None, (screen_w - win.0) / 2, 0, win.0, win.1, SWP_NOACTIVATE | SWP_NOZORDER);
+            let _ = SetWindowPos(self.hwnd, None, self.win_x(), self.area.y, win.0, win.1, SWP_NOACTIVATE | SWP_NOZORDER);
+        }
+        if moved && self.reserved {
+            self.set_reserved(true);
         }
         let _ = self._surface.root.SetSize(Vector2 { X: win.0 as f32, Y: win.1 as f32 });
         self.body.resize(win);
@@ -2024,7 +2042,7 @@ impl Notch {
                 self.refresh();
             }
             T_WINCHG => {
-                let mut ov = overlap::evaluate(tracker::external_foreground(), std::process::id(), self.pill_screen_rect(), sys::screen_size());
+                let mut ov = overlap::evaluate(tracker::external_foreground(), std::process::id(), self.pill_screen_rect(), self.area);
                 if ov.fullscreen && crate::prefs::get().above_fullscreen {
                     ov = overlap::Overlap { overlapped: false, fullscreen: false };
                 }

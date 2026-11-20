@@ -17,7 +17,6 @@ use windows::UI::Color;
 use windows::UI::Composition::{CompositionDrawingSurface, CompositionStretch, Compositor, ContainerVisual, SpriteVisual};
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows_numerics::{Vector2, Vector3};
@@ -39,6 +38,9 @@ const WM_RAIL_EDGE: u32 = WM_APP + 76;
 static RAIL_SMART: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static RAIL_EDGE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static RAIL_ZONE: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(40);
+static RAIL_TOP: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+static RAIL_L: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(i32::MIN);
+static RAIL_R: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(i32::MAX);
 const BAR_W: i32 = 600;
 const APP_W: i32 = 800;
 
@@ -62,6 +64,7 @@ struct Bar {
     gfx: Gfx,
     dpi: f32,
     screen: (i32, i32),
+    area: nacre_core::display::Area,
     h: i32,
     layer: ContainerVisual,
     capsule: SpriteVisual,
@@ -141,9 +144,12 @@ unsafe extern "system" fn ll_mouse(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT
     if code >= 0 {
         let m = wp.0 as u32;
         if m == WM_MOUSEMOVE && RAIL_SMART.load(std::sync::atomic::Ordering::Relaxed) {
-            let y = (*(lp.0 as *const MSLLHOOKSTRUCT)).pt.y;
-            let was = RAIL_EDGE.load(std::sync::atomic::Ordering::Relaxed);
-            let now = if y <= 1 { true } else if y > RAIL_ZONE.load(std::sync::atomic::Ordering::Relaxed) { false } else { was };
+            let pt = (*(lp.0 as *const MSLLHOOKSTRUCT)).pt;
+            let o = std::sync::atomic::Ordering::Relaxed;
+            let inside = pt.x >= RAIL_L.load(o) && pt.x < RAIL_R.load(o);
+            let y = pt.y - RAIL_TOP.load(o);
+            let was = RAIL_EDGE.load(o);
+            let now = if inside && y <= 1 { true } else if !inside || y > RAIL_ZONE.load(o) { false } else { was };
             if now != was {
                 RAIL_EDGE.store(now, std::sync::atomic::Ordering::Relaxed);
                 let ctl = BAR_CTL.load(std::sync::atomic::Ordering::Relaxed);
@@ -181,8 +187,12 @@ fn loc_hook(ev: u32, hwnd: isize) {
     }
 }
 
-fn is_fullscreen(hwnd: isize) -> bool {
-    nacre_platform::wins::overlap::evaluate(hwnd, std::process::id(), (0, 0, 0, 0), sys::screen_size()).fullscreen
+fn is_fullscreen(hwnd: isize, area: nacre_core::display::Area) -> bool {
+    nacre_platform::wins::overlap::evaluate(hwnd, std::process::id(), (0, 0, 0, 0), area).fullscreen
+}
+
+fn rail_monitor() -> nacre_core::display::Monitor {
+    nacre_platform::monitors::target(prefs::get().rail_screen)
 }
 
 pub fn init(comp: &Compositor) -> windows_core::Result<()> {
@@ -242,12 +252,14 @@ fn apply_prefs() {
                 let _ = DestroyWindow(b.popup.hwnd);
             }
         }
+        services::set_rail_area(None);
         log::line("menubar", "dihancurkan");
         services::post_island(crate::prefs::WM_PREFS);
     } else if want {
         let rescale = with_bar(|b| {
-            let want_dpi = unsafe { GetDpiForWindow(b.popup.hwnd) }.max(96) as f32 / 96.0 * prefs::ui_scale();
-            (want_dpi - b.dpi).abs() > 0.01
+            let mon = rail_monitor();
+            let want_dpi = mon.scale() * prefs::ui_scale();
+            (want_dpi - b.dpi).abs() > 0.01 || mon.area != b.area
         })
         .unwrap_or(false);
         if rescale {
@@ -272,18 +284,20 @@ fn apply_prefs() {
 }
 
 fn create(comp: &Compositor) -> windows_core::Result<Box<Bar>> {
-    let screen = sys::screen_size();
+    let mon = rail_monitor();
+    let area = mon.area;
+    let screen = area.size();
     let glass = prefs::apply(nacre_ui::glass::GlassParams::dark((10.0, 10.0), 0.0), &prefs::bar_look());
     let mut popup = Popup::new(comp, w!("AbraMenuBar"), Some(bar_proc), WINDOW_EX_STYLE(0), glass)?;
-    let dpi = unsafe { GetDpiForWindow(popup.hwnd) }.max(96) as f32 / 96.0 * prefs::ui_scale();
-    let notch_h = services::notch().map(|(_, _, h)| h as f32 / dpi);
+    let dpi = mon.scale() * prefs::ui_scale();
+    let notch_h = services::notch_on(area).map(|(_, _, h)| h as f32 / dpi);
     let h = (notch_h.unwrap_or(26.0) * dpi).round() as i32;
     let tier = {
         let c = sys::conditions();
         if !c.transparency || c.battery_saver || c.remote_session { Tier::Solid } else { Tier::Full }
     };
     let _ = popup.panel.set_tier(tier);
-    popup.set_rect(0, 0, screen.0, h)?;
+    popup.set_rect(area.x, area.y, screen.0, h)?;
     popup.panel.set_radius(0.0)?;
     popup.panel.set_rect(0.0, 0.0, 0.0, 0.0)?;
     let bg = comp.CreateSpriteVisual()?;
@@ -297,10 +311,10 @@ fn create(comp: &Compositor) -> windows_core::Result<Box<Bar>> {
     let layer = comp.CreateContainerVisual()?;
     popup.content.Children()?.InsertAtTop(&layer)?;
     let gfx = Gfx::shared(comp)?;
-    let menu = Menu::new(comp, popup.hwnd, dpi, screen, tier)?;
+    let menu = Menu::new(comp, popup.hwnd, dpi, tier)?;
     popup.show();
     if prefs::get().rail == Behavior::Fixed {
-        shell::appbar::reserve_top(popup.hwnd, screen.0, h);
+        shell::appbar::reserve_top(popup.hwnd, area, h);
     }
     unsafe {
         SetTimer(Some(popup.hwnd), T_CLOCK, time::ms_to_next_minute().max(200), None);
@@ -339,6 +353,7 @@ fn create(comp: &Compositor) -> windows_core::Result<Box<Bar>> {
         gfx,
         dpi,
         screen,
+        area,
         h,
         layer,
         capsule,
@@ -544,7 +559,7 @@ impl Bar {
 
     fn check_fullscreen(&mut self) {
         let fg = tracker::external_foreground();
-        let full = fg != 0 && is_fullscreen(fg) && !prefs::get().above_fullscreen;
+        let full = fg != 0 && is_fullscreen(fg, self.area) && !prefs::get().above_fullscreen;
         if full != self.fullscreen {
             self.fullscreen = full;
             if full {
@@ -558,8 +573,12 @@ impl Bar {
         let mode = prefs::get().rail;
         RAIL_SMART.store(mode == Behavior::Smart, std::sync::atomic::Ordering::Relaxed);
         RAIL_ZONE.store(self.h + (12.0 * self.dpi) as i32, std::sync::atomic::Ordering::Relaxed);
+        RAIL_TOP.store(self.area.y, std::sync::atomic::Ordering::Relaxed);
+        RAIL_L.store(self.area.x, std::sync::atomic::Ordering::Relaxed);
+        RAIL_R.store(self.area.right(), std::sync::atomic::Ordering::Relaxed);
+        services::set_rail_area(Some(self.area));
         if mode == Behavior::Fixed {
-            shell::appbar::reserve_top(self.popup.hwnd, self.screen.0, self.h);
+            shell::appbar::reserve_top(self.popup.hwnd, self.area, self.h);
         } else {
             shell::appbar::release_top_if(self.popup.hwnd);
         }
@@ -574,7 +593,7 @@ impl Bar {
         let mut hide_smart = false;
         if smart && !self.fullscreen {
             let fg = tracker::external_foreground();
-            let ov = nacre_platform::wins::overlap::evaluate(fg, std::process::id(), (0, 0, self.screen.0, self.h), self.screen);
+            let ov = nacre_platform::wins::overlap::evaluate(fg, std::process::id(), (self.area.x, self.area.y, self.area.right(), self.area.y + self.h), self.area);
             let busy = self.open.is_some() || self.tracking || self.edge;
             hide_smart = ov.overlapped && !busy;
         }
@@ -673,14 +692,14 @@ impl Bar {
             let extra = if prefs::get().battery_pct == 2 { self.small_w(&format!("{pct}%"), 12.0, BAR_W) + 5.0 * d } else { 0.0 };
             right.push(LItem { id: BATT, width: 40.0 * d + extra });
         }
-        let gap = services::notch().map(|(l, r, _)| Gap { left: l as f32, right: r as f32 });
+        let gap = services::notch_on(self.area).map(|(l, r, _)| Gap { left: l as f32, right: r as f32 });
         let (l, r) = lay::layout(self.screen.0 as f32, 6.0 * d, &left, &right, gap);
         self.left = l;
         self.right = r;
-        let want_h = services::notch().map(|(_, _, h)| h).unwrap_or((26.0 * d).round() as i32);
+        let want_h = services::notch_on(self.area).map(|(_, _, h)| h).unwrap_or((26.0 * d).round() as i32);
         if want_h != self.h {
             self.h = want_h;
-            let _ = self.popup.set_rect(0, 0, self.screen.0, self.h);
+            let _ = self.popup.set_rect(self.area.x, self.area.y, self.screen.0, self.h);
             let _ = self.popup.panel.set_radius(0.0);
             self.apply_bg();
             self.sync_behavior();
@@ -1115,8 +1134,8 @@ impl Bar {
         log::line("menubar", &format!("buka menu {id}: {} item", items.len()));
         let Some((x, _)) = self.rect_of(id) else { return };
         let (comp, gfx) = (self.comp.clone(), &self.gfx);
-        let top = self.h;
-        let r = self.menu.show_below(&comp, gfx, items, x as i32, top);
+        let top = self.area.y + self.h;
+        let r = self.menu.show_below(&comp, gfx, items, self.area.x + x as i32, top);
         if let Err(e) = &r {
             log::line("menubar", &format!("menu gagal: {e}"));
         }
@@ -1263,13 +1282,13 @@ impl Bar {
         match id {
             CTRL => {
                 self.close_menu();
-                crate::controlcenter::toggle(self.h);
+                crate::controlcenter::toggle(self.area.y + self.h);
             }
             STAGEI => prefs::update(|st| st.stage = !st.stage),
             SEARCH => crate::spotlight::toggle(),
             WIFI => {
                 if let Some((x, _)) = self.rect_of(WIFI) {
-                    crate::netmenu::show(&self.comp, crate::netmenu::Which::Wifi, crate::netmenu::Anchor::Below(x as i32, self.h), self.dpi);
+                    crate::netmenu::show(&self.comp, crate::netmenu::Which::Wifi, crate::netmenu::Anchor::Below(self.area.x + x as i32, self.area.y + self.h), self.dpi);
                 }
             }
             BATT => launch::open("ms-settings:batterysaver"),
@@ -1457,7 +1476,7 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             if wp.0 == 3 {
                 crate::netmenu::test_toggle_others();
             } else if wp.0 == 4 || wp.0 == 8 {
-                let h = with_bar(|b| b.h).unwrap_or(30);
+                let h = with_bar(|b| b.area.y + b.h).unwrap_or(30);
                 crate::controlcenter::toggle(h);
             } else if wp.0 == 5 {
                 crate::controlcenter::test_open_picker();

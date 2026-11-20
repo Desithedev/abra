@@ -356,9 +356,9 @@ Jendela Pengaturan ABRA bergaya panel pengaturan modern: sidebar berikon warna d
 | Halaman | Isi |
 |---|---|
 | **Umum** | Bahasa (Indonesia/English), jalankan saat login, sembunyikan taskbar Windows, sembunyikan ikon desktop, selalu di atas jendela layar penuh, animasi jendela, bayangan jendela aktif |
-| **Deck** | Aktifkan Deck, perilaku, ikon seragam, ukuran ikon, jarak, zoom, jarak dari tepi, kebulatan sudut |
-| **Visor** | Aktifkan Visor, perilaku, kebulatan sudut, buka otomatis saat kursor di Visor |
-| **Rail** | Aktifkan Rail, latar (Transparan, Terang, Gelap, Material), jam 24 jam |
+| **Deck** | Aktifkan Deck, perilaku, **Tampilkan di** (bila ada lebih dari satu layar), ikon seragam, ukuran ikon, jarak, zoom, jarak dari tepi, kebulatan sudut |
+| **Visor** | Aktifkan Visor, bentuk, perilaku, **Tampilkan di**, kebulatan sudut, buka otomatis saat kursor di Visor |
+| **Rail** | Aktifkan Rail, perilaku, **Tampilkan di**, latar (Transparan, Terang, Gelap, Material), jam 24 jam |
 | **Tampilan** | Kartu pratinjau **Otomatis · Terang · Gelap**; **Tema**: warna aksen (Multiwarna = ikut warna aksen Windows, lalu 8 warna), kartu **gaya ikon & widget** Bawaan · Gelap · Bening · Berwarna dengan pilihan Terang · Gelap · Otomatis, warna tint, paket ikon; **Kaca**: material global (Blur, Crystal, Hitam buram), material Visor, tingkat blur, transparansi, refraksi tepi kaca |
 | **Scene** | Semua pengaturan Scene |
 | **Screen Corners** | Aksi untuk empat screen corner |
@@ -446,6 +446,11 @@ Pintasan lain (screen corner) diatur di Pengaturan. Bila sebuah pintasan tidak b
 | Melaporkan bug | Sertakan versi Windows, langkah mengulang, dan isi `abra.log` pada Issues proyek. |
 
 ## 15. Batasan yang diketahui
+
+- **Beberapa layar** (sedang dikembangkan untuk 0.6.0): Deck, Rail, Visor, dan widget desktop bisa ditaruh di layar mana pun
+  lewat **Tampilkan di** (Utama, Layar 1, Layar 2, …; layar dinomori dari kiri ke kanan). Bila layar yang dipilih dicabut,
+  semuanya pindah ke layar utama, lalu kembali saat layar itu dicolok lagi. Fitur ini baru diuji dengan layar simulasi, jadi
+  laporan dari pengguna dua atau tiga layar sangat membantu. Scene, Screen Corners, dan animasi jendela masih memakai layar utama.
 
 - Menyeret kartu Scene ke panggung belum tersedia (gunakan Shift-klik). Kartu hidup memakai Windows.Graphics.Capture, jadi
   memerlukan Windows 10 versi 1903 atau lebih baru (Windows 11 sudah memenuhi).

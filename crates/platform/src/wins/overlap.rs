@@ -61,7 +61,8 @@ fn frame_rect(h: HWND) -> Option<RECT> {
     Some(r)
 }
 
-pub fn evaluate(fg: isize, own_pid: u32, dock: (i32, i32, i32, i32), screen: (i32, i32)) -> Overlap {
+pub fn evaluate(fg: isize, own_pid: u32, dock: (i32, i32, i32, i32), area: nacre_core::display::Area) -> Overlap {
+    let screen = area.size();
     let none = Overlap::default();
     let h = HWND(fg as *mut _);
     unsafe {
@@ -80,7 +81,12 @@ pub fn evaluate(fg: isize, own_pid: u32, dock: (i32, i32, i32, i32), screen: (i3
         if GetWindowLongW(h, GWL_EXSTYLE) as u32 & WS_EX_TOOLWINDOW.0 != 0 {
             return none;
         }
-        let Some(r) = frame_rect(h) else { return none };
+        let Some(mut r) = frame_rect(h) else { return none };
+        r.left -= area.x;
+        r.right -= area.x;
+        r.top -= area.y;
+        r.bottom -= area.y;
+        let dock = (dock.0 - area.x, dock.1 - area.y, dock.2 - area.x, dock.3 - area.y);
         let (cx, cy) = ((r.left + r.right) / 2, (r.top + r.bottom) / 2);
         if cx < 0 || cy < 0 || cx >= screen.0 || cy >= screen.1 {
             return none;
@@ -88,7 +94,7 @@ pub fn evaluate(fg: isize, own_pid: u32, dock: (i32, i32, i32, i32), screen: (i3
         let frame = (r.left, r.top, r.right, r.bottom);
         let zoomed = IsZoomed(h).as_bool();
         let caption = GetWindowLongW(h, GWL_STYLE) as u32 & WS_CAPTION.0 == WS_CAPTION.0;
-        let work = work_area(h).unwrap_or((0, 0, screen.0, screen.1));
+        let work = work_area(h).map(|w| (w.0 - area.x, w.1 - area.y, w.2 - area.x, w.3 - area.y)).unwrap_or((0, 0, screen.0, screen.1));
         let fullscreen = is_fullscreen(frame, screen, work, zoomed, caption) || exclusive_fullscreen();
         if fullscreen || zoomed {
             return Overlap { overlapped: true, fullscreen };
