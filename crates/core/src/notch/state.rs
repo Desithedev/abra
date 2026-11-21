@@ -209,7 +209,6 @@ pub fn shadow(l: Look) -> (f32, f32, f32) {
 }
 
 pub mod motion {
-    pub const DWELL_MS: u32 = 300;
     pub const PEEK_RATIO: f32 = 0.9;
     pub const PEEK_PERIOD_MS: u32 = 34;
     pub const OPEN_RATIO: f32 = 0.78;

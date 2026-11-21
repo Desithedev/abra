@@ -21,5 +21,5 @@ features = [
   "Win32_System_WinRT", "Win32_System_RestartManager",
   "Win32_Media_KernelStreaming",
   "ApplicationModel_Appointments", "Win32_System_Time", "Networking_Connectivity",
-  "Win32_Security_Cryptography",
+  "Win32_Security_Cryptography", "Win32_Devices_Display",
 ]

@@ -334,6 +334,7 @@ fn create(comp: &Compositor) -> windows_core::Result<Box<Bar>> {
                 "cc" => 4,
                 "bt-click" => 6,
                 "cc-edit" => 8,
+                "cc-click" => 10,
                 _ => 0,
             };
             unsafe {
@@ -415,7 +416,7 @@ unsafe extern "system" fn ctl_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
         }
         WM_RAIL_EDGE => {
             if wp.0 != 0 {
-                SetTimer(Some(hwnd), T_EDGE, 150, None);
+                SetTimer(Some(hwnd), T_EDGE, prefs::get().rail_reveal.rail_ms(), None);
             } else {
                 let _ = KillTimer(Some(hwnd), T_EDGE);
                 with_bar(|b| {
@@ -1282,17 +1283,26 @@ impl Bar {
         match id {
             CTRL => {
                 self.close_menu();
+                nacre_platform::wins::focus::dismiss_shell_flyout();
                 crate::controlcenter::toggle(self.area.y + self.h);
             }
             STAGEI => prefs::update(|st| st.stage = !st.stage),
-            SEARCH => crate::spotlight::toggle(),
+            SEARCH => {
+                crate::controlcenter::close();
+                crate::spotlight::toggle();
+            }
             WIFI => {
+                crate::controlcenter::close();
+                nacre_platform::wins::focus::dismiss_shell_flyout();
                 if let Some((x, _)) = self.rect_of(WIFI) {
                     crate::netmenu::show(&self.comp, crate::netmenu::Which::Wifi, crate::netmenu::Anchor::Below(self.area.x + x as i32, self.area.y + self.h), self.dpi);
                 }
             }
             BATT => launch::open("ms-settings:batterysaver"),
-            CLOCK => keys::chord(&[keys::WIN, 0x4E]),
+            CLOCK => {
+                crate::controlcenter::close();
+                keys::chord(&[keys::WIN, 0x4E]);
+            }
             _ => {}
         }
     }
@@ -1473,7 +1483,9 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             LRESULT(0)
         }
         WM_TEST_NET => {
-            if wp.0 == 3 {
+            if wp.0 == 10 {
+                with_bar(|b| b.click(CTRL));
+            } else if wp.0 == 3 {
                 crate::netmenu::test_toggle_others();
             } else if wp.0 == 4 || wp.0 == 8 {
                 let h = with_bar(|b| b.area.y + b.h).unwrap_or(30);

@@ -401,17 +401,18 @@ fn finish_closing() {
 }
 
 fn create(comp: &Compositor, mode: Mode) -> windows_core::Result<Box<Spot>> {
-    let screen = sys::screen_size();
+    let mon = nacre_platform::monitors::under_cursor();
+    let screen = mon.area.size();
     let glass = prefs::glass((10.0, 10.0), 27.0, prefs::Role::Dock);
     let mut popup = Popup::new_with(comp, w!("AbraSpotlight"), Some(spot_proc), WINDOW_EX_STYLE(0), glass, true)?;
-    let dpi = unsafe { GetDpiForWindow(popup.hwnd) }.max(96) as f32 / 96.0;
+    let dpi = mon.scale();
     let tier = {
         let c = sys::conditions();
         if !c.transparency || c.battery_saver || c.remote_session { nacre_ui::glass::Tier::Solid } else { nacre_ui::glass::Tier::Full }
     };
     let _ = popup.panel.set_tier(tier);
     let g = geo(dpi, screen);
-    popup.set_rect(g.win.0, g.win.1, g.win.2, g.win.3)?;
+    popup.set_rect(mon.area.x + g.win.0, mon.area.y + g.win.1, g.win.2, g.win.3)?;
     let idle: Rect = ((g.gw - g.ws) / 2.0, 0.0, g.ws, g.h);
     popup.panel.set_rect(idle.0, idle.1, idle.2, idle.3)?;
     popup.panel.set_radius(g.h / 2.0)?;

@@ -304,13 +304,13 @@ pub fn file_name(name: &str) -> String {
 mod tests {
     use super::*;
 
-    const SAMPLE: &str = "# komentar boleh\nabra_theme=1\nname=Midnight Glass\nauthor=rani\npreset=stealth\naccent=#7F77DD\nfont=bahnschrift\nvisualizer=wave\ntransparency=30\nround=60\nglow=on\nmotion=normal\ndecor=dot\ncapsule=clock,battery,system\ncapsule_layout=split\n";
+    const SAMPLE: &str = "# komentar boleh\nabra_theme=1\nname=Midnight Glass\nauthor=kreativa\npreset=stealth\naccent=#7F77DD\nfont=bahnschrift\nvisualizer=wave\ntransparency=30\nround=60\nglow=on\nmotion=normal\ndecor=dot\ncapsule=clock,battery,system\ncapsule_layout=split\n";
 
     #[test]
     fn valid_theme_parses_and_applies_on_top_of_its_preset() {
         let p = parse(SAMPLE.as_bytes()).unwrap();
         assert!(p.ignored.is_empty());
-        assert_eq!((p.spec.name.as_str(), p.spec.author.as_str(), p.spec.fields()), ("Midnight Glass", "rani", 11));
+        assert_eq!((p.spec.name.as_str(), p.spec.author.as_str(), p.spec.fields()), ("Midnight Glass", "kreativa", 11));
         let mut s = Settings::default();
         s.dock_size = 77;
         apply(&p.spec, &mut s);
@@ -331,11 +331,11 @@ mod tests {
         s.capsule = Capsule::parse("agenda,clock");
         s.capsule_decor = Decor::Edge;
         s.reduce_motion = true;
-        let text = export(&s, "Neon\u{7}  Saya", "rani\nx=1");
+        let text = export(&s, "Neon\u{7}  Saya", "kreativa\nx=1");
         let p = parse(text.as_bytes()).unwrap();
         assert!(p.ignored.is_empty(), "{:?}", p.ignored);
         assert_eq!(p.spec.name, "Neon  Saya");
-        assert_eq!(p.spec.author, "ranix=1");
+        assert_eq!(p.spec.author, "kreativax=1");
         let mut back = Settings::default();
         apply(&p.spec, &mut back);
         assert_eq!((back.preset, back.accent_rgb, back.capsule, back.capsule_decor, back.reduce_motion), (s.preset, s.accent_rgb, s.capsule, s.capsule_decor, true));

@@ -921,6 +921,14 @@ impl St {
             return;
         }
         let Some(lg) = self.live_gfx.as_ref() else { return };
+        if lg.lost() {
+            log::line("stage", "perangkat grafis tangkapan hidup hilang, dibuat ulang");
+            self.live.clear();
+            self.live_gfx = None;
+            self.sync_live();
+            return;
+        }
+        let Some(lg) = self.live_gfx.as_ref() else { return };
         let mut first = false;
         for c in self.live.values_mut() {
             let had = c.has_frame;

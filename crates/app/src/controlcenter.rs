@@ -226,6 +226,12 @@ pub fn toggle(top: i32) {
     }
 }
 
+static SLID_AT: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
+pub fn adjusting() -> bool {
+    SLID_AT.lock().ok().and_then(|g| *g).is_some_and(|t| t.elapsed() < std::time::Duration::from_millis(900))
+}
+
 pub fn is_open() -> bool {
     with(|c| c.panel.is_some() && !c.closing).unwrap_or(false)
 }
@@ -1044,6 +1050,9 @@ impl Cc {
             }
         }
         let kind = m.placed.kind;
+        if let Ok(mut g) = SLID_AT.lock() {
+            *g = Some(std::time::Instant::now());
+        }
         if commit {
             match kind {
                 Kind::Display => services::set_brightness(frac),

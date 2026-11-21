@@ -196,6 +196,7 @@ static QUICK_DONE: std::sync::Mutex<Option<Result<Vec<std::path::PathBuf>, Strin
 static QR_TEXT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 const WM_QUICKDONE: u32 = WM_APP + 96;
 const WM_SHOWQR: u32 = WM_APP + 97;
+const WM_SHELFICON: u32 = WM_APP + 98;
 
 pub fn show_qr(text: &str) -> bool {
     let h = NOTCH_HWND.load(Ordering::Relaxed);
@@ -335,6 +336,8 @@ pub struct Notch {
 
     shelf: nacre_core::notch::shelf::Shelf,
     shelf_icons: std::collections::HashMap<String, CompositionDrawingSurface>,
+    shelf_asked: std::collections::HashSet<String>,
+    shelf_worker: Option<nacre_platform::icons::Worker>,
     dnd: drop::Shared,
     _drop_target: Option<windows::Win32::System::Ole::IDropTarget>,
     drop_zone: Option<usize>,
@@ -487,6 +490,8 @@ impl Notch {
                 lyr_idx: None,
                 shelf: nacre_core::notch::shelf::Shelf::new(24),
                 shelf_icons: std::collections::HashMap::new(),
+                shelf_asked: std::collections::HashSet::new(),
+                shelf_worker: None,
                 dnd: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
                 _drop_target: None,
                 drop_zone: None,
@@ -560,14 +565,14 @@ impl Notch {
                     d.set_reserved(true);
                 }
                 d.load_focus();
-                d.refresh_glance_data();
+                d.refresh_glance_data(true);
                 d.request_today();
                 d.publish_notch();
                 d.update_visibility();
                 d.sync_download_watch();
             });
             crate::prefs::listen(hwnd);
-            if ["NACRE_TEST_SEND", "NACRE_TEST_OPEN", "NACRE_TEST_QUICK", "NACRE_TEST_QR"].iter().any(|k| std::env::var_os(k).is_some()) {
+            if ["NACRE_TEST_SEND", "NACRE_TEST_OPEN", "NACRE_TEST_QUICK", "NACRE_TEST_QR", "NACRE_TEST_SHELF"].iter().any(|k| std::env::var_os(k).is_some()) {
                 timer(hwnd, T_TESTSEND, 2500);
             }
             log::line("notch", &format!("dibuat tier={tier:?} dpi={dpi} jendela={win:?} layar_w={screen_w}"));
@@ -831,7 +836,7 @@ impl Notch {
         self.today_events.iter().filter_map(|e| e.minute.filter(|m| *m >= now).map(|m| (e.title.as_str(), m))).min_by_key(|e| e.1)
     }
 
-    fn refresh_glance_data(&mut self) {
+    fn refresh_glance_data(&mut self, full: bool) {
         let on = crate::prefs::get().capsule;
         let on = on.enabled();
         if on.contains(&glance::Item::System) {
@@ -842,7 +847,9 @@ impl Notch {
             self.sys_info.0 = now.or(self.sys_info.0);
             self.sys_info.2 = nacre_platform::sys::memory_load();
         }
-        self.wifi_name = if on.contains(&glance::Item::Wifi) { nacre_platform::wifi::ssid() } else { None };
+        if full {
+            self.wifi_name = if on.contains(&glance::Item::Wifi) { nacre_platform::wifi::link().map(|l| l.0).filter(|n| !n.is_empty()) } else { None };
+        }
     }
 
     fn glance_text(&self, item: glance::Item) -> String {
@@ -882,7 +889,7 @@ impl Notch {
     }
 
     fn rotate_glance(&mut self) {
-        self.refresh_glance_data();
+        self.refresh_glance_data(false);
         let act = self.glance_active();
         let n = glance::turns(act.len(), self.glance_pair(act.len()));
         if n <= 1 {
@@ -970,7 +977,7 @@ impl Notch {
         let (px0, pw, ph) = (self.x0(), self.size.w, self.size.h);
         let mut z = state::size(self.look, self.dpi);
         z.radius *= crate::prefs::round(crate::prefs::Role::Notch);
-        z.w = z.w.round();
+        z.w = z.w.min(self.win.0 as f32 - 16.0 * self.dpi).max(z.h).round();
         z.h = z.h.round();
         let gap = island_gap(self.dpi);
         if gap > 0.0 {
@@ -1413,17 +1420,39 @@ impl Notch {
     }
 
     fn load_shelf_icons(&mut self) {
-        let px = (40.0 * self.dpi).round() as i32;
-        for it in self.shelf.items().iter().take(8) {
-            if self.shelf_icons.contains_key(&it.path) {
-                continue;
-            }
-            let bmp = nacre_platform::icons::thumbnail(&it.path, px).or_else(|| nacre_platform::icons::load(&it.path, px));
-            if let Some(b) = bmp {
-                if let Ok(s) = self.paint.gfx.surface_from_bgra(b.w, b.h, &b.bgra) {
-                    self.shelf_icons.insert(it.path.clone(), s);
+        let mut want: Vec<String> = self.shelf.items().iter().take(8).map(|i| i.path.clone()).filter(|p| !self.shelf_asked.contains(p)).collect();
+        want.sort_by_key(|p| p.starts_with("\\\\") || p.starts_with("//"));
+        if want.is_empty() {
+            return;
+        }
+        if self.shelf_worker.is_none() {
+            let hw = self.hwnd.0 as isize;
+            let px = (40.0 * self.dpi).round() as i32;
+            self.shelf_worker = Some(nacre_platform::icons::spawn_thumb_worker(px, move || post(hw, WM_SHELFICON)));
+        }
+        if let Some(w) = &self.shelf_worker {
+            for p in want {
+                if w.requests.send(p.clone()).is_ok() {
+                    self.shelf_asked.insert(p);
                 }
             }
+        }
+    }
+
+    fn on_shelf_icons(&mut self) {
+        let mut got = false;
+        if let Some(w) = &self.shelf_worker {
+            while let Ok((path, bmp)) = w.results.try_recv() {
+                if let Some(b) = bmp {
+                    if let Ok(s) = self.paint.gfx.surface_from_bgra(b.w, b.h, &b.bgra) {
+                        self.shelf_icons.insert(path, s);
+                        got = true;
+                    }
+                }
+            }
+        }
+        if got && self.mode == Mode::Open(Tab::Shelf) {
+            self.render();
         }
     }
 
@@ -1517,6 +1546,7 @@ impl Notch {
             4 => {
                 self.shelf.remove(&path);
                 self.shelf_icons.remove(&path);
+                self.shelf_asked.remove(&path);
                 self.refresh();
             }
             5 => self.start_send(vec![path]),
@@ -1684,7 +1714,7 @@ impl Notch {
             if self.cursor_on_media_button() {
                 kill(self.hwnd, T_DWELL);
             } else {
-                timer(self.hwnd, T_DWELL, motion::DWELL_MS);
+                timer(self.hwnd, T_DWELL, crate::prefs::get().notch_reveal.visor_open_ms());
             }
         }
     }
@@ -1773,6 +1803,7 @@ impl Notch {
             Action::ShelfClear => {
                 self.shelf.clear();
                 self.shelf_icons.clear();
+                self.shelf_asked.clear();
                 self.refresh();
             }
             Action::Tab(t) => self.dispatch(Event::SelectTab(t)),
@@ -2371,7 +2402,7 @@ impl Notch {
         if s.capsule != self.glance_cfg {
             self.glance_cfg = s.capsule;
             self.glance_idx = 0;
-            self.refresh_glance_data();
+            self.refresh_glance_data(true);
             if self.agenda.is_none() {
                 self.request_today();
             }
@@ -2540,6 +2571,11 @@ impl Notch {
                 if let Ok(p) = std::env::var("NACRE_TEST_QUICK") {
                     self.start_quick(p.split(';').map(|s| s.to_string()).collect());
                 }
+                if let Ok(p) = std::env::var("NACRE_TEST_SHELF") {
+                    for one in p.split(';') {
+                        self.shelf.add(one);
+                    }
+                }
                 if let Ok(t) = std::env::var("NACRE_TEST_QR") {
                     show_qr(&t);
                 }
@@ -2568,13 +2604,16 @@ impl Notch {
             }
             T_MINUTE => {
                 self.agenda_tick += 1;
+                self.refresh_glance_data(true);
                 if self.agenda_tick % 10 == 1 {
                     self.request_today();
                 }
                 self.update_meeting();
                 if sys::battery() != self.battery {
                     self.on_power();
-                } else if matches!(self.look.view, View::Compact(state::Activity::Glance | state::Activity::GlancePair) | View::Open(_)) && self.todo_edit.is_none() {
+                } else if matches!(self.look.view, View::Rest | View::Compact(state::Activity::Glance | state::Activity::GlancePair)) {
+                    self.refresh();
+                } else if matches!(self.look.view, View::Open(_)) && self.todo_edit.is_none() {
                     self.render();
                 }
                 timer(self.hwnd, T_MINUTE, nacre_platform::time::ms_to_next_minute());
@@ -2698,6 +2737,10 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             with(hwnd, |d| d.on_agenda());
             LRESULT(0)
         }
+        WM_SHELFICON => {
+            with(hwnd, |d| d.on_shelf_icons());
+            LRESULT(0)
+        }
         WM_DEVICECHANGE_MSG => {
             let ev = wp.0 as u32;
             if ev == 0x8000 || ev == 0x8004 {
@@ -2792,7 +2835,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         STRIP_ENTER => {
             with(hwnd, |d| {
                 if d.vis != Vis::Always {
-                    timer(hwnd, T_EDGE, 200);
+                    timer(hwnd, T_EDGE, crate::prefs::get().notch_reveal.visor_edge_ms());
                 }
             });
             LRESULT(0)

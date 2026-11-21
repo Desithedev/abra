@@ -104,7 +104,7 @@ hanya disembunyikan selama ABRA berjalan (bisa dimatikan di Pengaturan → Umum 
 Pil kecil di tengah atas layar dengan bayangan tipis di bawahnya. Materialnya (**Blur**, **Crystal**, atau **Hitam**)
 dipilih lewat *Material Visor* di Pengaturan → Tampilan; teksnya selalu putih.
 
-**Saat diam** Visor menampilkan **sapaan & info** yang berganti pelan tiap ±9 detik: sapaan ("Selamat malam, Rani",
+**Saat diam** Visor menampilkan **sapaan & info** yang berganti pelan tiap ±9 detik: sapaan ("Selamat malam, Kreativa",
 hanya tulisan di tengah), jam, tanggal, dan baterai (ikon di kiri, nilai di kanan). Di Pengaturan → Visor → *Saat Visor
 diam* → **Tampilkan** ada tiga pilihan: **Sapaan & info**, **Musik & lirik**, dan **Kosong**; di sana juga **Nama
 panggilan** dan **Teks sapaan**.
@@ -307,7 +307,7 @@ Bila ada app yang sedang memakai **mikrofon** (titik oranye) atau **kamera** (ti
 - **Klik kanan** modul (di mode edit) untuk mengubah ukuran: **Kecil** (bulat), **Sedang** (kapsul), atau **Besar** (2×2). Slider dan Playing berukuran tetap.
 - Fokus, Hotspot, Berbagi Terdekat, dan Mode Pesawat membuka halaman pengaturan Windows yang sesuai.
 
-**HUD volume dan kecerahan:** saat Anda menekan tombol volume/kecerahan, kapsul kaca muncul di kanan atas (di bawah Rail). Judulnya nama perangkat keluaran yang sedang dipakai (mis. "Headphones") atau "Layar" untuk kecerahan, di bawahnya slider tipis dengan ikon di kedua ujung dan 16 titik skala. Bisa diseret dan hilang sendiri.
+**HUD volume dan kecerahan:** saat Anda menekan tombol volume/kecerahan, kapsul kaca muncul di kanan atas (di bawah Rail). Judulnya nama perangkat keluaran yang sedang dipakai (mis. "Headphones") atau "Layar" untuk kecerahan, di bawahnya slider tipis dengan ikon di kedua ujung dan 16 titik skala. Bisa diseret dan hilang sendiri. Selama ABRA berjalan, tombol volume naik, turun, dan mute di keyboard ditangani ABRA (langkah 2%, sama seperti Windows), jadi bar volume bawaan Windows tidak ikut muncul; begitu ABRA ditutup, tombol itu kembali ke Windows. Tombol kecerahan laptop ditangani oleh firmware laptop, jadi tampilan kecerahan bawaan pabrikan bisa tetap muncul.
 
 ## 6. Quick Search
 
@@ -384,9 +384,9 @@ Jendela Pengaturan ABRA bergaya panel pengaturan modern: sidebar berikon warna d
 | Halaman | Isi |
 |---|---|
 | **Umum** | Bahasa (Indonesia/English), jalankan saat login, sembunyikan taskbar Windows, sembunyikan ikon desktop, selalu di atas jendela layar penuh, animasi jendela, bayangan jendela aktif |
-| **Deck** | Aktifkan Deck, perilaku, **Tampilkan di** (bila ada lebih dari satu layar), ikon seragam, ukuran ikon, jarak, zoom, jarak dari tepi, kebulatan sudut |
-| **Visor** | Aktifkan Visor, bentuk, perilaku, **Tampilkan di**, **Visualizer musik** (Batang, Spektrum, Gelombang, Titik), kebulatan sudut, buka otomatis saat kursor di Visor, **Modul Capsule** (modul, urutan, tata letak, hiasan) |
-| **Rail** | Aktifkan Rail, perilaku, **Tampilkan di**, latar (Transparan, Terang, Gelap, Material), jam 24 jam |
+| **Deck** | Aktifkan Deck, perilaku, **Tampilkan di** (bila ada lebih dari satu layar), **Kepekaan** (Cepat atau Santai), ikon seragam, ukuran ikon, jarak, zoom, jarak dari tepi, kebulatan sudut |
+| **Visor** | Aktifkan Visor, bentuk, perilaku, **Tampilkan di**, **Visualizer musik** (Batang, Spektrum, Gelombang, Titik), kebulatan sudut, buka otomatis saat kursor di Visor, **Kepekaan** (Cepat atau Santai), **Modul Capsule** (modul, urutan, tata letak, hiasan) |
+| **Rail** | Aktifkan Rail, perilaku, **Tampilkan di**, **Kepekaan** (Cepat atau Santai), latar (Transparan, Terang, Gelap, Material), jam 24 jam |
 | **Tampilan** | **Preset** (Bawaan, Prism, Neon, Aurora, Stealth, Pixel: sekali klik mengubah warna, material, sudut, dan visualizer Deck, Rail, dan Visor; semua tetap bisa diatur ulang sesudahnya); **Huruf dan gerak**: font (Inter, Segoe UI, Bahnschrift, Mono; berlaku setelah tombol **Buka ulang**) dan **Kurangi gerakan** (visualizer, cahaya Aurora, dan animasi Visor berhenti); **Tema komunitas** (lihat di bawah); kartu pratinjau **Otomatis · Terang · Gelap**; **Tema**: warna aksen (Multiwarna = ikut warna aksen Windows, lalu 8 warna), kartu **gaya ikon & widget** Bawaan · Gelap · Bening · Berwarna dengan pilihan Terang · Gelap · Otomatis, warna tint, paket ikon; **Kaca**: material global (Blur, Crystal, Hitam buram), material Visor, tingkat blur, transparansi, refraksi tepi kaca |
 | **Scene** | Semua pengaturan Scene |
 | **Screen Corners** | Aksi untuk empat screen corner |
@@ -410,7 +410,7 @@ Contoh isi tema (baris yang diawali `#` adalah catatan dan diabaikan):
 ```
 abra_theme=1
 name=Midnight Glass
-author=rani
+author=kreativa
 preset=stealth
 theme=dark
 accent=#7F77DD
@@ -533,14 +533,19 @@ Pintasan lain (screen corner) diatur di Pengaturan. Bila sebuah pintasan tidak b
 | Ikon desktop tidak terlihat | Pengaturan → Umum → matikan **Sembunyikan ikon desktop saat ABRA berjalan**. Ikon kembali saat ABRA ditutup. |
 | Ikon Deck terlihat berbeda dari aslinya | Matikan **Ikon seragam** di tab DECK dan setel **Gaya ikon** ke Bawaan. |
 | Kursor tetap bulat setelah ABRA mati | Jalankan ABRA lagi dan keluar normal, atau biarkan `abra-guard.exe` memulihkannya; bisa juga dengan Pengaturan Windows → Bluetooth & perangkat → Mouse → Penunjuk mouse. |
+| Kecerahan di monitor eksternal | Layar laptop memakai kecerahan Windows. Di PC tanpa itu, ABRA mencoba **DDC/CI** (kecerahan asli monitor lewat kabel; aktifkan DDC/CI di menu monitor bila ada). Monitor yang tidak mendukungnya diredupkan dengan software (gamma) di setiap layar. |
+| ABRA tiba-tiba terbuka ulang sendiri | Driver grafis di-reset atau GPU berganti (misalnya laptop dual GPU, update driver). ABRA mendeteksinya dan membuka ulang dirinya sekali agar tampilannya pulih; `abra.log` mencatat "perangkat grafis hilang". |
+| Deck, Rail, atau Visor muncul saat kursor hanya lewat di tepi layar | Pilih **Kepekaan → Santai** di halaman Deck, Rail, atau Visor. Kursor harus diam sebentar (±0,5 detik) di tepi sebelum muncul. **Cepat** membuatnya muncul seketika dan membuka Visor lebih cepat. |
 | Melaporkan bug | Sertakan versi Windows, langkah mengulang, dan isi `abra.log` pada Issues proyek. |
 
 ## 15. Batasan yang diketahui
 
-- **Beberapa layar** (sedang dikembangkan untuk 0.6.0): Deck, Rail, Visor, dan widget desktop bisa ditaruh di layar mana pun
+- **Beberapa layar** (baru di 0.6.0): Deck, Rail, Visor, dan widget desktop bisa ditaruh di layar mana pun
   lewat **Tampilkan di** (Utama, Layar 1, Layar 2, …; layar dinomori dari kiri ke kanan). Bila layar yang dipilih dicabut,
   semuanya pindah ke layar utama, lalu kembali saat layar itu dicolok lagi. Fitur ini baru diuji dengan layar simulasi, jadi
-  laporan dari pengguna dua atau tiga layar sangat membantu. Scene, Screen Corners, dan animasi jendela masih memakai layar utama.
+  laporan dari pengguna dua atau tiga layar sangat membantu. Quick Search dan Pengaturan muncul di layar tempat kursor
+  berada, dengan skala layar itu. Animasi jendela kini berjalan di semua layar. Scene, Screen Corners, Alt+Tab, dan HUD
+  volume/kecerahan masih memakai layar utama.
 
 - Menyeret kartu Scene ke panggung belum tersedia (gunakan Shift-klik). Kartu hidup memakai Windows.Graphics.Capture, jadi
   memerlukan Windows 10 versi 1903 atau lebih baru (Windows 11 sudah memenuhi).

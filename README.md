@@ -60,7 +60,7 @@ It is one small native program: no Electron, no web view, no background services
   <img src="assets/screenshots/desktop.png" alt="ABRA desktop: Deck, Rail, Visor and widgets" width="900">
 </p>
 
-### 🧪 Coming in 0.6.0 (in development)
+### 🆕 New in 0.6.0
 
 - **More than one screen**: choose where the Deck, Rail, Visor and desktop widgets appear (*Main*, *Screen 1*, *Screen 2*…)
   under **Show on** in each page of Settings. Unplug a screen and everything moves to the main one; plug it back in and
@@ -88,10 +88,36 @@ It is one small native program: no Electron, no web view, no background services
   (*Settings → Appearance → Community themes*). A theme can only set appearance options (preset, accent colour, font,
   visualizer, transparency, corners, glow, motion, decoration and Capsule modules). Every file is checked first: unknown
   keys are ignored and named, numbers are kept in range, and nothing in a theme is ever run, opened or downloaded.
+- **Sturdier on more PCs**: Quick Search and Settings open on the screen your mouse is on, window animations work on
+  every screen, external monitors get real brightness through DDC/CI (or software dimming on each screen), the Visor fits
+  narrow portrait screens, YouTube thumbnails are no longer squashed into the album square, files on slow network
+  drives no longer freeze the Visor shelf, and ABRA recovers by itself when the graphics driver resets or a laptop
+  switches GPUs.
+- **Smart Deck reacts right away**: when you switch to another app the Deck now hides at once, even while other
+  windows keep popping up in the background.
+- **Volume keys**: the volume up, down and mute keys now show only ABRA's glass HUD; the Windows volume bar no longer
+  pops up on top of it.
+- **Sensitivity**: choose *Quick* or *Relaxed* for the Deck, Rail and Visor. *Relaxed* waits about half a second at the
+  screen edge, so they no longer pop up when the mouse just passes by; *Quick* also opens the Visor faster.
 - **Fonts**: Inter, Segoe UI, Bahnschrift or a monospace font, applied after a one‑click restart, plus **Reduce motion**
   to keep the visualizer, Aurora light and Visor morph still (*Settings → Appearance → Text and motion*).
 
-### 🆕 New in 0.5.0
+<p align="center">
+  <img src="assets/screenshots/notch-focus.png" alt="Focus session in the Visor" width="560">
+  <img src="assets/screenshots/notch-quick-actions.png" alt="Quick actions card in the Visor" width="560">
+</p>
+<p align="center">
+  <img src="assets/screenshots/visor-modules.png" alt="Capsule modules side by side: clock with an accent dot, CPU and RAM" width="440">
+</p>
+<p align="center">
+  <img src="assets/screenshots/settings-presets.png" alt="Appearance settings with presets" width="400">
+  <img src="assets/screenshots/settings-themes.png" alt="Community themes with validation status" width="400">
+</p>
+<p align="center">
+  <img src="assets/screenshots/settings-capsule.png" alt="Capsule modules settings" width="400">
+</p>
+
+### 0.5.0
 
 - **Built‑in updates**: ABRA checks GitHub for a new release, shows it in the Visor and installs it with one click
   (*Settings → General → About*). The installer is checked against its SHA‑256 fingerprint before it runs.
@@ -191,12 +217,12 @@ Download from the **[Releases](https://github.com/abdeealfarizi/abra/releases)**
 
 | File | Best for |
 |---|---|
-| `ABRA-Setup-0.5.0.exe` | Most people. Per‑user install, **no administrator rights**, optional Start menu shortcut and “launch at sign‑in”, clean uninstall from *Windows Settings → Apps*. |
-| `ABRA-0.5.0-win-x64.zip` | Portable. Extract anywhere and keep `abra.exe`, `abra-guard.exe` and the `fonts` folder **together**. |
+| `ABRA-Setup-0.6.0.exe` | Most people. Per‑user install, **no administrator rights**, optional Start menu shortcut and “launch at sign‑in”, clean uninstall from *Windows Settings → Apps*. |
+| `ABRA-0.6.0-win-x64.zip` | Portable. Extract anywhere and keep `abra.exe`, `abra-guard.exe` and the `fonts` folder **together**. |
 
 ### Installer
 
-1. Run `ABRA-Setup-0.5.0.exe`.
+1. Run `ABRA-Setup-0.6.0.exe`.
 2. Windows SmartScreen may warn about an unsigned app: choose **More info → Run anyway** (only for files from this repository).
 3. Pick the options you want (Start menu shortcut, launch at sign‑in) and finish. ABRA starts.
 
@@ -209,7 +235,7 @@ Alt+Tab, moving other apps’ windows, and starting at sign‑in. There is no te
 To make sure your copy is the real one:
 
 1. Download only from the **[Releases](https://github.com/abdeealfarizi/abra/releases)** page of this repository.
-2. In PowerShell run `Get-FileHash .\ABRA-Setup-0.5.0.exe -Algorithm SHA256` and compare the result with the
+2. In PowerShell run `Get-FileHash .\ABRA-Setup-0.6.0.exe -Algorithm SHA256` and compare the result with the
    **sha256** shown next to the file on the Releases page. They must match exactly.
 3. If you prefer, build ABRA yourself from source (see below).
 
@@ -230,7 +256,7 @@ Protection history*, but only after the fingerprint check above matches.
 
 ### Updating from an older version
 
-Install 0.5.0 over the old version. Your settings, pinned apps and Quick Panel layout are kept. From 0.5.0 on, ABRA
+Install 0.6.0 over the old version. Your settings, pinned apps and Quick Panel layout are kept. From 0.5.0 on, ABRA
 offers new versions itself.
 
 ### Quit and uninstall
@@ -502,11 +528,11 @@ You get `abra.exe` and `abra-guard.exe` in `target\release\`.
 cargo test --workspace
 
 winget install JRSoftware.InnoSetup                            # once
-powershell -File installer\build-installer.ps1 -Version 0.5.0
+powershell -File installer\build-installer.ps1 -Version 0.6.0
 ```
 
 The release script rebuilds ABRA with local paths stripped, **refuses to continue** if a binary still contains your user
-name or a local path, and writes `dist\ABRA-Setup-0.5.0.exe` and `dist\ABRA-0.5.0-win-x64.zip`.
+name or a local path, and writes `dist\ABRA-Setup-0.6.0.exe` and `dist\ABRA-0.6.0-win-x64.zip`.
 
 ### 4. Safe experiments
 

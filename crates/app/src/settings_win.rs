@@ -13,7 +13,6 @@ use windows::core::w;
 use windows::UI::Color;
 use windows::UI::Composition::{CompositionDrawingSurface, CompositionStretch, Compositor, ContainerVisual};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
 use windows::Win32::UI::WindowsAndMessaging::*;
 const WM_MOUSELEAVE: u32 = 0x02A3;
@@ -105,6 +104,7 @@ enum Action {
     Font(nacre_core::theme::FontChoice),
     ReduceMotion,
     Meeting,
+    Reveal(u8, nacre_core::settings::Reveal),
     CapLayout(nacre_core::notch::glance::Layout),
     CapDecor(nacre_core::notch::glance::Decor),
     CapToggle(u8),
@@ -293,7 +293,8 @@ pub fn open(comp: &Compositor) {
 fn create(comp: &Compositor) -> windows_core::Result<()> {
     let glass = side_glass(prefs::glass((10.0, 10.0), SIDE_RADIUS, Role::Themed));
     let mut popup = Popup::new(comp, w!("AbraSettings"), Some(proc), WINDOW_EX_STYLE(0), glass)?;
-    let dpi = unsafe { GetDpiForWindow(popup.hwnd) }.max(96) as f32 / 96.0;
+    let mon = nacre_platform::monitors::under_cursor();
+    let dpi = mon.scale();
     let gfx = Gfx::shared(comp)?;
     let tier = {
         let c = sys::conditions();
@@ -311,11 +312,11 @@ fn create(comp: &Compositor) -> windows_core::Result<()> {
         win.scroll = (y * win.dpi).min((win.content_h - 200.0 * win.dpi).max(0.0));
         win.render();
     }
-    let (sw, sh) = sys::screen_size();
+    let (sw, sh) = mon.area.size();
     let (w, h) = (win.size.0 as i32, win.size.1 as i32);
     let top = ((sh - h) / 2).clamp(12, (sh - h - 12).max(12));
-    log::line("settings", &format!("layar={sw}x{sh} jendela={w}x{h} atas={top}"));
-    win.popup.set_rect((sw - w) / 2, top, w, h)?;
+    log::line("settings", &format!("layar={sw}x{sh}@({},{}) jendela={w}x{h} atas={top}", mon.area.x, mon.area.y));
+    win.popup.set_rect(mon.area.x + (sw - w) / 2, mon.area.y + top, w, h)?;
     win.frame();
     win.popup.show();
     unsafe {
@@ -849,6 +850,22 @@ impl Win {
             if let Some(g) = groups.first_mut() {
                 let at = at.min(g.1.len());
                 g.1.insert(at, row);
+            }
+        }
+        if part < 3 {
+            use nacre_core::settings::Reveal;
+            let cur = match part {
+                0 => s.dock_reveal,
+                1 => s.rail_reveal,
+                _ => s.notch_reveal,
+            };
+            let row = RowDef::Seg(
+                prefs::tr("Kepekaan"),
+                Reveal::ALL.iter().map(|r| (prefs::tr(r.title()), Action::Reveal(part, *r))).collect(),
+                Reveal::ALL.iter().position(|r| *r == cur).unwrap_or(0),
+            );
+            if let Some(g) = groups.first_mut() {
+                g.1.push(row);
             }
         }
         groups
@@ -1827,6 +1844,11 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 Some(Action::Font(f)) => prefs::update(|s| s.font = f),
                 Some(Action::ReduceMotion) => prefs::update(|s| s.reduce_motion = !s.reduce_motion),
                 Some(Action::Meeting) => prefs::update(|s| s.meeting_companion = !s.meeting_companion),
+                Some(Action::Reveal(part, r)) => prefs::update(|s| match part {
+                    0 => s.dock_reveal = r,
+                    1 => s.rail_reveal = r,
+                    _ => s.notch_reveal = r,
+                }),
                 Some(Action::CapLayout(l)) => prefs::update(|s| s.capsule_layout = l),
                 Some(Action::CapDecor(d)) => prefs::update(|s| s.capsule_decor = d),
                 Some(Action::CapToggle(i)) => prefs::update(|s| s.capsule.toggle(i as usize)),

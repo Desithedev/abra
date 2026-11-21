@@ -18,6 +18,8 @@ const TIMER_BLOCK: usize = 2;
 const TIMER_TRAY: usize = 3;
 const TIMER_DISPLAY: usize = 4;
 const TIMER_FAKE_MON: usize = 5;
+const TIMER_GPU: usize = 6;
+static STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 static FAKE_SPEC: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 
 fn fake_spec() -> Option<String> {
@@ -25,6 +27,10 @@ fn fake_spec() -> Option<String> {
 }
 
 pub fn watch_displays(hwnd: HWND) {
+    let _ = STARTED.set(std::time::Instant::now());
+    unsafe {
+        SetTimer(Some(hwnd), TIMER_GPU, 15_000, None);
+    }
     if let Some(s) = fake_spec() {
         if let Ok(mut g) = FAKE_SPEC.lock() {
             *g = s;
@@ -285,6 +291,23 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                     *g = now;
                     drop(g);
                     displays_changed();
+                }
+            }
+            LRESULT(0)
+        }
+        WM_TIMER if wp.0 == TIMER_GPU => {
+            let fake = std::env::var("NACRE_TEST_GPU_LOST").ok().and_then(|v| v.parse::<u64>().ok()).is_some_and(|s| STARTED.get().is_some_and(|t| t.elapsed().as_secs() >= s));
+            if fake || nacre_ui::gfx::Gfx::shared_lost() {
+                let _ = KillTimer(Some(hwnd), TIMER_GPU);
+                let mark = paths::config_dir().join("gpu_relaunch.txt");
+                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+                let last = std::fs::read_to_string(&mark).ok().and_then(|t| t.trim().parse::<u64>().ok()).unwrap_or(0);
+                if now.saturating_sub(last) < 600 {
+                    nacre_platform::log::line("gpu", "perangkat grafis hilang lagi, tidak dibuka ulang (baru saja dibuka ulang)");
+                } else {
+                    let _ = std::fs::write(&mark, now.to_string());
+                    nacre_platform::log::line("gpu", "perangkat grafis hilang atau diganti, ABRA dibuka ulang");
+                    relaunch();
                 }
             }
             LRESULT(0)

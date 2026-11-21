@@ -242,6 +242,18 @@ fn flag(h: isize) {
     }
 }
 
+fn virtual_area(screen: (i32, i32)) -> (i32, i32, i32, i32) {
+    let list = nacre_platform::monitors::list();
+    if list.is_empty() {
+        return (0, 0, screen.0, screen.1);
+    }
+    let x0 = list.iter().map(|m| m.area.x).min().unwrap_or(0);
+    let y0 = list.iter().map(|m| m.area.y).min().unwrap_or(0);
+    let x1 = list.iter().map(|m| m.area.right()).max().unwrap_or(screen.0);
+    let y1 = list.iter().map(|m| m.area.bottom()).max().unwrap_or(screen.1);
+    (x0, y0, (x1 - x0).max(1), (y1 - y0).max(1))
+}
+
 fn openable(h: isize, screen: (i32, i32)) -> bool {
     if !eligible(h) || enumerate::cloaked(h) || park::is_parked(h) {
         return false;
@@ -352,6 +364,15 @@ impl Fx {
         obj.StartAnimation(&HSTRING::from(prop), &a)
     }
 
+    fn cover(&self) {
+        let (x, y, w, h) = virtual_area(self.screen);
+        let _ = self.surface.root.SetSize(Vector2 { X: w as f32, Y: h as f32 });
+        let _ = self.surface.root.SetOffset(Vector3 { X: -x as f32, Y: -y as f32, Z: 0.0 });
+        unsafe {
+            let _ = SetWindowPos(self.hwnd, Some(HWND_TOPMOST), x, y, w, h, SWP_NOACTIVATE);
+        }
+    }
+
     fn play(&mut self, surface: CompositionDrawingSurface, a: (i32, i32, i32, i32), b: (i32, i32, i32, i32), kind: Kind) {
         if matches!(kind, Kind::Minimize | Kind::Restore) && genie_on() {
             let (win, icon) = if kind == Kind::Restore { (b, a) } else { (a, b) };
@@ -359,7 +380,7 @@ impl Fx {
                 Ok(()) => {
                     log::line("fx", &format!("animasi {} genie ({} ms) jendela {win:?} ikon {icon:?}", if kind == Kind::Restore { "restore" } else { "minimize" }, kind.ms()));
                     unsafe {
-                        let _ = SetWindowPos(self.hwnd, Some(HWND_TOPMOST), 0, 0, self.screen.0, self.screen.1, SWP_NOACTIVATE);
+                        self.cover();
                         let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
                         SetTimer(Some(self.hwnd), T_HIDE, START_DELAY + kind.ms() + 80, None);
                     }
@@ -443,7 +464,7 @@ impl Fx {
             self.sprite = Some(sprite);
             log::line("fx", &format!("animasi {} ({ms} ms) dari {a:?} ke {b:?}", match kind { Kind::Minimize => "minimize", Kind::Restore => "restore", Kind::Close => "tutup", Kind::Open => "buka" }));
             unsafe {
-                let _ = SetWindowPos(self.hwnd, Some(HWND_TOPMOST), 0, 0, self.screen.0, self.screen.1, SWP_NOACTIVATE);
+                self.cover();
                 let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
                 SetTimer(Some(self.hwnd), T_HIDE, START_DELAY + ms + 80, None);
             }

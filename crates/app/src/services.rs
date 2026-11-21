@@ -48,6 +48,12 @@ pub fn set_volume(v: f32) {
     }
 }
 
+pub fn set_muted(on: bool) {
+    if let Some(tx) = AUDIO.get() {
+        let _ = tx.send(audio::Cmd::SetMuted(on));
+    }
+}
+
 pub fn toggle_mute() {
     if let Some(tx) = AUDIO.get() {
         let _ = tx.send(audio::Cmd::ToggleMute);

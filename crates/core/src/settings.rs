@@ -4,6 +4,67 @@ use crate::notch::glance::{Capsule, Decor, Layout};
 use crate::i18n::Lang;
 use crate::visibility::policy::Mode;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Reveal {
+    #[default]
+    Quick,
+    Calm,
+}
+
+impl Reveal {
+    pub const ALL: [Reveal; 2] = [Reveal::Quick, Reveal::Calm];
+
+    pub fn parse(s: &str) -> Option<Reveal> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "quick" | "cepat" | "fast" | "sensitive" => Some(Reveal::Quick),
+            "calm" | "santai" | "relaxed" | "delay" => Some(Reveal::Calm),
+            _ => None,
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Reveal::Quick => "quick",
+            Reveal::Calm => "calm",
+        }
+    }
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Reveal::Quick => "Cepat",
+            Reveal::Calm => "Santai",
+        }
+    }
+
+    pub fn deck_ms(self) -> u32 {
+        match self {
+            Reveal::Quick => 200,
+            Reveal::Calm => 550,
+        }
+    }
+
+    pub fn rail_ms(self) -> u32 {
+        match self {
+            Reveal::Quick => 150,
+            Reveal::Calm => 500,
+        }
+    }
+
+    pub fn visor_edge_ms(self) -> u32 {
+        match self {
+            Reveal::Quick => 200,
+            Reveal::Calm => 500,
+        }
+    }
+
+    pub fn visor_open_ms(self) -> u32 {
+        match self {
+            Reveal::Quick => 180,
+            Reveal::Calm => 450,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Behavior {
     Fixed,
@@ -324,6 +385,9 @@ pub struct Settings {
     pub widget_style: u8,
     pub battery_pct: u8,
     pub rail: Behavior,
+    pub dock_reveal: Reveal,
+    pub rail_reveal: Reveal,
+    pub notch_reveal: Reveal,
     pub notch_scale: u8,
     pub island_gap: u8,
     pub update_check: bool,
@@ -419,6 +483,9 @@ impl Default for Settings {
             widget_style: 0,
             battery_pct: 2,
             rail: Behavior::Fixed,
+            dock_reveal: Reveal::Quick,
+            rail_reveal: Reveal::Quick,
+            notch_reveal: Reveal::Quick,
             notch_scale: 100,
             island_gap: 7,
             update_check: true,
@@ -653,6 +720,9 @@ impl Settings {
                 "widget_style" => s.widget_style = v.parse::<u8>().map(|n| n.min(1)).unwrap_or(s.widget_style),
                 "battery_pct" => s.battery_pct = v.parse::<u8>().map(|n| n.min(2)).unwrap_or(s.battery_pct),
                 "rail" => s.rail = Behavior::parse(v).unwrap_or(s.rail),
+                "dock_reveal" => s.dock_reveal = Reveal::parse(v).unwrap_or(s.dock_reveal),
+                "rail_reveal" => s.rail_reveal = Reveal::parse(v).unwrap_or(s.rail_reveal),
+                "notch_reveal" => s.notch_reveal = Reveal::parse(v).unwrap_or(s.notch_reveal),
                 "notch_scale" => s.notch_scale = v.trim_end_matches('%').parse::<u16>().map(|n| n.clamp(80, 130) as u8).unwrap_or(s.notch_scale),
                 "island_gap" => s.island_gap = v.parse::<u16>().map(|n| n.min(40) as u8).unwrap_or(s.island_gap),
                 "update_check" => s.update_check = parse_bool(v).unwrap_or(s.update_check),
@@ -694,7 +764,7 @@ impl Settings {
 
     pub fn serialize(&self) -> String {
         format!(
-            "# ABRA settings\ntakeover={}\ndock={}\nnotch={}\nblur={}\nstyle={}\ntransparency={}\ntheme={}\nlang={}\ndock_material={}\ndock_round={}\nnotch_material={}\nnotch_round={}\nautostart={}\ndock_size={}\ndock_gap={}\ndock_zoom={}\ndock_margin={}\nanim={}\nrefraction={}\ndock_enabled={}\nnotch_enabled={}\nnotch_hover_open={}\nwin_shadow={}\nmenubar={}\nclock_24h={}\nmenubar_glass={}\nhot_tl={}\nhot_tr={}\nhot_bl={}\nhot_br={}\nstage={}\nswitcher={}\nstage_right={}\nstage_size={}\nstage_gap={}\nstage_count={}\nstage_speed={}\nstage_desktop_click={}\nstage_media={}\nstage_icons={}\nstage_titles={}\nhide_desktop_icons={}\nmenubar_style={}\ndock_plates={}\nover_fullscreen={}\nclipboard_history={}\nicon_style={}\nicon_tint={}\naccent={}\nmac_shortcuts={}\ndownloads_stack={}\nrecent_apps={}\nicon_pack={}\nmenubar_material={}\nicon_variant={}\nmin_effect={}\nnotch_idle={}\ngreet_name={}\ngreet_text={}\nlyrics_compact={}\nlyrics_online={}\nnotch_downloads={}\nnotch_send={}\nui_scale={}\nnotch_island={}\nwidget_style={}\nbattery_pct={}\nrail={}\nnotch_scale={}\nisland_gap={}\nupdate_check={}\nnotch_glow={}\npill_devices={}\npill_notices={}\npill_reminders={}\ntodo_hotkey={}\ndeck_screen={}\nrail_screen={}\nnotch_screen={}\nwidget_screen={}\npreset={}\nvisualizer={}\nfont={}\nreduce_motion={}\nfocus_cat={}\nfocus_mins={}\nbreak_mins={}\nfocus_name={}\nmeeting_companion={}\ncapsule={}\ncapsule_layout={}\ncapsule_decor={}\naccent_rgb={}\n",
+            "# ABRA settings\ntakeover={}\ndock={}\nnotch={}\nblur={}\nstyle={}\ntransparency={}\ntheme={}\nlang={}\ndock_material={}\ndock_round={}\nnotch_material={}\nnotch_round={}\nautostart={}\ndock_size={}\ndock_gap={}\ndock_zoom={}\ndock_margin={}\nanim={}\nrefraction={}\ndock_enabled={}\nnotch_enabled={}\nnotch_hover_open={}\nwin_shadow={}\nmenubar={}\nclock_24h={}\nmenubar_glass={}\nhot_tl={}\nhot_tr={}\nhot_bl={}\nhot_br={}\nstage={}\nswitcher={}\nstage_right={}\nstage_size={}\nstage_gap={}\nstage_count={}\nstage_speed={}\nstage_desktop_click={}\nstage_media={}\nstage_icons={}\nstage_titles={}\nhide_desktop_icons={}\nmenubar_style={}\ndock_plates={}\nover_fullscreen={}\nclipboard_history={}\nicon_style={}\nicon_tint={}\naccent={}\nmac_shortcuts={}\ndownloads_stack={}\nrecent_apps={}\nicon_pack={}\nmenubar_material={}\nicon_variant={}\nmin_effect={}\nnotch_idle={}\ngreet_name={}\ngreet_text={}\nlyrics_compact={}\nlyrics_online={}\nnotch_downloads={}\nnotch_send={}\nui_scale={}\nnotch_island={}\nwidget_style={}\nbattery_pct={}\nrail={}\nnotch_scale={}\nisland_gap={}\nupdate_check={}\nnotch_glow={}\npill_devices={}\npill_notices={}\npill_reminders={}\ntodo_hotkey={}\ndeck_screen={}\nrail_screen={}\nnotch_screen={}\nwidget_screen={}\npreset={}\nvisualizer={}\nfont={}\nreduce_motion={}\nfocus_cat={}\nfocus_mins={}\nbreak_mins={}\nfocus_name={}\nmeeting_companion={}\ncapsule={}\ncapsule_layout={}\ncapsule_decor={}\naccent_rgb={}\ndock_reveal={}\nrail_reveal={}\nnotch_reveal={}\n",
             self.takeover,
             self.dock.key(),
             self.notch.key(),
@@ -787,7 +857,10 @@ impl Settings {
             self.capsule.text(),
             self.capsule_layout.key(),
             self.capsule_decor.key(),
-            self.accent_rgb.map(hex).unwrap_or_default()
+            self.accent_rgb.map(hex).unwrap_or_default(),
+            self.dock_reveal.key(),
+            self.rail_reveal.key(),
+            self.notch_reveal.key()
         )
     }
 }
@@ -1017,9 +1090,9 @@ dock_margin=900");
 
     #[test]
     fn notch_greeting_settings_round_trip() {
-        let s = Settings::parse("notch_idle=1\ngreet_name=  Rani =)  \ngreet_text=Semangat, \u{1F680}!\n");
+        let s = Settings::parse("notch_idle=1\ngreet_name=  Kreativa =)  \ngreet_text=Semangat, \u{1F680}!\n");
         assert_eq!(s.notch_idle, 1);
-        assert_eq!(s.greet_name.as_str(), "Rani =)");
+        assert_eq!(s.greet_name.as_str(), "Kreativa =)");
         let again = Settings::parse(&s.serialize());
         assert_eq!((again.notch_idle, again.greet_name, again.greet_text), (1, s.greet_name, s.greet_text));
         assert_eq!(Settings::default().notch_idle, 0);
@@ -1120,6 +1193,23 @@ menubar_material=true
         let f = Settings::parse(&Settings::parse("focus_cat=3\nfocus_mins=15,45,20,90\nbreak_mins=0,5,5,15\nfocus_name=Ngoding ABRA\n").serialize());
         assert_eq!((f.focus_cat, f.focus_mins, f.break_mins, f.focus_name.as_str()), (3, [15, 45, 20, 90], [0, 5, 5, 15], "Ngoding ABRA"));
         assert_eq!(Settings::parse("focus_cat=9\n").focus_cat, 0);
+    }
+
+    #[test]
+    fn reveal_modes_round_trip_and_calm_is_always_slower() {
+        let d = Settings::default();
+        assert_eq!((d.dock_reveal, d.rail_reveal, d.notch_reveal), (Reveal::Quick, Reveal::Quick, Reveal::Quick));
+        let f = Settings::parse(&Settings::parse("dock_reveal=santai\nrail_reveal=calm\nnotch_reveal=cepat\n").serialize());
+        assert_eq!((f.dock_reveal, f.rail_reveal, f.notch_reveal), (Reveal::Calm, Reveal::Calm, Reveal::Quick));
+        assert_eq!(Settings::parse("dock_reveal=999\n").dock_reveal, Reveal::Quick);
+        for r in Reveal::ALL {
+            assert_eq!(Reveal::parse(r.key()), Some(r));
+        }
+        let (q, c) = (Reveal::Quick, Reveal::Calm);
+        assert!(c.deck_ms() >= q.deck_ms() + 250 && c.rail_ms() >= q.rail_ms() + 250);
+        assert!(c.visor_edge_ms() > q.visor_edge_ms() && c.visor_open_ms() > q.visor_open_ms());
+        assert_eq!((q.deck_ms(), q.rail_ms(), q.visor_edge_ms()), (200, 150, 200), "Cepat sama dengan perilaku lama");
+        assert!(q.visor_open_ms() < 300, "Cepat membuka Visor lebih cepat dari 300 ms lama");
     }
 
     #[test]

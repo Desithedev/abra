@@ -176,6 +176,38 @@ mod tests {
     }
 
     #[test]
+    fn common_setups_resolve_and_clamp_inside_each_screen() {
+        let setups = [
+            "0,0,1920,1080;1920,0,2560,1440@144",
+            "0,0,2560,1600@240;-1920,0,1920,1080",
+            "0,0,1920,1080@120;1920,-420,1080,1920",
+            "0,0,1366,768;0,-1080,1920,1080@144;1366,0,1280,1024@120",
+            "0,0,3840,2160@288",
+        ];
+        for spec in setups {
+            let list = parse_fake(spec);
+            assert!(!list.is_empty(), "{spec}");
+            for n in 1..=MAX_SCREENS {
+                let m = resolve(Screen::Nth(n), &list).unwrap();
+                assert!(list.contains(&m), "{spec} layar {n}");
+                let (w, h) = ((600.0 * m.scale()) as i32, (226.0 * m.scale()) as i32);
+                let x = m.area.clamp_x(m.area.x + m.area.w / 2 - w / 2, w, 0);
+                let y = m.area.clamp_y(m.area.y, h, 0);
+                assert!(x >= m.area.x && y >= m.area.y, "{spec}");
+                assert!(w > m.area.w || x + w <= m.area.right(), "{spec}");
+                assert_eq!(at_point(&list, m.area.x + m.area.w / 2, m.area.y + m.area.h / 2), Some(m));
+            }
+        }
+        let portrait = parse_fake("0,0,1920,1080;1920,-420,1080,1920@144");
+        let p = resolve(Screen::Nth(2), &portrait).unwrap();
+        assert!(p.area.h > p.area.w && p.area.y < 0 && p.scale() == 1.5);
+        let tiny = Area::new(0, 0, 300, 200);
+        assert_eq!((tiny.clamp_x(50, 600, 8), tiny.clamp_y(50, 400, 8)), (8, 8), "jendela lebih besar dari layar tetap menempel di kiri atas");
+        assert_eq!(parse_fake("0,0,800,600@20")[0].dpi, 96);
+        assert_eq!(parse_fake("0,0,800,600@9999")[0].dpi, 480);
+    }
+
+    #[test]
     fn clamping_stays_inside_the_area() {
         let a = Area::new(1920, 0, 1280, 720);
         assert_eq!(a.clamp_x(1900, 200, 4), 1924);

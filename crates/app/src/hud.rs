@@ -30,6 +30,58 @@ const STRIP_L_ENTER: u32 = WM_APP + 31;
 const STRIP_L_LEAVE: u32 = WM_APP + 32;
 const STRIP_R_ENTER: u32 = WM_APP + 33;
 const STRIP_R_LEAVE: u32 = WM_APP + 34;
+const HUD_KEY: u32 = WM_APP + 35;
+
+static KEYHOOK: std::sync::Mutex<Option<nacre_platform::hookthread::HookThread>> = std::sync::Mutex::new(None);
+static KEY_TARGET: std::sync::Mutex<Option<(f32, Instant)>> = std::sync::Mutex::new(None);
+
+unsafe extern "system" fn vol_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    if code >= 0 {
+        let k = &*(lp.0 as *const KBDLLHOOKSTRUCT);
+        let ctl = CTL.load(Ordering::Relaxed);
+        if ctl != 0 && ENABLED.load(Ordering::Relaxed) && nacre_core::hud::volkey::is_volume_key(k.vkCode) {
+            let down = wp.0 as u32 == WM_KEYDOWN || wp.0 as u32 == WM_SYSKEYDOWN;
+            if down {
+                let _ = PostMessageW(Some(HWND(ctl as *mut _)), HUD_KEY, WPARAM(k.vkCode as usize), LPARAM(0));
+            }
+            return LRESULT(1);
+        }
+    }
+    CallNextHookEx(None, code, wp, lp)
+}
+
+fn install_volume_keys() {
+    if std::env::var_os("NACRE_NO_VOLKEYS").is_some() {
+        return;
+    }
+    let mut g = KEYHOOK.lock().unwrap_or_else(|e| e.into_inner());
+    if g.is_none() {
+        *g = nacre_platform::hookthread::HookThread::start(nacre_platform::hookthread::Kind::Keyboard, Some(vol_proc));
+        log::line("hud", if g.is_some() { "tombol volume diambil alih" } else { "hook tombol volume gagal" });
+    }
+}
+
+fn on_volume_key(vk: u32) {
+    use nacre_core::hud::volkey;
+    if vk == volkey::MUTE {
+        services::toggle_mute();
+        return;
+    }
+    let up = vk == volkey::UP;
+    let mut g = KEY_TARGET.lock().unwrap_or_else(|e| e.into_inner());
+    let now = audio::latest();
+    let base = match *g {
+        Some((v, at)) if at.elapsed().as_millis() < volkey::CHAIN_MS => v,
+        _ => now.level,
+    };
+    let next = volkey::step(base, up);
+    *g = Some((next, Instant::now()));
+    drop(g);
+    if now.muted {
+        services::set_muted(false);
+    }
+    services::set_volume(next);
+}
 const K_MOVE: usize = 0;
 const K_DOWN: usize = 1;
 const K_UP: usize = 2;
@@ -129,6 +181,10 @@ impl Hud {
             let ctl_class = w!("NacreHudCtl");
             unsafe extern "system" fn ctl_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESULT {
                 match m {
+                    HUD_KEY => {
+                        on_volume_key(w.0 as u32);
+                        LRESULT(0)
+                    }
                     WM_VOLUME | WM_BRIGHT | HUD_MOUSE | WM_TIMER | STRIP_L_ENTER | STRIP_L_LEAVE | STRIP_R_ENTER
                     | STRIP_R_LEAVE | WM_DISPLAYCHANGE | crate::prefs::WM_PREFS => {
                         let p = GetWindowLongPtrW(h, GWLP_USERDATA) as *mut Hud;
@@ -143,6 +199,7 @@ impl Hud {
             RegisterClassW(&WNDCLASSW { lpfnWndProc: Some(ctl_proc), hInstance: hi, lpszClassName: ctl_class, ..Default::default() });
             let ctl = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, ctl_class, w!("nacre-hud"), WS_POPUP, 0, 0, 0, 0, None, None, Some(hi), None)?;
             CTL.store(ctl.0 as isize, Ordering::Relaxed);
+            install_volume_keys();
             let dpi = GetDpiForWindow(ctl).max(96) as f32 / 96.0;
             let screen = sys::screen_size();
             let tier = glass.unwrap_or_else(|| {
@@ -405,19 +462,18 @@ impl Hud {
 
     fn on_message(&mut self, m: u32, w: WPARAM, l: LPARAM) {
         match m {
-            WM_VOLUME => {
+            WM_VOLUME | WM_BRIGHT => {
                 if ENABLED.load(Ordering::Relaxed) {
                     osd::hide_native();
                 }
                 self.update_values(true);
-                self.show(0);
-            }
-            WM_BRIGHT => {
-                if ENABLED.load(Ordering::Relaxed) {
-                    osd::hide_native();
+                if crate::controlcenter::is_open() {
+                    if crate::controlcenter::adjusting() {
+                        return;
+                    }
+                    crate::controlcenter::close();
                 }
-                self.update_values(true);
-                self.show(1);
+                self.show(if m == WM_VOLUME { 0 } else { 1 });
             }
             HUD_MOUSE => {
                 let (i, kind) = (w.0 >> 8, w.0 & 0xFF);

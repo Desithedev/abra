@@ -18,6 +18,8 @@ pub struct Gfx {
     graphics: CompositionGraphicsDevice,
 }
 
+static REPLACED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 thread_local! {
     static SHARED: std::cell::RefCell<Option<Gfx>> = const { std::cell::RefCell::new(None) };
 }
@@ -28,8 +30,20 @@ impl Gfx {
             return Ok(g);
         }
         let g = Self::new(comp)?;
+        let _ = g.graphics.RenderingDeviceReplaced(&windows::Foundation::TypedEventHandler::new(|_, _| {
+            REPLACED.store(true, std::sync::atomic::Ordering::Relaxed);
+            Ok(())
+        }));
         SHARED.with(|c| *c.borrow_mut() = Some(g.clone()));
         Ok(g)
+    }
+
+    pub fn lost(&self) -> bool {
+        unsafe { self.device.GetDeviceRemovedReason().is_err() }
+    }
+
+    pub fn shared_lost() -> bool {
+        REPLACED.load(std::sync::atomic::Ordering::Relaxed) || SHARED.with(|c| c.borrow().as_ref().is_some_and(|g| g.lost()))
     }
 
     pub fn new(comp: &Compositor) -> Result<Gfx> {
