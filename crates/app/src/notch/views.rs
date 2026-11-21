@@ -24,6 +24,12 @@ pub enum Action {
     TimerPlus,
     TimerMinus,
     CalDay(i32),
+    FocusCat(u8),
+    FocusSide,
+    QuickOp(u8),
+    QuickClose,
+    QrClose,
+    MeetingJoin,
     SendDone,
     TodoToggle(u32),
     TodoAdd,
@@ -101,12 +107,62 @@ pub struct Data<'a> {
     pub todo_total: usize,
     pub todo_more: usize,
     pub todo_edit: Option<(String, bool)>,
+    pub focus: FocusView,
+    pub quick: Option<QuickView>,
+    pub qr: Option<QrView<'a>>,
+    pub meeting: Option<MeetingView>,
+}
+
+pub struct QuickView {
+    pub count: usize,
+    pub images: usize,
+    pub busy: Option<u8>,
+    pub status: String,
+}
+
+pub struct QrView<'a> {
+    pub surface: Option<&'a CompositionDrawingSurface>,
+    pub px: f32,
+    pub text: String,
+}
+
+pub struct MeetingView {
+    pub title: String,
+    pub when: nacre_core::quick::When,
+    pub link: bool,
+    pub mic: bool,
+    pub cam: bool,
+}
+
+pub struct FocusView {
+    pub cat: usize,
+    pub names: [String; nacre_core::focus::CATS],
+    pub stage: nacre_core::focus::Stage,
+    pub round: u8,
+    pub today: nacre_core::focus::Today,
+    pub week: [u32; 7],
+    pub show_cal: bool,
+}
+
+impl FocusView {
+    pub fn rgb(&self) -> [u8; 3] {
+        nacre_core::focus::COLORS[self.cat.min(nacre_core::focus::CATS - 1)]
+    }
+
+    pub fn label(&self) -> String {
+        if self.stage == nacre_core::focus::Stage::Break {
+            tr("Istirahat").to_string()
+        } else {
+            self.names[self.cat.min(nacre_core::focus::CATS - 1)].clone()
+        }
+    }
 }
 
 pub struct PillView {
     pub kind: nacre_core::notch::pills::Kind,
     pub title: String,
     pub sub: String,
+    pub swatch: Option<[u8; 3]>,
 }
 
 pub struct TodoRow {
@@ -188,7 +244,6 @@ pub struct Live {
 const ORANGE: [u8; 3] = [255, 159, 10];
 const GREEN: [u8; 3] = [48, 209, 88];
 const INK: [u8; 3] = [22, 22, 24];
-const PURPLE: [u8; 3] = [175, 110, 255];
 const SURFACE: Color = Color { A: 255, R: 27, G: 27, B: 31 };
 
 fn surface(p: &Painter, c: &ContainerVisual, x: f32, y: f32, w: f32, h: f32, r: f32) {
@@ -210,7 +265,7 @@ fn tab_accent(t: Tab, d: &Data) -> [u8; 3] {
     match t {
         Tab::Play => d.media.as_ref().and_then(|m| m.tint).unwrap_or_else(crate::prefs::accent),
         Tab::Shelf => ORANGE,
-        Tab::Timer => PURPLE,
+        Tab::Timer => d.focus.rgb(),
         Tab::Todo => GREEN,
     }
 }
@@ -222,8 +277,8 @@ fn tab_title(t: Tab) -> (&'static str, &'static str) {
         (Tab::Play, true) => ("Now", "Playing"),
         (Tab::Shelf, false) => ("Rak", "Berkas"),
         (Tab::Shelf, true) => ("File", "Shelf"),
-        (Tab::Timer, false) => ("Timer", "& Kalender"),
-        (Tab::Timer, true) => ("Timer", "& Calendar"),
+        (Tab::Timer, false) => ("Sesi", "Fokus"),
+        (Tab::Timer, true) => ("Focus", "Session"),
         (Tab::Todo, false) => ("Daftar", "Tugas"),
         (Tab::Todo, true) => ("Task", "List"),
     }
@@ -284,11 +339,14 @@ pub fn draw(p: &mut Painter, c: &ContainerVisual, look: Look, f: Frame, d: &Data
         View::Compact(Activity::Download) => compact_download(p, c, f, d),
         View::Compact(Activity::Player) => compact_player(p, c, f, d, regions, live),
         View::Compact(Activity::Pill) => compact_pill(p, c, f, d),
+        View::Compact(Activity::Meeting) => compact_meeting(p, c, f, d, regions),
         View::Open(tab) => {
             header(p, c, f, tab, d, regions);
             let inner = Frame { w: f.w - p.px(30.0), ..f };
             match tab {
                 Tab::Play => play(p, c, inner, d, regions, live),
+                Tab::Shelf if d.qr.is_some() => qr_card(p, c, inner, d, regions),
+                Tab::Shelf if d.quick.is_some() => quick_card(p, c, inner, d, regions),
                 Tab::Shelf if d.send.is_some() => send_card(p, c, inner, d, regions),
                 Tab::Shelf if d.shelf.is_empty() => shelf_empty(p, c, inner),
                 Tab::Shelf => shelf_tab(p, c, inner, d, regions),
@@ -332,7 +390,7 @@ fn compact_shelf(p: &mut Painter, c: &ContainerVisual, f: Frame, d: &Data) {
 
 fn drop_zones(p: &mut Painter, c: &ContainerVisual, f: Frame, d: &Data, regions: &mut Vec<Region>) {
     let (pad, gap) = (p.px(14.0), p.px(10.0));
-    let all = [(0usize, Sym::Tray, "Simpan ke Rak"), (1, Sym::ArrowUp, "Kirim"), (2, Sym::Folder, "Salin ke\u{2026}"), (3, Sym::Grid, "Buka dengan\u{2026}")];
+    let all = [(0usize, Sym::Tray, "Simpan ke Rak"), (1, Sym::ArrowUp, "Kirim"), (2, Sym::Folder, "Salin ke\u{2026}"), (3, Sym::Grid, "Buka dengan\u{2026}"), (4, Sym::Control, "Aksi cepat")];
     let zones: Vec<_> = all.into_iter().filter(|z| z.0 != 1 || d.send_zone).collect();
     let n = zones.len() as f32;
     let zw = (f.w - 2.0 * pad - (n - 1.0) * gap) / n;
@@ -353,6 +411,111 @@ fn drop_zones(p: &mut Painter, c: &ContainerVisual, f: Frame, d: &Data, regions:
         let th = p.px(10.5) * 1.3;
         p.text(c, &count_text(d.drop_count), f.x0 + f.w / 2.0, f.h - pad / 2.0 - th / 2.0 - p.px(1.0), 10.5, 500, WHITE, 0.55, Anchor::Center, f.w);
     }
+}
+
+fn pill_button(p: &mut Painter, c: &ContainerVisual, label: &str, right: f32, top: f32, fill: Color, action: Action, regions: &mut Vec<Region>) -> f32 {
+    let (bw, bh) = (p.measure(label, 12.0, 600) + p.px(26.0), p.px(26.0));
+    let bx = right - bw;
+    p.rect(c, bx, top, bw, bh, bh / 2.0, fill);
+    let th = p.px(12.0) * 1.3;
+    p.text(c, label, bx + bw / 2.0, top + bh / 2.0 - th / 2.0, 12.0, 600, WHITE, 0.95, Anchor::Center, bw);
+    regions.push(Region { x: bx, y: top, w: bw, h: bh, action, vis: None });
+    bx
+}
+
+fn quick_card(p: &mut Painter, c: &ContainerVisual, f: Frame, d: &Data, regions: &mut Vec<Region>) {
+    use nacre_core::quick::Op;
+    let Some(q) = &d.quick else { return };
+    let pad = p.px(14.0);
+    let (top, h) = (p.px(48.0), f.h - p.px(48.0) - pad);
+    let (x0, w) = (f.x0 + pad, f.w - 2.0 * pad);
+    card(p, c, x0, top, w, h);
+    let cyan = [100u8, 210, 255];
+    let title = format!("{} \u{00B7} {}", tr("Aksi cepat"), count_text(q.count));
+    p.text(c, &title, x0 + p.px(16.0), top + p.px(12.0), 14.0, 700, WHITE, 1.0, Anchor::Left, w * 0.6);
+    pill_button(p, c, tr("Tutup"), x0 + w - p.px(12.0), top + p.px(9.0), white(40), Action::QuickClose, regions);
+    let (gx, gy) = (x0 + p.px(12.0), top + p.px(44.0));
+    let gap = p.px(8.0);
+    let bw = (w - p.px(24.0) - gap) / 2.0;
+    let bh = ((h - p.px(44.0) - p.px(30.0) - gap) / 2.0).max(p.px(26.0));
+    for (i, op) in Op::ALL.iter().enumerate() {
+        let (r, col) = (i / 2, i % 2);
+        let (bx, by) = (gx + col as f32 * (bw + gap), gy + r as f32 * (bh + gap));
+        let enabled = q.busy.is_none() && (!op.needs_image() || q.images > 0);
+        let active = q.busy == Some(i as u8);
+        let n0 = kids(c);
+        let fill = if active { Color { A: 230, R: cyan[0], G: cyan[1], B: cyan[2] } } else { white(if enabled { 26 } else { 10 }) };
+        p.rect(c, bx, by, bw, bh, p.px(12.0), fill);
+        let th = p.px(12.5) * 1.3;
+        p.text(c, &p.fit(tr(op.title()), 12.5, 600, bw - p.px(20.0)), bx + p.px(14.0), by + (bh - th) / 2.0, 12.5, 600, WHITE, if enabled || active { 1.0 } else { 0.35 }, Anchor::Left, bw - p.px(16.0));
+        if enabled {
+            regions.push(Region { x: bx, y: by, w: bw, h: bh, action: Action::QuickOp(i as u8), vis: group_since(c, n0) });
+        }
+    }
+    let status = if q.status.is_empty() { tr("Hasil disimpan di folder yang sama; berkas asli tidak diubah.").to_string() } else { q.status.clone() };
+    p.text(c, &p.fit(&status, 11.0, 500, w - p.px(28.0)), x0 + p.px(14.0), top + h - p.px(22.0), 11.0, 500, WHITE, 0.6, Anchor::Left, w - p.px(24.0));
+}
+
+fn qr_card(p: &mut Painter, c: &ContainerVisual, f: Frame, d: &Data, regions: &mut Vec<Region>) {
+    let Some(q) = &d.qr else { return };
+    let pad = p.px(14.0);
+    let (top, h) = (p.px(48.0), f.h - p.px(48.0) - pad);
+    let (x0, w) = (f.x0 + pad, f.w - 2.0 * pad);
+    card(p, c, x0, top, w, h);
+    let s = h - p.px(16.0);
+    let (qx, qy) = (x0 + p.px(8.0), top + p.px(8.0));
+    p.rect(c, qx, qy, s, s, p.px(14.0), Color { A: 255, R: 255, G: 255, B: 255 });
+    if let Some(surf) = q.surface {
+        let inset = ((s - q.px) / 2.0).round();
+        p.place(c, surf, qx + inset, qy + inset, q.px, q.px, 1.0);
+    }
+    let bx = pill_button(p, c, tr("Tutup"), x0 + w - p.px(12.0), top + p.px(10.0), white(40), Action::QrClose, regions);
+    let tx = qx + s + p.px(18.0);
+    let tw = x0 + w - p.px(16.0) - tx;
+    p.text(c, &p.fit(tr("QR dari papan klip"), 14.0, 700, bx - p.px(10.0) - tx), tx, top + p.px(12.0), 14.0, 700, WHITE, 1.0, Anchor::Left, bx - tx);
+    p.text(c, &p.fit(&q.text, 12.0, 500, tw), tx, top + p.px(38.0), 12.0, 500, WHITE, 0.75, Anchor::Left, tw + p.px(4.0));
+    p.text(c, tr("Pindai dengan kamera HP."), tx, top + p.px(60.0), 11.5, 500, WHITE, 0.5, Anchor::Left, tw);
+}
+
+fn compact_meeting(p: &mut Painter, c: &ContainerVisual, f: Frame, d: &Data, regions: &mut Vec<Region>) {
+    use nacre_core::quick::When;
+    let Some(m) = &d.meeting else { return };
+    let cy = f.h / 2.0;
+    let live = matches!(m.when, When::Live(_));
+    let rgb = if live { GREEN } else { ORANGE };
+    let dot = p.px(8.0);
+    p.rect(c, f.x0 + p.px(16.0), cy - dot / 2.0, dot, dot, dot / 2.0, Color { A: 255, R: rgb[0], G: rgb[1], B: rgb[2] });
+    let th = p.px(12.5) * 1.3;
+    let mut right = f.x0 + f.w - p.px(12.0);
+    if m.link {
+        let label = tr("Gabung");
+        let (bw, bh) = (p.measure(label, 11.5, 700) + p.px(18.0), p.px(20.0));
+        let bx = right - bw;
+        p.rect(c, bx, cy - bh / 2.0, bw, bh, bh / 2.0, Color { A: 255, R: GREEN[0], G: GREEN[1], B: GREEN[2] });
+        let bt = p.px(11.5) * 1.3;
+        p.text(c, label, bx + bw / 2.0, cy - bt / 2.0, 11.5, 700, [4, 52, 44], 1.0, Anchor::Center, bw);
+        regions.push(Region { x: bx - p.px(4.0), y: 0.0, w: bw + p.px(8.0), h: f.h, action: Action::MeetingJoin, vis: None });
+        right = bx - p.px(10.0);
+    }
+    if live {
+        for (on, col) in [(m.cam, GREEN), (m.mic, ORANGE)] {
+            if on {
+                let r = p.px(3.5);
+                p.rect(c, right - 2.0 * r, cy - r, 2.0 * r, 2.0 * r, r, Color { A: 255, R: col[0], G: col[1], B: col[2] });
+                right -= 2.0 * r + p.px(6.0);
+            }
+        }
+    }
+    let when = match m.when {
+        When::Soon(0) => tr("sekarang").to_string(),
+        When::Soon(n) => format!("{n} {}", tr("mnt lagi")),
+        When::Live(n) => format!("{n} {}", tr("mnt")),
+    };
+    p.text(c, &when, right, cy - th / 2.0, 12.0, 600, WHITE, 0.75, Anchor::Right, f.w * 0.3);
+    let tw = p.measure(&when, 12.0, 600);
+    let left = f.x0 + p.px(16.0) + dot + p.px(8.0);
+    let max = (right - tw - p.px(10.0) - left).max(p.px(30.0));
+    p.text(c, &p.fit(&m.title, 12.5, 600, max), left, cy - th / 2.0, 12.5, 600, WHITE, 0.95, Anchor::Left, max + p.px(4.0));
 }
 
 fn send_card(p: &mut Painter, c: &ContainerVisual, f: Frame, d: &Data, regions: &mut Vec<Region>) {
@@ -440,9 +603,13 @@ fn shelf_tab(p: &mut Painter, c: &ContainerVisual, f: Frame, d: &Data, regions: 
 fn compact_timer(p: &mut Painter, c: &ContainerVisual, f: Frame, d: &Data, urgent: bool) {
     let cy = f.h / 2.0;
     let rgb = if urgent { ORANGE } else { WHITE };
-    p.sym(c, Sym::Stopwatch, f.x0 + p.px(20.0), cy, 15.0, rgb, 0.95);
-    let t = format_mmss(d.timer.remaining_secs(d.now_ms));
+    let dot = p.px(8.0);
+    let cat = d.focus.rgb();
+    p.rect(c, f.x0 + p.px(16.0), cy - dot / 2.0, dot, dot, dot / 2.0, Color { A: 255, R: cat[0], G: cat[1], B: cat[2] });
     let th = p.px(13.0) * 1.3;
+    let name = p.fit(&d.focus.label(), 12.5, 600, f.w * 0.5);
+    p.text(c, &name, f.x0 + p.px(16.0) + dot + p.px(8.0), cy - th / 2.0, 12.5, 600, WHITE, 0.9, Anchor::Left, f.w * 0.55);
+    let t = format_mmss(d.timer.remaining_secs(d.now_ms));
     p.text(c, &t, f.x0 + f.w - p.px(16.0), cy - th / 2.0, 13.0, 600, rgb, 1.0, Anchor::Right, f.w);
 }
 
@@ -702,7 +869,7 @@ fn compact_pill(p: &mut Painter, c: &ContainerVisual, f: Frame, d: &Data) {
     let accent = crate::prefs::accent();
     let (sym, rgb) = match pv.kind {
         Kind::Reminder => (Sym::Clock, ORANGE),
-        Kind::Notice => (Sym::Info, accent),
+        Kind::Notice | Kind::Info => (Sym::Info, pv.swatch.unwrap_or(accent)),
         Kind::Update => (Sym::ArrowDown, GREEN),
         Kind::Device => {
             let t = pv.title.to_lowercase();
@@ -1058,7 +1225,53 @@ fn timer(p: &mut Painter, c: &ContainerVisual, f: Frame, d: &Data, regions: &mut
     let (top, h) = (p.px(48.0), f.h - p.px(48.0) - pad);
     let cw = (f.w - 2.0 * pad - gap) / 2.0;
     timer_card(p, c, f.x0 + pad, top, cw, h, d, regions);
-    calendar_card(p, c, f.x0 + pad + cw + gap, top, cw, h, d, regions);
+    let rx = f.x0 + pad + cw + gap;
+    if d.focus.show_cal {
+        calendar_card(p, c, rx, top, cw, h, d, regions);
+    } else {
+        focus_stats(p, c, rx, top, cw, h, d);
+    }
+    side_chip(p, c, rx + cw, top, d, regions);
+}
+
+fn side_chip(p: &mut Painter, c: &ContainerVisual, right: f32, top: f32, d: &Data, regions: &mut Vec<Region>) {
+    let label = if d.focus.show_cal { tr("Fokus") } else { tr("Kalender") };
+    let text = format!("{label} \u{203A}");
+    let w = p.measure(&text, 10.5, 600) + p.px(18.0);
+    let (x, y, h) = (right - w - p.px(10.0), top + p.px(10.0), p.px(20.0));
+    let n0 = kids(c);
+    p.rect(c, x, y, w, h, h / 2.0, white(26));
+    let th = p.px(10.5) * 1.3;
+    p.text(c, &text, x + w / 2.0, y + (h - th) / 2.0, 10.5, 600, WHITE, 0.85, Anchor::Center, w);
+    regions.push(Region { x: x - p.px(4.0), y: y - p.px(4.0), w: w + p.px(8.0), h: h + p.px(8.0), action: Action::FocusSide, vis: group_since(c, n0) });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn focus_stats(p: &mut Painter, c: &ContainerVisual, x: f32, y: f32, w: f32, h: f32, d: &Data) {
+    use nacre_core::focus::duration_label;
+    card(p, c, x, y, w, h);
+    let en = crate::prefs::get().lang == nacre_core::i18n::Lang::En;
+    let f = &d.focus;
+    let pad = p.px(16.0);
+    p.text(c, tr("Hari ini"), x + pad, y + p.px(12.0), 11.5, 500, WHITE, 0.55, Anchor::Left, w * 0.5);
+    p.text(c, &duration_label(f.today.minutes, en), x + pad, y + p.px(28.0), 24.0, 700, WHITE, 1.0, Anchor::Left, w - 2.0 * pad);
+    let sub = match f.today.top {
+        Some(t) => format!("{} {} \u{00B7} {}", f.today.sessions, tr("sesi"), f.names[t]),
+        None => tr("Belum ada sesi").to_string(),
+    };
+    p.text(c, &p.fit(&sub, 11.0, 500, w - 2.0 * pad), x + pad, y + p.px(60.0), 11.0, 500, WHITE, 0.6, Anchor::Left, w - 2.0 * pad);
+    let max = f.week.iter().copied().max().unwrap_or(0).max(1) as f32;
+    let (bx, bw_all) = (x + pad, w - 2.0 * pad);
+    let gap = p.px(5.0);
+    let bw = (bw_all - 6.0 * gap) / 7.0;
+    let bottom = y + h - p.px(14.0);
+    let tall = (bottom - (y + p.px(82.0))).max(p.px(8.0));
+    let rgb = f.rgb();
+    for (i, m) in f.week.iter().enumerate() {
+        let bh = (tall * (*m as f32 / max)).max(p.px(3.0));
+        let col = if i == 6 { Color { A: 255, R: rgb[0], G: rgb[1], B: rgb[2] } } else { white(46) };
+        p.rect(c, bx + i as f32 * (bw + gap), bottom - bh, bw, bh, p.px(3.0), col);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1066,25 +1279,54 @@ fn timer_card(p: &mut Painter, c: &ContainerVisual, x: f32, y: f32, w: f32, h: f
     card(p, c, x, y, w, h);
     let t = d.timer;
     let secs = t.remaining_secs(d.now_ms);
-    let (rgb, status) = match t.phase {
-        Phase::Running if secs <= 60 => (ORANGE, tr("Berjalan")),
-        Phase::Running => (WHITE, tr("Berjalan")),
-        Phase::Paused => (WHITE, tr("Dijeda")),
-        Phase::Finished => (ORANGE, tr("Selesai")),
-        Phase::Idle => (WHITE, tr("Siap")),
+    let f = &d.focus;
+    let cat_rgb = f.rgb();
+    let running = t.phase == Phase::Running;
+    let pad = p.px(12.0);
+    let (mut chx, chy, chh) = (x + pad, y + p.px(10.0), p.px(20.0));
+    let chip_max = (w - 2.0 * pad - 3.0 * p.px(5.0)) / 4.0;
+    for (i, name) in f.names.iter().enumerate() {
+        let on = i == f.cat;
+        let shown = p.fit(name, 10.5, 600, chip_max - p.px(12.0));
+        let cw = (p.measure(&shown, 10.5, 600) + p.px(14.0)).min(chip_max);
+        let n0 = kids(c);
+        let rgb = nacre_core::focus::COLORS[i];
+        let fill = if on { Color { A: 255, R: rgb[0], G: rgb[1], B: rgb[2] } } else { white(if running { 10 } else { 22 }) };
+        p.rect(c, chx, chy, cw, chh, chh / 2.0, fill);
+        let th = p.px(10.5) * 1.3;
+        p.text(c, &shown, chx + cw / 2.0, chy + (chh - th) / 2.0, 10.5, 600, WHITE, if on { 1.0 } else if running { 0.35 } else { 0.8 }, Anchor::Center, cw);
+        if !running && !on {
+            regions.push(Region { x: chx, y: chy - p.px(4.0), w: cw, h: chh + p.px(8.0), action: Action::FocusCat(i as u8), vis: group_since(c, n0) });
+        }
+        chx += cw + p.px(5.0);
+    }
+    let rgb = if running && secs <= 60 { ORANGE } else { WHITE };
+    let ring_r = 17.0;
+    let rcx = x + pad + p.px(ring_r + 3.0);
+    let rcy = y + p.px(58.0);
+    let frac = if t.duration > 0 { 1.0 - (t.remaining_ms(d.now_ms) as f32 / (t.duration as f32 * 1000.0)) } else { 0.0 };
+    let frac = (frac.clamp(0.0, 1.0) * 120.0).round() / 120.0;
+    p.arc(c, rcx, rcy, ring_r, 4.0, 0.0, 1.0, WHITE, 40);
+    if frac > 0.0 {
+        p.arc(c, rcx, rcy, ring_r, 4.0, 0.0, frac, cat_rgb, 255);
+    }
+    let tx = rcx + p.px(ring_r + 12.0);
+    p.text(c, &format_mmss(secs), tx, rcy - p.px(22.0), 26.0, 600, rgb, 1.0, Anchor::Left, x + w - tx);
+    let status = match (t.phase, f.stage) {
+        (Phase::Paused, _) => tr("Dijeda").to_string(),
+        (_, nacre_core::focus::Stage::Break) => tr("Istirahat").to_string(),
+        _ => format!("{} {} {} {}", tr("Fokus"), f.round, tr("dari"), nacre_core::focus::ROUNDS),
     };
-    p.text(c, &format_mmss(secs), x + p.px(18.0), y + p.px(8.0), 30.0, 600, rgb, 1.0, Anchor::Left, w * 0.7);
-    p.text(c, status, x + w - p.px(16.0), y + p.px(18.0), 11.5, 500, WHITE, 0.55, Anchor::Right, w * 0.3);
+    p.text(c, &status, tx, rcy + p.px(8.0), 11.0, 500, WHITE, 0.55, Anchor::Left, x + w - tx);
     let (bd, bgap) = (p.px(34.0), p.px(14.0));
     let total = 4.0 * bd + 3.0 * bgap;
     let cy = y + h - p.px(12.0) - bd / 2.0;
     let mut cx = x + (w - total) / 2.0 + bd / 2.0;
     let idle = matches!(t.phase, Phase::Idle | Phase::Finished);
-    let accent = crate::prefs::accent();
     let buttons: [(Action, bool); 4] = [(Action::TimerMinus, idle), (Action::TimerToggle, true), (Action::TimerReset, true), (Action::TimerPlus, idle)];
     for (a, enabled) in buttons {
         let primary = a == Action::TimerToggle;
-        let fill = if primary { Color { A: 255, R: accent[0], G: accent[1], B: accent[2] } } else { white(if enabled { 30 } else { 14 }) };
+        let fill = if primary { Color { A: 255, R: cat_rgb[0], G: cat_rgb[1], B: cat_rgb[2] } } else { white(if enabled { 30 } else { 14 }) };
         let n0 = kids(c);
         round_button(p, c, cx, cy, bd, fill);
         let op = if enabled { 1.0 } else { 0.35 };

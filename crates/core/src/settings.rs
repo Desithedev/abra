@@ -339,6 +339,11 @@ pub struct Settings {
     pub visualizer: VisStyle,
     pub font: FontChoice,
     pub reduce_motion: bool,
+    pub focus_cat: u8,
+    pub focus_mins: [u8; crate::focus::CATS],
+    pub break_mins: [u8; crate::focus::CATS],
+    pub focus_name: ShortText,
+    pub meeting_companion: bool,
 }
 
 impl Default for Settings {
@@ -425,6 +430,11 @@ impl Default for Settings {
             visualizer: VisStyle::Bars,
             font: FontChoice::Inter,
             reduce_motion: false,
+            focus_cat: 0,
+            focus_mins: crate::focus::DEFAULT_FOCUS,
+            break_mins: crate::focus::DEFAULT_BREAK,
+            focus_name: ShortText::EMPTY,
+            meeting_companion: true,
         }
     }
 }
@@ -650,6 +660,11 @@ impl Settings {
                 "visualizer" => s.visualizer = VisStyle::parse(v).unwrap_or(s.visualizer),
                 "font" => s.font = FontChoice::parse(v).unwrap_or(s.font),
                 "reduce_motion" => s.reduce_motion = parse_bool(v).unwrap_or(s.reduce_motion),
+                "focus_cat" => s.focus_cat = v.parse::<u8>().ok().filter(|c| (*c as usize) < crate::focus::CATS).unwrap_or(s.focus_cat),
+                "focus_mins" => s.focus_mins = crate::focus::parse_list(v, s.focus_mins, false),
+                "break_mins" => s.break_mins = crate::focus::parse_list(v, s.break_mins, true),
+                "focus_name" => s.focus_name = ShortText::new(v),
+                "meeting_companion" => s.meeting_companion = parse_bool(v).unwrap_or(s.meeting_companion),
                 "autostart" => {
                     if let Some(b) = parse_bool(v) {
                         s.autostart = b;
@@ -666,7 +681,7 @@ impl Settings {
 
     pub fn serialize(&self) -> String {
         format!(
-            "# ABRA settings\ntakeover={}\ndock={}\nnotch={}\nblur={}\nstyle={}\ntransparency={}\ntheme={}\nlang={}\ndock_material={}\ndock_round={}\nnotch_material={}\nnotch_round={}\nautostart={}\ndock_size={}\ndock_gap={}\ndock_zoom={}\ndock_margin={}\nanim={}\nrefraction={}\ndock_enabled={}\nnotch_enabled={}\nnotch_hover_open={}\nwin_shadow={}\nmenubar={}\nclock_24h={}\nmenubar_glass={}\nhot_tl={}\nhot_tr={}\nhot_bl={}\nhot_br={}\nstage={}\nswitcher={}\nstage_right={}\nstage_size={}\nstage_gap={}\nstage_count={}\nstage_speed={}\nstage_desktop_click={}\nstage_media={}\nstage_icons={}\nstage_titles={}\nhide_desktop_icons={}\nmenubar_style={}\ndock_plates={}\nover_fullscreen={}\nclipboard_history={}\nicon_style={}\nicon_tint={}\naccent={}\nmac_shortcuts={}\ndownloads_stack={}\nrecent_apps={}\nicon_pack={}\nmenubar_material={}\nicon_variant={}\nmin_effect={}\nnotch_idle={}\ngreet_name={}\ngreet_text={}\nlyrics_compact={}\nlyrics_online={}\nnotch_downloads={}\nnotch_send={}\nui_scale={}\nnotch_island={}\nwidget_style={}\nbattery_pct={}\nrail={}\nnotch_scale={}\nisland_gap={}\nupdate_check={}\nnotch_glow={}\npill_devices={}\npill_notices={}\npill_reminders={}\ntodo_hotkey={}\ndeck_screen={}\nrail_screen={}\nnotch_screen={}\nwidget_screen={}\npreset={}\nvisualizer={}\nfont={}\nreduce_motion={}\n",
+            "# ABRA settings\ntakeover={}\ndock={}\nnotch={}\nblur={}\nstyle={}\ntransparency={}\ntheme={}\nlang={}\ndock_material={}\ndock_round={}\nnotch_material={}\nnotch_round={}\nautostart={}\ndock_size={}\ndock_gap={}\ndock_zoom={}\ndock_margin={}\nanim={}\nrefraction={}\ndock_enabled={}\nnotch_enabled={}\nnotch_hover_open={}\nwin_shadow={}\nmenubar={}\nclock_24h={}\nmenubar_glass={}\nhot_tl={}\nhot_tr={}\nhot_bl={}\nhot_br={}\nstage={}\nswitcher={}\nstage_right={}\nstage_size={}\nstage_gap={}\nstage_count={}\nstage_speed={}\nstage_desktop_click={}\nstage_media={}\nstage_icons={}\nstage_titles={}\nhide_desktop_icons={}\nmenubar_style={}\ndock_plates={}\nover_fullscreen={}\nclipboard_history={}\nicon_style={}\nicon_tint={}\naccent={}\nmac_shortcuts={}\ndownloads_stack={}\nrecent_apps={}\nicon_pack={}\nmenubar_material={}\nicon_variant={}\nmin_effect={}\nnotch_idle={}\ngreet_name={}\ngreet_text={}\nlyrics_compact={}\nlyrics_online={}\nnotch_downloads={}\nnotch_send={}\nui_scale={}\nnotch_island={}\nwidget_style={}\nbattery_pct={}\nrail={}\nnotch_scale={}\nisland_gap={}\nupdate_check={}\nnotch_glow={}\npill_devices={}\npill_notices={}\npill_reminders={}\ntodo_hotkey={}\ndeck_screen={}\nrail_screen={}\nnotch_screen={}\nwidget_screen={}\npreset={}\nvisualizer={}\nfont={}\nreduce_motion={}\nfocus_cat={}\nfocus_mins={}\nbreak_mins={}\nfocus_name={}\nmeeting_companion={}\n",
             self.takeover,
             self.dock.key(),
             self.notch.key(),
@@ -750,7 +765,12 @@ impl Settings {
             self.preset.key(),
             self.visualizer.key(),
             self.font.key(),
-            self.reduce_motion
+            self.reduce_motion,
+            self.focus_cat,
+            crate::focus::list_text(self.focus_mins),
+            crate::focus::list_text(self.break_mins),
+            self.focus_name.as_str(),
+            self.meeting_companion
         )
     }
 }
@@ -1061,5 +1081,14 @@ menubar_material=true
         assert_eq!((d.preset, d.visualizer, d.font, d.reduce_motion), (Preset::Default, VisStyle::Bars, FontChoice::Inter, false));
         let f = Settings::parse(&Settings::parse("preset=neon\nvisualizer=wave_\nvisualizer=dots\nfont=mono\nreduce_motion=1\n").serialize());
         assert_eq!((f.preset, f.visualizer, f.font, f.reduce_motion), (Preset::Neon, VisStyle::Dots, FontChoice::Mono, true));
+    }
+
+    #[test]
+    fn focus_settings_round_trip() {
+        let d = Settings::default();
+        assert_eq!((d.focus_cat, d.focus_mins, d.break_mins, d.focus_name.as_str()), (0, crate::focus::DEFAULT_FOCUS, crate::focus::DEFAULT_BREAK, ""));
+        let f = Settings::parse(&Settings::parse("focus_cat=3\nfocus_mins=15,45,20,90\nbreak_mins=0,5,5,15\nfocus_name=Ngoding ABRA\n").serialize());
+        assert_eq!((f.focus_cat, f.focus_mins, f.break_mins, f.focus_name.as_str()), (3, [15, 45, 20, 90], [0, 5, 5, 15], "Ngoding ABRA"));
+        assert_eq!(Settings::parse("focus_cat=9\n").focus_cat, 0);
     }
 }

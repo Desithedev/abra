@@ -69,6 +69,7 @@ pub enum Activity {
     TimerEnding,
     Download,
     Pill,
+    Meeting,
     Player,
     Lyrics,
     Music,
@@ -91,6 +92,7 @@ pub struct Live {
     pub download: bool,
     pub wide_music: bool,
     pub pill: bool,
+    pub meeting: bool,
 }
 
 pub fn activity(l: &Live) -> Option<Activity> {
@@ -102,6 +104,9 @@ pub fn activity(l: &Live) -> Option<Activity> {
     }
     if l.pill {
         return Some(Activity::Pill);
+    }
+    if l.meeting {
+        return Some(Activity::Meeting);
     }
     if l.media && l.wide_music {
         return Some(Activity::Player);
@@ -262,7 +267,7 @@ mod tests {
 
     #[test]
     fn activity_priority() {
-        let base = Live { media: true, playing: true, lyric_line: true, lyrics_on: true, timer_left_s: Some(30), charging_fresh: true, shelf: 2, glance: true, download: true, wide_music: false, pill: false };
+        let base = Live { media: true, playing: true, lyric_line: true, lyrics_on: true, timer_left_s: Some(30), charging_fresh: true, shelf: 2, glance: true, download: true, wide_music: false, pill: false, meeting: false };
         assert_eq!(activity(&base), Some(Activity::TimerEnding));
         assert_eq!(activity(&Live { timer_left_s: Some(300), ..base }), Some(Activity::Download), "unduhan di atas lirik dan musik");
         let l = Live { timer_left_s: Some(300), download: false, ..base };
@@ -321,5 +326,13 @@ mod tests {
         let (b1, y1, o1) = shadow(look(Mode::Open(Tab::Play), None));
         assert!(o0 < 0.3 && o1 > o0);
         assert_eq!((b0, y0), (b1, y1));
+    }
+
+    #[test]
+    fn meeting_sits_between_pills_and_music() {
+        let l = Live { media: true, playing: true, meeting: true, ..Live::default() };
+        assert_eq!(activity(&l), Some(Activity::Meeting));
+        assert_eq!(activity(&Live { pill: true, ..l }), Some(Activity::Pill));
+        assert_eq!(activity(&Live { meeting: false, ..l }), Some(Activity::Music));
     }
 }

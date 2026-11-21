@@ -1,13 +1,16 @@
 pub mod appcat;
 pub mod appmenus;
+pub mod clipstack;
 pub mod controls;
 pub mod display;
 pub mod dock;
 pub mod i18n;
+pub mod focus;
 pub mod genie;
 pub mod iconplate;
 pub mod preview;
 pub mod qr;
+pub mod quick;
 pub mod hud;
 pub mod island;
 pub mod logo;

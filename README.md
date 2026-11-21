@@ -69,6 +69,17 @@ It is one small native program: no Electron, no web view, no background services
   a glowing edge), *Aurora* (soft violet glass), *Stealth* (pure black, minimal) and *Pixel* (retro, square corners,
   monospace). *Settings → Appearance → Preset*; you can still fine‑tune everything afterwards.
 - **Music visualizer styles** in the Visor: *Bars*, a 16‑band *Spectrum*, *Wave* and *Dots* (*Settings → Visor*).
+- **Focus sessions** in the Visor: pick *Work*, *Study*, *Reading* or your own named session, each with its own focus and
+  break length; four rounds with automatic breaks, a pill when each part ends, sessions that survive a restart, and a
+  *Today* card with your focus minutes and the last 7 days.
+- **Clipboard stack** in Quick Search: images (with thumbnails) and colour codes next to text, and **pins** for things you
+  keep pasting. Only pinned items are saved to disk.
+- **Quick actions**: drop files on the new *Quick actions* zone of the Visor to shrink images by half, convert them to JPG
+  or PNG, or zip anything, saved next to the originals. Quick Search adds *Make a QR code from the clipboard* and *Pick a
+  colour from the screen*.
+- **Meeting companion**: ten minutes before a meeting in your Windows Calendar the Visor shows a countdown and a **Join**
+  button when the event has a Meet, Zoom or Teams link; during the meeting it shows the time and whether your mic or
+  camera is on.
 - **Fonts**: Inter, Segoe UI, Bahnschrift or a monospace font, applied after a one‑click restart, plus **Reduce motion**
   to keep the visualizer, Aurora light and Visor morph still (*Settings → Appearance → Text and motion*).
 

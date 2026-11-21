@@ -104,6 +104,7 @@ enum Action {
     Visualizer(nacre_core::theme::VisStyle),
     Font(nacre_core::theme::FontChoice),
     ReduceMotion,
+    Meeting,
     Relaunch,
     Theme(Theme),
     Lang(Lang),
@@ -187,6 +188,19 @@ fn row_label(r: &RowDef) -> &'static str {
 }
 
 const DONATE_URL: &str = "https://saweria.co/kreativadev";
+
+fn focus_label(name: &str, rest: bool) -> &'static str {
+    match (name, rest) {
+        ("Kerja", false) => "Kerja · fokus",
+        ("Kerja", true) => "Kerja · istirahat",
+        ("Belajar", false) => "Belajar · fokus",
+        ("Belajar", true) => "Belajar · istirahat",
+        ("Baca", false) => "Baca · fokus",
+        ("Baca", true) => "Baca · istirahat",
+        (_, false) => "Kustom · fokus",
+        (_, true) => "Kustom · istirahat",
+    }
+}
 
 fn screen_row(part: u8, cur: nacre_core::display::Screen) -> Option<RowDef> {
     use nacre_core::display::Screen;
@@ -493,6 +507,8 @@ impl Win {
             11 => (50.0, 200.0, "%"),
             12 => (80.0, 130.0, "%"),
             13 => (0.0, 40.0, " dp"),
+            20..=23 => (5.0, 180.0, " mnt"),
+            24..=27 => (0.0, 60.0, " mnt"),
             _ => (0.0, 100.0, "%"),
         }
     }
@@ -501,10 +517,10 @@ impl Win {
         let Some(f) = self.edit.take() else { return };
         let t = nacre_core::settings::ShortText::new(&self.edit_buf);
         prefs::update(|s| {
-            if f == 0 {
-                s.greet_name = t;
-            } else {
-                s.greet_text = t;
+            match f {
+                0 => s.greet_name = t,
+                2 => s.focus_name = t,
+                _ => s.greet_text = t,
             }
         });
         self.render();
@@ -720,6 +736,16 @@ impl Win {
             8 => (3, s.widget_screen, 0),
             _ => return groups,
         };
+        if page == 2 {
+            let names = ["Kerja", "Belajar", "Baca", "Kustom"];
+            let mut rows = vec![RowDef::Text(prefs::tr("Nama fokus kustom"), s.focus_name.as_str().to_string(), prefs::tr("Kustom").to_string(), 2)];
+            for (i, n) in names.iter().enumerate() {
+                rows.push(RowDef::Slider(prefs::tr(focus_label(n, false)), s.focus_mins[i], 20 + i as u8));
+                rows.push(RowDef::Slider(prefs::tr(focus_label(n, true)), s.break_mins[i], 24 + i as u8));
+            }
+            groups.push((Some(prefs::tr("Sesi fokus")), rows));
+            groups.push((Some(prefs::tr("Rapat")), vec![RowDef::Toggle(prefs::tr("Pengingat rapat dari Kalender Windows"), s.meeting_companion, Action::Meeting)]));
+        }
         if let Some(row) = screen_row(part, cur) {
             if let Some(g) = groups.first_mut() {
                 let at = at.min(g.1.len());
@@ -1339,6 +1365,8 @@ impl Win {
                 11 => s.stage_speed = v,
                 12 => s.notch_scale = v,
                 13 => s.island_gap = v,
+                20..=23 => s.focus_mins[(id - 20) as usize] = v.clamp(5, 180),
+                24..=27 => s.break_mins[(id - 24) as usize] = v.min(60),
                 _ => s.dock_margin = v,
             }
         });
@@ -1580,7 +1608,11 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                                 w.commit_edit();
                             }
                             let s = prefs::get();
-                            w.edit_buf = if f == 0 { s.greet_name.as_str().to_string() } else { s.greet_text.as_str().to_string() };
+                            w.edit_buf = match f {
+                                0 => s.greet_name.as_str().to_string(),
+                                2 => s.focus_name.as_str().to_string(),
+                                _ => s.greet_text.as_str().to_string(),
+                            };
                             w.edit = Some(f);
                             w.render();
                         }
@@ -1670,6 +1702,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 Some(Action::Visualizer(v)) => prefs::update(|s| s.visualizer = v),
                 Some(Action::Font(f)) => prefs::update(|s| s.font = f),
                 Some(Action::ReduceMotion) => prefs::update(|s| s.reduce_motion = !s.reduce_motion),
+                Some(Action::Meeting) => prefs::update(|s| s.meeting_companion = !s.meeting_companion),
                 Some(Action::Relaunch) => crate::mainwin::relaunch(),
                 Some(Action::Screen(part, v)) => prefs::update(|s| match part {
                     0 => s.deck_screen = v,

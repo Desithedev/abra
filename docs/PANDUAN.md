@@ -129,16 +129,29 @@ Panel menutup sendiri sesaat setelah kursor keluar. Panel punya tiga tab (klik, 
 - **Rak**: berkas yang Anda taruh di Visor. Klik untuk membuka; klik kanan untuk *Tampilkan di folder*, *Salin jalur*,
   atau *Hapus dari Rak*; **Kosongkan** menghapus semuanya dari Rak. Rak hanya menyimpan **jalur** berkas (isinya tidak
   disalin) dan kosong lagi saat ABRA ditutup.
-- **Timer**: dua kotak. Kiri: timer (−5 menit · mulai/jeda · ulang · +5 menit). Kanan: **kalender** horizontal: bulan,
+- **Sesi Fokus** (halaman Timer): kotak kiri berisi kategori **Kerja**, **Belajar**, **Baca**, dan **Kustom** (namanya bisa
+  Anda isi di Pengaturan → Visor → Sesi fokus), cincin progres, sisa waktu, dan tombol −5 menit · mulai/jeda · ulang · +5 menit.
+  Tiap kategori punya durasi fokus dan istirahat sendiri; tombol −5/+5 mengubah durasi kategori yang aktif dan langsung
+  disimpan, atau atur semuanya lewat slider di Pengaturan → Visor → Sesi fokus (istirahat 0 berarti tanpa istirahat).
+  Sesi berjalan dalam 4 putaran: fokus → istirahat otomatis → fokus berikutnya, dengan pill pemberitahuan di Visor tiap
+  pergantian. Sesi tetap berjalan bila ABRA dibuka ulang. Kotak kanan **Hari ini** menunjukkan total menit fokus, jumlah
+  sesi, kategori terbanyak, dan grafik 7 hari; tombol **Kalender ›** menukarnya dengan kalender. Riwayat tersimpan di
+  `focus_log.txt` di perangkat Anda saja.
+- **Kalender** (tombol **Kalender ›** di halaman Sesi Fokus): **kalender** horizontal: bulan,
   lima tanggal di sekitar tanggal terpilih (hari ini berwarna aksen), dan acara tanggal itu dari Kalender Windows
   ("Tidak ada acara hari ini" bila kosong). Klik tanggal untuk melihat acaranya; kalender kembali ke hari ini saat panel
   ditutup.
 
 Di kanan atas panel ada baterai dan tombol Pengaturan ABRA.
 
-**Menyeret berkas ke Visor:** saat berkas dari Explorer diseret ke Visor, muncul empat zona: **Simpan ke Rak**,
-**Kirim** (ke HP, lihat di bawah), **Salin ke…** (pilih folder, lalu disalin dengan jendela salin Windows), dan **Buka
-dengan…** (dialog "Buka dengan" Windows untuk berkas pertama).
+**Menyeret berkas ke Visor:** saat berkas dari Explorer diseret ke Visor, muncul lima zona: **Simpan ke Rak**,
+**Kirim** (ke HP, lihat di bawah), **Salin ke…** (pilih folder, lalu disalin dengan jendela salin Windows), **Buka
+dengan…** (dialog "Buka dengan" Windows untuk berkas pertama), dan **Aksi cepat**.
+
+**Aksi cepat:** setelah berkas ditaruh di zona ini, tab Rak menampilkan empat tombol: **Kecilkan gambar 50%**, **Jadikan JPG**,
+**Jadikan PNG** (khusus gambar: PNG, JPG, BMP, GIF, WEBP, TIFF), dan **Kompres jadi ZIP** (semua jenis berkas). Hasilnya
+disimpan di folder yang sama dengan nama baru, misalnya `foto (kecil).png` atau `Arsip.zip`; berkas asli tidak diubah dan
+nama yang sudah ada tidak ditimpa. Pill di Visor memberi tahu bila sudah selesai. ZIP memakai `tar.exe` bawaan Windows.
 
 ### Kirim ke HP
 
@@ -293,12 +306,12 @@ Bila ada app yang sedang memakai **mikrofon** (titik oranye) atau **kamera** (ti
 |---|---|---|
 | `Ctrl+1` | **Apps** | Seksi **Saran** (app di Deck) lalu per kategori, masing-masing satu baris dengan **Lihat Semua**; ketik untuk mencari (lihat bagian 7) |
 | `Ctrl+2` | **Berkas Saya** | Tanpa kata kunci: **Terbaru** (berkas yang baru Anda buka di Windows, dengan thumbnail). Chip **Gambar, Video, Dokumen, Musik** menyaring jenisnya. Dengan kata kunci: mencari nama berkas dan folder di Desktop, Dokumen, Unduhan, Gambar, Video, Musik, dan OneDrive (sampai 5 tingkat, hasil teratas 20). Bukan pencarian seluruh disk |
-| `Ctrl+3` | **Aksi** | Perintah cepat: Buat Catatan, Mulai Timer, Kirim Email, Ambil Tangkapan Layar, Kunci Layar, Tampilkan Desktop, Ganti Mode Gelap, Scene, Overview, Kalkulator, Task Manager, Pengaturan, Hapus Riwayat Papan Klip |
-| `Ctrl+4` | **Papan Klip** | Teks yang Anda salin dalam 8 jam terakhir ("teks · Disalin 15.20"). `Enter` atau tombol salin bulat menyalinnya kembali; tombol **⋯** → Hapus Riwayat |
+| `Ctrl+3` | **Aksi** | Perintah cepat: Buat Catatan, Mulai Timer, Kirim Email, Ambil Tangkapan Layar, Kunci Layar, Tampilkan Desktop, Ganti Mode Gelap, Scene, Overview, Kalkulator, Task Manager, Pengaturan, Buat QR dari Papan Klip (tampil di Visor), Ambil Warna dari Layar, Hapus Riwayat Papan Klip |
+| `Ctrl+4` | **Papan Klip** | Teks, gambar, dan kode warna yang Anda salin dalam 8 jam terakhir ("teks · Disalin 15.20"; gambar tampil sebagai thumbnail, kode warna seperti `#7F77DD` dengan contoh warnanya). `Enter` atau tombol salin bulat menyalinnya kembali; tombol pin menyematkan item ke bagian **Disematkan** di atas; tombol **⋯** → Hapus Riwayat |
 
 **Quick keys untuk Aksi:** tiap aksi bisa dijalankan dengan huruf singkat. Di mode Aksi, ketik `nn` lalu `Enter` untuk Buat Catatan. Pilih sebuah aksi lalu tekan `Tab` untuk mengisi atau mengganti quick key-nya (sampai 6 huruf/angka), `Enter` menyimpan, `Esc` membatalkan. Tersimpan di `actions.txt` pada folder konfigurasi.
 
-**Riwayat Papan Klip** bisa dimatikan di Pengaturan → Umum → **Riwayat Papan Klip di Quick Search**. Riwayat hanya disimpan di memori (hilang saat ABRA ditutup), tidak pernah ditulis ke disk atau dikirim ke mana pun. Isi yang ditandai pengelola kata sandi diabaikan. Hanya teks.
+**Riwayat Papan Klip** bisa dimatikan di Pengaturan → Umum → **Riwayat Papan Klip di Quick Search**. Riwayat biasa hanya disimpan di memori (hilang saat ABRA ditutup). Hanya item yang Anda **sematkan** yang disimpan ke disk (`clip_pins.txt` dan folder `clip` di `%APPDATA%\ABRA`) agar tetap ada setelah restart; lepas sematannya untuk menghapusnya. Tidak ada yang dikirim ke mana pun. Isi yang ditandai pengelola kata sandi diabaikan. Gambar yang disimpan di riwayat: 6 terakhir.
 
 ## 7. Apps
 
@@ -414,7 +427,12 @@ Pintasan lain (screen corner) diatur di Pengaturan. Bila sebuah pintasan tidak b
   acak, tautan berisi kode acak). Hanya berkas yang Anda taruh yang bisa diunduh, hanya dari perangkat di jaringan
   lokal, dan servernya mati saat sesi berakhir. Tidak ada yang lewat internet atau server luar.
 - **Kalender.** Kartu kalender di tab Timer membaca judul dan jam acara satu tanggal dari Kalender Windows (hanya baca)
-  saat kartu itu terlihat; tidak ada yang disimpan atau dikirim.
+  saat kartu itu terlihat. Bila **Pengingat rapat dari Kalender Windows** aktif (Pengaturan → Visor → Rapat, bawaan aktif),
+  ABRA juga membaca acara hari ini kira-kira tiap 10 menit untuk menampilkan rapat 10 menit sebelum mulai, lengkap dengan
+  tombol **Gabung** bila acaranya punya link (Meet, Zoom, Teams, dan sejenisnya) serta titik mikrofon dan kamera saat
+  rapat berlangsung. Tidak ada yang disimpan atau dikirim.
+- **Ambil warna.** Aksi "Ambil Warna dari Layar" di Quick Search hanya membaca satu piksel di titik yang Anda klik, lalu
+  menyalin kodenya (misalnya `#7F77DD`). Klik kanan atau `Esc` membatalkan.
 - **Hook keyboard.** Saat Scene dan pengalih Alt+Tab aktif, ABRA memasang hook keyboard tingkat rendah semata-mata untuk
   menelan kombinasi `Alt+Tab` dan menampilkan pengalihnya. Ketikan tidak dicatat, disimpan, atau dikirim. Hook dilepas saat fitur
   dimatikan.

@@ -4,6 +4,7 @@ pub enum Kind {
     Update,
     Notice,
     Reminder,
+    Info,
 }
 
 #[derive(Clone, Debug, PartialEq)]

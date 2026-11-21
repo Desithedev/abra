@@ -62,6 +62,28 @@ impl Timer {
         false
     }
 
+    pub fn restore(duration_secs: i64, remaining_ms: i64, running: bool, now_ms: i64) -> Timer {
+        let mut t = Timer::new(duration_secs);
+        let left = remaining_ms.clamp(0, t.duration * 1000);
+        if left == 0 {
+            return t;
+        }
+        t.remaining_ms = left;
+        t.phase = Phase::Paused;
+        if running {
+            t.start(now_ms);
+        }
+        t
+    }
+
+    pub fn remaining_ms(&self, now_ms: i64) -> i64 {
+        if self.phase == Phase::Running {
+            (self.deadline_ms - now_ms).max(0)
+        } else {
+            self.remaining_ms
+        }
+    }
+
     pub fn remaining_secs(&self, now_ms: i64) -> i64 {
         let ms = if self.phase == Phase::Running { (self.deadline_ms - now_ms).max(0) } else { self.remaining_ms };
         (ms + 999) / 1000
@@ -131,5 +153,16 @@ mod tests {
         assert_eq!(format_mmss(65), "01:05");
         assert_eq!(format_mmss(3725), "1:02:05");
         assert_eq!(format_mmss(-3), "00:00");
+    }
+
+    #[test]
+    fn restore_keeps_progress_and_running_state() {
+        let t = Timer::restore(1500, 600_000, true, 1_000);
+        assert_eq!(t.phase, Phase::Running);
+        assert_eq!(t.remaining_secs(61_000), 540);
+        let p = Timer::restore(1500, 90_000, false, 0);
+        assert_eq!((p.phase, p.remaining_ms(5_000)), (Phase::Paused, 90_000));
+        assert_eq!(Timer::restore(1500, 0, true, 0).phase, Phase::Idle);
+        assert_eq!(Timer::restore(60, 999_999, false, 0).remaining_ms(0), 60_000);
     }
 }
