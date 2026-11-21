@@ -90,7 +90,7 @@ pub struct Data<'a> {
     pub battery: Option<(u8, bool)>,
     pub timer: &'a Timer,
     pub now_ms: i64,
-    pub glance: Option<(Item, String)>,
+    pub glance: Vec<(Item, String)>,
     pub media: Option<MediaView<'a>>,
     pub lyrics: LyricsView<'a>,
     pub shelf: Vec<(&'a str, Option<&'a CompositionDrawingSurface>)>,
@@ -332,7 +332,7 @@ pub fn draw(p: &mut Painter, c: &ContainerVisual, look: Look, f: Frame, d: &Data
             compact_timer(p, c, f, d, urgent)
         }
         View::Compact(Activity::Charging) => compact_charging(p, c, f, d),
-        View::Compact(Activity::Glance) => compact_glance(p, c, f, d),
+        View::Compact(Activity::Glance | Activity::GlancePair) => compact_glance(p, c, f, d),
         View::Compact(Activity::Music) => compact_music(p, c, f, d, live, f.h),
         View::Compact(Activity::Lyrics) => compact_lyrics(p, c, f, d, live),
         View::Compact(Activity::Shelf) => compact_shelf(p, c, f, d),
@@ -777,32 +777,75 @@ fn music_card(p: &mut Painter, c: &ContainerVisual, x: f32, y: f32, w: f32, h: f
     }
 }
 
-fn compact_glance(p: &mut Painter, c: &ContainerVisual, f: Frame, d: &Data) {
-    let Some((item, text)) = &d.glance else { return };
-    let cy = f.h / 2.0;
-    let th = p.px(12.5) * 1.3;
-    if *item == Item::Greeting {
-        let max = f.w - p.px(32.0);
-        let shown = p.fit(text, 12.5, 600, max);
-        p.text(c, &shown, f.x0 + f.w / 2.0, cy - th / 2.0, 12.5, 600, WHITE, 0.95, Anchor::Center, max + p.px(2.0));
-        return;
+fn glance_icon_w(p: &Painter, item: Item) -> f32 {
+    match item {
+        Item::Battery => (24.0 * p.px(1.0)).round(),
+        Item::Clock | Item::Date | Item::Agenda | Item::Wifi => p.px(16.0),
+        Item::Greeting | Item::System => 0.0,
     }
-    let left = f.x0 + p.px(14.0);
-    let icon_w = match item {
+}
+
+fn glance_icon(p: &mut Painter, c: &ContainerVisual, item: Item, x: f32, cy: f32, d: &Data) -> f32 {
+    match item {
         Item::Battery => {
             let (pct, ch) = d.battery.unwrap_or((0, false));
-            p.battery(c, left, cy, pct, ch)
+            p.battery(c, x, cy, pct, ch)
         }
-        _ => {
-            let sym = if *item == Item::Clock { Sym::Clock } else { Sym::Calendar };
-            p.sym(c, sym, left + p.px(8.0), cy, 15.0, WHITE, 0.9);
+        Item::Clock | Item::Date | Item::Agenda | Item::Wifi => {
+            let sym = match item {
+                Item::Clock => Sym::Clock,
+                Item::Wifi => Sym::Wifi,
+                _ => Sym::Calendar,
+            };
+            p.sym(c, sym, x + p.px(8.0), cy, 15.0, WHITE, 0.9);
             p.px(16.0)
         }
-    };
+        Item::Greeting | Item::System => 0.0,
+    }
+}
+
+fn compact_glance(p: &mut Painter, c: &ContainerVisual, f: Frame, d: &Data) {
+    let cy = f.h / 2.0;
+    let th = p.px(12.5) * 1.3;
+    let ty = cy - th / 2.0;
+    let mut left = f.x0 + p.px(14.0);
     let right = f.x0 + f.w - p.px(16.0);
-    let max = right - (left + icon_w + p.px(10.0));
-    let shown = p.fit(text, 12.5, 600, max);
-    p.text(c, &shown, right, cy - th / 2.0, 12.5, 600, WHITE, 0.95, Anchor::Right, max + p.px(2.0));
+    if crate::prefs::get().capsule_decor == nacre_core::notch::glance::Decor::Dot && !d.glance.is_empty() {
+        let r = p.px(6.0);
+        let a = crate::prefs::accent();
+        p.rect(c, left, cy - r / 2.0, r, r, r / 2.0, Color { A: 255, R: a[0], G: a[1], B: a[2] });
+        left += p.px(12.0);
+    }
+    match d.glance.as_slice() {
+        [] => {}
+        [(Item::Greeting, text)] => {
+            let max = right - left;
+            let shown = p.fit(text, 12.5, 600, max);
+            p.text(c, &shown, (left + right) / 2.0, ty, 12.5, 600, WHITE, 0.95, Anchor::Center, max + p.px(2.0));
+        }
+        [(item, text)] => {
+            let iw = glance_icon(p, c, *item, left, cy, d);
+            let max = right - (left + iw + p.px(10.0));
+            let shown = p.fit(text, 12.5, 600, max);
+            p.text(c, &shown, right, ty, 12.5, 600, WHITE, 0.95, Anchor::Right, max + p.px(2.0));
+        }
+        [(a, ta), (b, tb), ..] => {
+            let mid = f.x0 + f.w / 2.0;
+            let iw = glance_icon(p, c, *a, left, cy, d);
+            let lx = if iw > 0.0 { left + iw + p.px(7.0) } else { left };
+            let lmax = (mid - p.px(5.0) - lx).max(0.0);
+            let ls = p.fit(ta, 12.5, 600, lmax);
+            p.text(c, &ls, lx, ty, 12.5, 600, WHITE, 0.95, Anchor::Left, lmax + p.px(2.0));
+            let bw = glance_icon_w(p, *b);
+            let rmax = (right - mid - p.px(5.0) - if bw > 0.0 { bw + p.px(7.0) } else { 0.0 }).max(0.0);
+            let rs = p.fit(tb, 12.5, 600, rmax);
+            let tw = p.measure(&rs, 12.5, 600);
+            p.text(c, &rs, right, ty, 12.5, 600, WHITE, 0.95, Anchor::Right, rmax + p.px(2.0));
+            if bw > 0.0 {
+                glance_icon(p, c, *b, right - tw - p.px(7.0) - bw, cy, d);
+            }
+        }
+    }
 }
 
 fn compact_download(p: &mut Painter, c: &ContainerVisual, f: Frame, d: &Data) {

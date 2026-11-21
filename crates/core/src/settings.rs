@@ -1,5 +1,6 @@
 use crate::display::Screen;
 use crate::theme::{FontChoice, Preset, VisStyle};
+use crate::notch::glance::{Capsule, Decor, Layout};
 use crate::i18n::Lang;
 use crate::visibility::policy::Mode;
 
@@ -343,6 +344,10 @@ pub struct Settings {
     pub focus_mins: [u8; crate::focus::CATS],
     pub break_mins: [u8; crate::focus::CATS],
     pub focus_name: ShortText,
+    pub capsule: Capsule,
+    pub capsule_layout: Layout,
+    pub capsule_decor: Decor,
+    pub accent_rgb: Option<[u8; 3]>,
     pub meeting_companion: bool,
 }
 
@@ -435,6 +440,10 @@ impl Default for Settings {
             break_mins: crate::focus::DEFAULT_BREAK,
             focus_name: ShortText::EMPTY,
             meeting_companion: true,
+            capsule: Capsule::default(),
+            capsule_layout: Layout::Rotate,
+            capsule_decor: Decor::None,
+            accent_rgb: None,
         }
     }
 }
@@ -665,6 +674,10 @@ impl Settings {
                 "break_mins" => s.break_mins = crate::focus::parse_list(v, s.break_mins, true),
                 "focus_name" => s.focus_name = ShortText::new(v),
                 "meeting_companion" => s.meeting_companion = parse_bool(v).unwrap_or(s.meeting_companion),
+                "capsule" => s.capsule = Capsule::parse(v),
+                "capsule_layout" => s.capsule_layout = Layout::parse(v).unwrap_or(s.capsule_layout),
+                "capsule_decor" => s.capsule_decor = Decor::parse(v).unwrap_or(s.capsule_decor),
+                "accent_rgb" => s.accent_rgb = parse_hex(v),
                 "autostart" => {
                     if let Some(b) = parse_bool(v) {
                         s.autostart = b;
@@ -681,7 +694,7 @@ impl Settings {
 
     pub fn serialize(&self) -> String {
         format!(
-            "# ABRA settings\ntakeover={}\ndock={}\nnotch={}\nblur={}\nstyle={}\ntransparency={}\ntheme={}\nlang={}\ndock_material={}\ndock_round={}\nnotch_material={}\nnotch_round={}\nautostart={}\ndock_size={}\ndock_gap={}\ndock_zoom={}\ndock_margin={}\nanim={}\nrefraction={}\ndock_enabled={}\nnotch_enabled={}\nnotch_hover_open={}\nwin_shadow={}\nmenubar={}\nclock_24h={}\nmenubar_glass={}\nhot_tl={}\nhot_tr={}\nhot_bl={}\nhot_br={}\nstage={}\nswitcher={}\nstage_right={}\nstage_size={}\nstage_gap={}\nstage_count={}\nstage_speed={}\nstage_desktop_click={}\nstage_media={}\nstage_icons={}\nstage_titles={}\nhide_desktop_icons={}\nmenubar_style={}\ndock_plates={}\nover_fullscreen={}\nclipboard_history={}\nicon_style={}\nicon_tint={}\naccent={}\nmac_shortcuts={}\ndownloads_stack={}\nrecent_apps={}\nicon_pack={}\nmenubar_material={}\nicon_variant={}\nmin_effect={}\nnotch_idle={}\ngreet_name={}\ngreet_text={}\nlyrics_compact={}\nlyrics_online={}\nnotch_downloads={}\nnotch_send={}\nui_scale={}\nnotch_island={}\nwidget_style={}\nbattery_pct={}\nrail={}\nnotch_scale={}\nisland_gap={}\nupdate_check={}\nnotch_glow={}\npill_devices={}\npill_notices={}\npill_reminders={}\ntodo_hotkey={}\ndeck_screen={}\nrail_screen={}\nnotch_screen={}\nwidget_screen={}\npreset={}\nvisualizer={}\nfont={}\nreduce_motion={}\nfocus_cat={}\nfocus_mins={}\nbreak_mins={}\nfocus_name={}\nmeeting_companion={}\n",
+            "# ABRA settings\ntakeover={}\ndock={}\nnotch={}\nblur={}\nstyle={}\ntransparency={}\ntheme={}\nlang={}\ndock_material={}\ndock_round={}\nnotch_material={}\nnotch_round={}\nautostart={}\ndock_size={}\ndock_gap={}\ndock_zoom={}\ndock_margin={}\nanim={}\nrefraction={}\ndock_enabled={}\nnotch_enabled={}\nnotch_hover_open={}\nwin_shadow={}\nmenubar={}\nclock_24h={}\nmenubar_glass={}\nhot_tl={}\nhot_tr={}\nhot_bl={}\nhot_br={}\nstage={}\nswitcher={}\nstage_right={}\nstage_size={}\nstage_gap={}\nstage_count={}\nstage_speed={}\nstage_desktop_click={}\nstage_media={}\nstage_icons={}\nstage_titles={}\nhide_desktop_icons={}\nmenubar_style={}\ndock_plates={}\nover_fullscreen={}\nclipboard_history={}\nicon_style={}\nicon_tint={}\naccent={}\nmac_shortcuts={}\ndownloads_stack={}\nrecent_apps={}\nicon_pack={}\nmenubar_material={}\nicon_variant={}\nmin_effect={}\nnotch_idle={}\ngreet_name={}\ngreet_text={}\nlyrics_compact={}\nlyrics_online={}\nnotch_downloads={}\nnotch_send={}\nui_scale={}\nnotch_island={}\nwidget_style={}\nbattery_pct={}\nrail={}\nnotch_scale={}\nisland_gap={}\nupdate_check={}\nnotch_glow={}\npill_devices={}\npill_notices={}\npill_reminders={}\ntodo_hotkey={}\ndeck_screen={}\nrail_screen={}\nnotch_screen={}\nwidget_screen={}\npreset={}\nvisualizer={}\nfont={}\nreduce_motion={}\nfocus_cat={}\nfocus_mins={}\nbreak_mins={}\nfocus_name={}\nmeeting_companion={}\ncapsule={}\ncapsule_layout={}\ncapsule_decor={}\naccent_rgb={}\n",
             self.takeover,
             self.dock.key(),
             self.notch.key(),
@@ -770,9 +783,26 @@ impl Settings {
             crate::focus::list_text(self.focus_mins),
             crate::focus::list_text(self.break_mins),
             self.focus_name.as_str(),
-            self.meeting_companion
+            self.meeting_companion,
+            self.capsule.text(),
+            self.capsule_layout.key(),
+            self.capsule_decor.key(),
+            self.accent_rgb.map(hex).unwrap_or_default()
         )
     }
+}
+
+pub fn parse_hex(v: &str) -> Option<[u8; 3]> {
+    let h = v.trim().strip_prefix('#')?;
+    if h.len() != 6 || !h.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let b = |i: usize| u8::from_str_radix(&h[i..i + 2], 16).ok();
+    Some([b(0)?, b(2)?, b(4)?])
+}
+
+pub fn hex(c: [u8; 3]) -> String {
+    format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2])
 }
 
 fn parse_bool(v: &str) -> Option<bool> {
@@ -1090,5 +1120,19 @@ menubar_material=true
         let f = Settings::parse(&Settings::parse("focus_cat=3\nfocus_mins=15,45,20,90\nbreak_mins=0,5,5,15\nfocus_name=Ngoding ABRA\n").serialize());
         assert_eq!((f.focus_cat, f.focus_mins, f.break_mins, f.focus_name.as_str()), (3, [15, 45, 20, 90], [0, 5, 5, 15], "Ngoding ABRA"));
         assert_eq!(Settings::parse("focus_cat=9\n").focus_cat, 0);
+    }
+
+    #[test]
+    fn capsule_settings_round_trip() {
+        let d = Settings::default();
+        assert_eq!((d.capsule, d.capsule_layout, d.capsule_decor, d.accent_rgb), (Capsule::default(), Layout::Rotate, Decor::None, None));
+        assert_eq!(Settings::parse(&d.serialize()), d);
+        let f = Settings::parse(&Settings::parse("capsule=clock,system,agenda\ncapsule_layout=split\ncapsule_decor=edge\naccent_rgb=#7f77dd\n").serialize());
+        assert_eq!(f.capsule.text(), "clock,system,agenda");
+        assert_eq!((f.capsule_layout, f.capsule_decor, f.accent_rgb), (Layout::Split, Decor::Edge, Some([0x7F, 0x77, 0xDD])));
+        assert_eq!(Settings::parse(&Settings::parse("capsule=\n").serialize()).capsule.on, 0);
+        assert_eq!(Settings::parse("accent_rgb=#12345\n").accent_rgb, None);
+        assert_eq!(Settings::parse("accent_rgb=red\n").accent_rgb, None);
+        assert_eq!((parse_hex("#FFFFFF"), hex([1, 171, 255])), (Some([255, 255, 255]), "#01ABFF".to_string()));
     }
 }

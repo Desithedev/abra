@@ -305,6 +305,9 @@ pub struct Notch {
     battery: Option<(u8, bool)>,
     charging_fresh: bool,
     glance_idx: usize,
+    sys_info: (Option<(u64, u64)>, Option<u8>, Option<u8>),
+    wifi_name: Option<String>,
+    glance_cfg: glance::Capsule,
 
     media: Media,
     has_media: bool,
@@ -443,6 +446,9 @@ impl Notch {
                 battery: sys::battery(),
                 charging_fresh: false,
                 glance_idx: 0,
+                sys_info: (nacre_platform::sys::cpu_times(), None, nacre_platform::sys::memory_load()),
+                wifi_name: None,
+                glance_cfg: crate::prefs::get().capsule,
                 media: {
                     let hw = hwnd.0 as isize;
                     if std::env::var_os("NACRE_NO_MEDIA").is_some() {
@@ -554,6 +560,7 @@ impl Notch {
                     d.set_reserved(true);
                 }
                 d.load_focus();
+                d.refresh_glance_data();
                 d.request_today();
                 d.publish_notch();
                 d.update_visibility();
@@ -578,6 +585,7 @@ impl Notch {
 
     fn live(&self) -> Live {
         let running = self.timer.phase == Phase::Running;
+        let n_glance = self.glance_active().len();
         Live {
             media: self.has_media,
             playing: self.playing,
@@ -586,11 +594,12 @@ impl Notch {
             timer_left_s: running.then(|| self.timer.remaining_secs(self.now_ms())),
             charging_fresh: self.charging_fresh,
             shelf: self.shelf.len(),
-            glance: crate::prefs::get().notch_idle == 0,
+            glance: crate::prefs::get().notch_idle == 0 && n_glance > 0,
             download: (crate::prefs::get().notch_downloads && (self.dl.is_some() || self.dl_done.is_some())) || self.send_compact().is_some(),
             wide_music: crate::prefs::get().notch_idle == 2,
             pill: self.pills.current(self.now_ms()).is_some(),
             meeting: self.meeting.is_some(),
+            glance_pair: self.glance_pair(n_glance),
         }
     }
 
@@ -801,8 +810,39 @@ impl Notch {
         })
     }
 
-    fn glance_items(&self) -> Vec<glance::Item> {
-        glance::items(self.battery.is_some())
+    fn glance_active(&self) -> Vec<glance::Item> {
+        crate::prefs::get().capsule.active(|i| match i {
+            glance::Item::Battery => self.battery.is_some(),
+            glance::Item::System => self.sys_info.1.is_some() || self.sys_info.2.is_some(),
+            glance::Item::Wifi => self.wifi_name.is_some(),
+            glance::Item::Agenda => self.next_event().is_some(),
+            _ => true,
+        })
+    }
+
+    fn glance_pair(&self, n: usize) -> bool {
+        let s = crate::prefs::get();
+        glance::split_fits(s.capsule_layout, s.notch_scale, n)
+    }
+
+    fn next_event(&self) -> Option<(&str, u32)> {
+        let n = nacre_platform::time::local_now();
+        let now = n.hour * 60 + n.minute;
+        self.today_events.iter().filter_map(|e| e.minute.filter(|m| *m >= now).map(|m| (e.title.as_str(), m))).min_by_key(|e| e.1)
+    }
+
+    fn refresh_glance_data(&mut self) {
+        let on = crate::prefs::get().capsule;
+        let on = on.enabled();
+        if on.contains(&glance::Item::System) {
+            let now = nacre_platform::sys::cpu_times();
+            if let (Some(prev), Some(cur)) = (self.sys_info.0, now) {
+                self.sys_info.1 = Some(nacre_core::widgets::cpu_percent(prev, cur));
+            }
+            self.sys_info.0 = now.or(self.sys_info.0);
+            self.sys_info.2 = nacre_platform::sys::memory_load();
+        }
+        self.wifi_name = if on.contains(&glance::Item::Wifi) { nacre_platform::wifi::ssid() } else { None };
     }
 
     fn glance_text(&self, item: glance::Item) -> String {
@@ -822,11 +862,18 @@ impl Notch {
                 format!("{}, {} {}", days[wd], now.day, month)
             }
             glance::Item::Battery => self.battery.map_or(String::new(), |(p, _)| format!("{p}%")),
+            glance::Item::System => glance::system_text(self.sys_info.1, self.sys_info.2),
+            glance::Item::Wifi => self.wifi_name.clone().unwrap_or_default(),
+            glance::Item::Agenda => self.next_event().map_or(String::new(), |(t, m)| format!("{t} \u{00B7} {}", glance::clock(m / 60, m % 60, s.clock_24h, lang))),
         }
     }
 
     fn sync_glance(&self) {
-        if self.look == state::look(Mode::Rest, Some(state::Activity::Glance)) {
+        let act = self.glance_active();
+        let pair = self.look.view == View::Compact(state::Activity::GlancePair);
+        let rest = matches!(self.look.view, View::Compact(state::Activity::Glance | state::Activity::GlancePair)) && !self.look.peek;
+        let live_data = act.iter().any(|i| matches!(i, glance::Item::System | glance::Item::Clock));
+        if rest && (glance::turns(act.len(), pair) > 1 || live_data) {
             let ms = std::env::var("NACRE_GLANCE_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(glance::ROTATE_MS);
             timer(self.hwnd, T_GLANCE, ms);
         } else {
@@ -835,7 +882,14 @@ impl Notch {
     }
 
     fn rotate_glance(&mut self) {
-        let n = self.glance_items().len();
+        self.refresh_glance_data();
+        let act = self.glance_active();
+        let n = glance::turns(act.len(), self.glance_pair(act.len()));
+        if n <= 1 {
+            self.glance_idx = 0;
+            self.refresh();
+            return;
+        }
         self.glance_idx = glance::next(self.glance_idx, n);
         self.retire_content(120);
         let rise = 6.0 * self.dpi;
@@ -962,9 +1016,13 @@ impl Notch {
         self.regions.clear();
         let f = Frame { x0: self.x0(), w: self.size.w, h: self.size.h };
         let now_ms = self.now_ms();
-        let items = self.glance_items();
-        let item = items[self.glance_idx.min(items.len() - 1)];
-        let glance = (self.look.view == View::Compact(state::Activity::Glance)).then(|| (item, self.glance_text(item)));
+        let glance: Vec<(glance::Item, String)> = if matches!(self.look.view, View::Compact(state::Activity::Glance | state::Activity::GlancePair)) {
+            let act = self.glance_active();
+            let pair = self.look.view == View::Compact(state::Activity::GlancePair);
+            glance::shown(&act, self.glance_idx, pair).into_iter().map(|i| (i, self.glance_text(i))).collect()
+        } else {
+            Vec::new()
+        };
         self.live_vis = views::Live::default();
         if self.mode == Mode::Open(Tab::Shelf) {
             self.load_shelf_icons();
@@ -1300,8 +1358,18 @@ impl Notch {
     }
 
     fn paint_glow(&mut self) {
-        let rgb = self.glow_on().then(|| self.tint.unwrap_or_else(crate::prefs::accent));
+        let s = crate::prefs::get();
+        let edge = s.capsule_decor == glance::Decor::Edge
+            && matches!(self.look.view, View::Compact(state::Activity::Glance | state::Activity::GlancePair))
+            && self.shown
+            && !self.off
+            && !self.overlap.fullscreen;
+        let music = self.glow_on();
+        let rgb = if music { Some(self.tint.unwrap_or_else(crate::prefs::accent)) } else { edge.then(crate::prefs::accent) };
         self.body.set_aurora(rgb);
+        if edge && !music {
+            self.body.react([0.3, 0.22, 0.3]);
+        }
     }
 
     fn sync_progress(&self) {
@@ -1920,7 +1988,8 @@ impl Notch {
     }
 
     fn request_today(&mut self) {
-        if !crate::prefs::get().meeting_companion {
+        let s = crate::prefs::get();
+        if !s.meeting_companion && !s.capsule.enabled().contains(&glance::Item::Agenda) {
             return;
         }
         if self.agenda.is_none() {
@@ -2299,6 +2368,14 @@ impl Notch {
         }
         self.update_visibility();
         self.sync_download_watch();
+        if s.capsule != self.glance_cfg {
+            self.glance_cfg = s.capsule;
+            self.glance_idx = 0;
+            self.refresh_glance_data();
+            if self.agenda.is_none() {
+                self.request_today();
+            }
+        }
         self.first = true;
         self.on_reconfigure();
         self.refresh();
@@ -2497,7 +2574,7 @@ impl Notch {
                 self.update_meeting();
                 if sys::battery() != self.battery {
                     self.on_power();
-                } else if matches!(self.look.view, View::Compact(state::Activity::Glance) | View::Open(_)) && self.todo_edit.is_none() {
+                } else if matches!(self.look.view, View::Compact(state::Activity::Glance | state::Activity::GlancePair) | View::Open(_)) && self.todo_edit.is_none() {
                     self.render();
                 }
                 timer(self.hwnd, T_MINUTE, nacre_platform::time::ms_to_next_minute());

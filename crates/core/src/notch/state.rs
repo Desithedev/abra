@@ -77,6 +77,7 @@ pub enum Activity {
     Timer,
     Shelf,
     Glance,
+    GlancePair,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -93,6 +94,7 @@ pub struct Live {
     pub wide_music: bool,
     pub pill: bool,
     pub meeting: bool,
+    pub glance_pair: bool,
 }
 
 pub fn activity(l: &Live) -> Option<Activity> {
@@ -127,7 +129,7 @@ pub fn activity(l: &Live) -> Option<Activity> {
         return Some(Activity::Shelf);
     }
     if l.glance {
-        return Some(Activity::Glance);
+        return Some(if l.glance_pair { Activity::GlancePair } else { Activity::Glance });
     }
     None
 }
@@ -179,6 +181,7 @@ pub fn size(l: Look, dpi: f32) -> Size {
         View::Rest => (184.0, 30.0, 15.0),
         View::Compact(Activity::Lyrics) => (420.0, 32.0, 16.0),
         View::Compact(Activity::Glance) => (220.0, 30.0, 15.0),
+        View::Compact(Activity::GlancePair) => (300.0, 30.0, 15.0),
         View::Compact(Activity::Download) => (300.0, 36.0, 18.0),
         View::Compact(Activity::Pill) => (330.0, 36.0, 18.0),
         View::Compact(Activity::Player) => (540.0, 100.0, 30.0),
@@ -267,7 +270,7 @@ mod tests {
 
     #[test]
     fn activity_priority() {
-        let base = Live { media: true, playing: true, lyric_line: true, lyrics_on: true, timer_left_s: Some(30), charging_fresh: true, shelf: 2, glance: true, download: true, wide_music: false, pill: false, meeting: false };
+        let base = Live { media: true, playing: true, lyric_line: true, lyrics_on: true, timer_left_s: Some(30), charging_fresh: true, shelf: 2, glance: true, download: true, wide_music: false, pill: false, meeting: false, glance_pair: false };
         assert_eq!(activity(&base), Some(Activity::TimerEnding));
         assert_eq!(activity(&Live { timer_left_s: Some(300), ..base }), Some(Activity::Download), "unduhan di atas lirik dan musik");
         let l = Live { timer_left_s: Some(300), download: false, ..base };
@@ -287,6 +290,8 @@ mod tests {
         let idle = Live { charging_fresh: false, timer_left_s: None, shelf: 0, ..no_media };
         assert_eq!(activity(&idle), Some(Activity::Glance), "sapaan & info hanya bila tidak ada apa-apa lagi");
         assert_eq!(activity(&Live { glance: false, ..idle }), None);
+        assert_eq!(activity(&Live { glance_pair: true, ..idle }), Some(Activity::GlancePair));
+        assert_eq!(activity(&Live { glance_pair: true, glance: false, ..idle }), None);
         assert_eq!(activity(&Live::default()), None);
     }
 
@@ -298,6 +303,8 @@ mod tests {
         assert_eq!((peek.w - rest.w, peek.h - rest.h), PEEK_GROW);
         let glance = size(look(Mode::Rest, Some(Activity::Glance)), 1.0);
         assert!(glance.w > rest.w && glance.w < 240.0 && glance.h == rest.h, "sapaan & info sedikit lebih lebar dari notch kosong");
+        let pair = size(look(Mode::Rest, Some(Activity::GlancePair)), 1.0);
+        assert!(pair.w > glance.w && pair.h == glance.h, "dua modul butuh Capsule lebih lebar");
         let player = size(look(Mode::Rest, Some(Activity::Player)), 1.0);
         assert!(player.w > 500.0 && player.w < 600.0 && player.h > 80.0 && player.h < 214.0, "lebar: lebih kecil dari panel terbuka");
         let dl = size(look(Mode::Rest, Some(Activity::Download)), 1.0);

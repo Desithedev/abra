@@ -1,6 +1,7 @@
 pub mod appcat;
 pub mod appmenus;
 pub mod clipstack;
+pub mod community;
 pub mod controls;
 pub mod display;
 pub mod dock;

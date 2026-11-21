@@ -109,6 +109,21 @@ hanya tulisan di tengah), jam, tanggal, dan baterai (ikon di kiri, nilai di kana
 diam* → **Tampilkan** ada tiga pilihan: **Sapaan & info**, **Musik & lirik**, dan **Kosong**; di sana juga **Nama
 panggilan** dan **Teks sapaan**.
 
+**Modul Capsule** (Pengaturan → Visor → *Modul Capsule*, muncul bila *Tampilkan* = Sapaan & info) mengatur isi Visor dan
+Capsule saat diam:
+
+- **Modul**: Sapaan, Jam, Tanggal, Baterai, Status sistem (CPU dan RAM), Wi‑Fi (nama jaringan), dan Agenda berikutnya
+  (acara hari ini dari Kalender Windows). Nyalakan atau matikan tiap modul; modul yang menyala selalu di atas dan bisa
+  diurutkan dengan tombol **↑ ↓**. Modul yang datanya tidak ada (misalnya Baterai di PC desktop, atau Wi‑Fi saat memakai
+  kabel) dilewati. Bila semua modul mati, Visor kosong saat diam.
+- **Tata letak**: **Bergantian** menampilkan satu modul yang berganti tiap ±9 detik. **Berdampingan** menampilkan dua
+  sekaligus di Capsule yang sedikit lebih lebar: modul pertama tetap di kiri, sisanya bergantian di kanan. Paling banyak
+  dua modul tampil bersamaan, dan bila *Ukuran* Visor di bawah 90% tampilannya kembali satu per satu.
+- **Hiasan**: **Tidak ada**, **Titik aksen** (titik kecil berwarna aksen di kiri), atau **Kilau tepi** (cahaya lembut
+  berwarna aksen di bagian bawah Visor saat diam).
+
+Aktivitas (rapat, musik, fokus, unduhan, pill) tetap lebih penting dan menggantikan modul selama berlangsung.
+
 **Musik & lirik:** selama ada lagu (diputar maupun dijeda), Visor diam melebar dan sedikit turun: sampul kecil dengan
 ikon app pemutarnya (Spotify, browser, Media Player…) di sudutnya, tombol **mundur · putar/jeda · maju** di bawah sampul,
 dan lirik di kanan dengan gaya yang sama seperti tab Putar (baris aktif tebal, baris lain redup dan buram, bergulir naik).
@@ -370,12 +385,65 @@ Jendela Pengaturan ABRA bergaya panel pengaturan modern: sidebar berikon warna d
 |---|---|
 | **Umum** | Bahasa (Indonesia/English), jalankan saat login, sembunyikan taskbar Windows, sembunyikan ikon desktop, selalu di atas jendela layar penuh, animasi jendela, bayangan jendela aktif |
 | **Deck** | Aktifkan Deck, perilaku, **Tampilkan di** (bila ada lebih dari satu layar), ikon seragam, ukuran ikon, jarak, zoom, jarak dari tepi, kebulatan sudut |
-| **Visor** | Aktifkan Visor, bentuk, perilaku, **Tampilkan di**, **Visualizer musik** (Batang, Spektrum, Gelombang, Titik), kebulatan sudut, buka otomatis saat kursor di Visor |
+| **Visor** | Aktifkan Visor, bentuk, perilaku, **Tampilkan di**, **Visualizer musik** (Batang, Spektrum, Gelombang, Titik), kebulatan sudut, buka otomatis saat kursor di Visor, **Modul Capsule** (modul, urutan, tata letak, hiasan) |
 | **Rail** | Aktifkan Rail, perilaku, **Tampilkan di**, latar (Transparan, Terang, Gelap, Material), jam 24 jam |
-| **Tampilan** | **Preset** (Bawaan, Prism, Neon, Aurora, Stealth, Pixel: sekali klik mengubah warna, material, sudut, dan visualizer Deck, Rail, dan Visor; semua tetap bisa diatur ulang sesudahnya); **Huruf dan gerak**: font (Inter, Segoe UI, Bahnschrift, Mono; berlaku setelah tombol **Buka ulang**) dan **Kurangi gerakan** (visualizer, cahaya Aurora, dan animasi Visor berhenti); kartu pratinjau **Otomatis · Terang · Gelap**; **Tema**: warna aksen (Multiwarna = ikut warna aksen Windows, lalu 8 warna), kartu **gaya ikon & widget** Bawaan · Gelap · Bening · Berwarna dengan pilihan Terang · Gelap · Otomatis, warna tint, paket ikon; **Kaca**: material global (Blur, Crystal, Hitam buram), material Visor, tingkat blur, transparansi, refraksi tepi kaca |
+| **Tampilan** | **Preset** (Bawaan, Prism, Neon, Aurora, Stealth, Pixel: sekali klik mengubah warna, material, sudut, dan visualizer Deck, Rail, dan Visor; semua tetap bisa diatur ulang sesudahnya); **Huruf dan gerak**: font (Inter, Segoe UI, Bahnschrift, Mono; berlaku setelah tombol **Buka ulang**) dan **Kurangi gerakan** (visualizer, cahaya Aurora, dan animasi Visor berhenti); **Tema komunitas** (lihat di bawah); kartu pratinjau **Otomatis · Terang · Gelap**; **Tema**: warna aksen (Multiwarna = ikut warna aksen Windows, lalu 8 warna), kartu **gaya ikon & widget** Bawaan · Gelap · Bening · Berwarna dengan pilihan Terang · Gelap · Otomatis, warna tint, paket ikon; **Kaca**: material global (Blur, Crystal, Hitam buram), material Visor, tingkat blur, transparansi, refraksi tepi kaca |
 | **Scene** | Semua pengaturan Scene |
 | **Screen Corners** | Aksi untuk empat screen corner |
 | **Quick Search** | Riwayat Papan Klip |
+
+### Tema komunitas
+
+Tema komunitas adalah berkas teks kecil berakhiran `.abratheme` yang bisa Anda bagikan. Pengaturan → Tampilan → **Tema
+komunitas** menampilkan tema di folder `%APPDATA%\ABRA\themes`, masing-masing dengan status:
+
+- **Valid**: semua isinya dikenali. Klik **Pakai** untuk memakainya.
+- **Sebagian**: ada kunci yang tidak dikenali atau nilainya salah; kunci itu diabaikan dan sisanya tetap bisa dipakai.
+- **Ditolak**: bukan berkas tema ABRA, lebih dari 16 KB, bukan teks, atau tidak berisi pengaturan apa pun.
+
+**Impor tema** menyalin berkas yang Anda pilih ke folder tema setelah diperiksa. **Bagikan tampilanku sebagai tema**
+menyimpan tampilan Anda sekarang sebagai `Tampilanku.abratheme` dan membuka foldernya. Berkas ekspor tidak berisi nama
+atau data pribadi; isi `author=` sendiri bila mau.
+
+Contoh isi tema (baris yang diawali `#` adalah catatan dan diabaikan):
+
+```
+abra_theme=1
+name=Midnight Glass
+author=rani
+preset=stealth
+theme=dark
+accent=#7F77DD
+font=bahnschrift
+visualizer=wave
+transparency=30
+round=60
+glow=on
+motion=normal
+decor=dot
+capsule=clock,battery,system
+capsule_layout=split
+```
+
+| Kunci | Nilai |
+|---|---|
+| `abra_theme` | Wajib di baris pertama, versi format (sekarang `1`) |
+| `name`, `author` | Teks, maksimal 40 karakter |
+| `preset` | `default`, `prism`, `neon`, `aurora`, `stealth`, `pixel` (dipakai lebih dulu, kunci lain menimpanya) |
+| `theme` | `auto`, `light`, `dark` |
+| `accent` | `system`, `blue`, `purple`, `pink`, `red`, `orange`, `yellow`, `green`, `graphite`, atau `#RRGGBB` |
+| `font` | `inter`, `segoe`, `bahnschrift`, `mono` |
+| `visualizer` | `bars`, `spectrum`, `wave`, `dots` |
+| `transparency`, `round` | Angka 0–100 (di luar rentang dipotong) |
+| `glow` | `on` atau `off` (Aurora warna album) |
+| `motion` | `normal` atau `reduce` |
+| `decor` | `none`, `dot`, `edge` |
+| `capsule` | Daftar modul berurutan: `greeting`, `clock`, `date`, `battery`, `system`, `wifi`, `agenda` |
+| `capsule_layout` | `rotate` atau `split` |
+
+Tema hanya bisa mengubah tampilan. Tema tidak bisa menjalankan program, membuka tautan, mengunduh apa pun, atau
+mengubah pengaturan lain seperti perilaku Deck, pintasan, atau startup. Warna aksen dari tema muncul sebagai lingkaran
+tambahan di **Warna**; klik warna lain untuk kembali ke pilihan bawaan.
 
 Semua perubahan langsung berlaku. Berkas konfigurasi ada di folder `%APPDATA%\ABRA`:
 
@@ -386,6 +454,7 @@ Semua perubahan langsung berlaku. Berkas konfigurasi ada di folder `%APPDATA%\AB
 | `icons.txt` dan folder `icons\` | Ikon kustom |
 | `cc_layout.txt` | Susunan modul Quick Panel |
 | `stage_exclude.txt` | Program yang dikecualikan dari Scene |
+| `themes\` | Tema komunitas (`.abratheme`) |
 | `abra.log` | Log (berguna untuk laporan bug) |
 
 **Opsi baris perintah** yang berguna untuk pengguna: `--keep-taskbar` (jangan sembunyikan taskbar Windows), `--open-settings`,
@@ -430,7 +499,10 @@ Pintasan lain (screen corner) diatur di Pengaturan. Bila sebuah pintasan tidak b
   saat kartu itu terlihat. Bila **Pengingat rapat dari Kalender Windows** aktif (Pengaturan → Visor → Rapat, bawaan aktif),
   ABRA juga membaca acara hari ini kira-kira tiap 10 menit untuk menampilkan rapat 10 menit sebelum mulai, lengkap dengan
   tombol **Gabung** bila acaranya punya link (Meet, Zoom, Teams, dan sejenisnya) serta titik mikrofon dan kamera saat
-  rapat berlangsung. Tidak ada yang disimpan atau dikirim.
+  rapat berlangsung. Modul **Agenda berikutnya** di Capsule memakai bacaan yang sama. Tidak ada yang disimpan atau
+  dikirim.
+- **Tema komunitas.** Berkas `.abratheme` hanya dibaca sebagai teks dan diperiksa sebelum dipakai. Tema tidak bisa
+  menjalankan kode, membuka tautan, atau mengunduh apa pun.
 - **Ambil warna.** Aksi "Ambil Warna dari Layar" di Quick Search hanya membaca satu piksel di titik yang Anda klik, lalu
   menyalin kodenya (misalnya `#7F77DD`). Klik kanan atau `Esc` membatalkan.
 - **Hook keyboard.** Saat Scene dan pengalih Alt+Tab aktif, ABRA memasang hook keyboard tingkat rendah semata-mata untuk

@@ -142,7 +142,11 @@ fn note_missing(src: &'static str) {
 }
 
 pub fn accent() -> [u8; 3] {
-    let a = get().accent;
+    let s = get();
+    if let Some(c) = s.accent_rgb {
+        return c;
+    }
+    let a = s.accent;
     if a == settings::ACCENT_MULTI {
         return nacre_platform::sys::accent_color().unwrap_or(settings::ACCENTS[0]);
     }

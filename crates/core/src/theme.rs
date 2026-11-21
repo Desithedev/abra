@@ -156,6 +156,7 @@ pub fn apply(s: &mut Settings, p: Preset) {
     s.dock_material = d.dock_material;
     s.notch_material = d.notch_material;
     s.accent = d.accent;
+    s.accent_rgb = None;
     s.icon_style = d.icon_style;
     s.menubar_glass = d.menubar_glass;
     s.menubar_material = d.menubar_material;

@@ -105,6 +105,15 @@ enum Action {
     Font(nacre_core::theme::FontChoice),
     ReduceMotion,
     Meeting,
+    CapLayout(nacre_core::notch::glance::Layout),
+    CapDecor(nacre_core::notch::glance::Decor),
+    CapToggle(u8),
+    CapMove(u8, bool),
+    CapGrow,
+    ThemeUse(u8),
+    ThemeImport,
+    ThemeExport,
+    ThemeFolder,
     Relaunch,
     Theme(Theme),
     Lang(Lang),
@@ -170,6 +179,8 @@ enum RowDef {
     Thumbs(&'static str, Vec<(&'static str, Thumb, Action)>, usize),
     Radios(Vec<(&'static str, Action)>, usize),
     Text(&'static str, String, String, u8),
+    Order(&'static str, bool, u8, bool, bool),
+    Theme(String, String, u8, Option<Action>),
 }
 
 #[derive(Clone, Copy)]
@@ -178,12 +189,14 @@ enum Thumb {
     Icon(nacre_core::settings::IconStyle),
 }
 
+const ACCENT_KEEP: u8 = 254;
+
 const ACCENT_NAMES: [&str; 9] = ["Multiwarna", "Biru", "Ungu", "Merah Muda", "Merah", "Oranye", "Kuning", "Hijau", "Grafit"];
 
 fn row_label(r: &RowDef) -> &'static str {
     match r {
-        RowDef::Toggle(l, ..) | RowDef::Seg(l, ..) | RowDef::Slider(l, ..) | RowDef::Pick(l, ..) | RowDef::Swatches(l, ..) | RowDef::Thumbs(l, ..) | RowDef::Text(l, ..) => l,
-        RowDef::Radios(..) => "",
+        RowDef::Toggle(l, ..) | RowDef::Seg(l, ..) | RowDef::Slider(l, ..) | RowDef::Pick(l, ..) | RowDef::Swatches(l, ..) | RowDef::Thumbs(l, ..) | RowDef::Text(l, ..) | RowDef::Order(l, ..) => l,
+        RowDef::Radios(..) | RowDef::Theme(..) => "",
     }
 }
 
@@ -289,7 +302,15 @@ fn create(comp: &Compositor) -> windows_core::Result<()> {
     let _ = popup.panel.set_tier(tier);
     let _ = popup.panel.set_radius(24.0 * dpi);
     let mut win = Box::new(Win { popup, gfx, comp: comp.clone(), dpi, size: (0.0, 0.0), regions: vec![], cache: HashMap::new(), dragging: None, side: vec![], side_hover: None, side_scroll: 0.0, side_view: (0.0, 0.0), side_bar: None, side_drag: None, press: None, tab: 0, scroll: 0.0, content_h: 0.0, history: vec![0], hpos: 0, search: String::new(), search_focus: false, thumbs: HashMap::new(), edit: None, edit_buf: String::new(), frame: None, frame_key: (0, 0, false) });
+    if let Some(t) = std::env::var("NACRE_TEST_PAGE").ok().and_then(|v| v.parse::<u8>().ok()) {
+        win.tab = t;
+        win.history = vec![t];
+    }
     win.render();
+    if let Some(y) = std::env::var("NACRE_TEST_SCROLL").ok().and_then(|v| v.parse::<f32>().ok()) {
+        win.scroll = (y * win.dpi).min((win.content_h - 200.0 * win.dpi).max(0.0));
+        win.render();
+    }
     let (sw, sh) = sys::screen_size();
     let (w, h) = (win.size.0 as i32, win.size.1 as i32);
     let top = ((sh - h) / 2).clamp(12, (sh - h - 12).max(12));
@@ -615,7 +636,8 @@ impl Win {
                 RowDef::Swatches(label, sel) => {
                     self.text(c, label, lx, y + 13.0 * d, 13.5, 400, look.fg, 0.95, 0);
                     let (dia, gap) = (19.0 * d, 10.0 * d);
-                    let n = nacre_core::settings::ACCENTS.len() + 1;
+                    let custom = prefs::get().accent_rgb;
+                    let n = nacre_core::settings::ACCENTS.len() + 1 + usize::from(custom.is_some());
                     let total_w = n as f32 * (dia + gap) - gap;
                     let mut sx = rx - total_w;
                     let cy = y + 12.0 * d;
@@ -626,14 +648,16 @@ impl Win {
                             if let Some(s) = self.thumb_surface(key, px, px, || nacre_core::preview::multicolor(px)) {
                                 self.sprite(c, &s, sx, cy, dia, dia);
                             }
+                        } else if i > nacre_core::settings::ACCENTS.len() {
+                            self.rect(c, sx, cy, dia, dia, dia / 2.0, col(custom.unwrap_or([128, 128, 128]), 255));
                         } else {
                             self.rect(c, sx, cy, dia, dia, dia / 2.0, col(nacre_core::settings::ACCENTS[i - 1], 255));
                         }
                         if i == *sel {
                             self.rect(c, sx + dia * 0.32, cy + dia * 0.32, dia * 0.36, dia * 0.36, dia * 0.18, Color { A: 255, R: 255, G: 255, B: 255 });
-                            self.text(c, prefs::tr(ACCENT_NAMES[i]), sx + dia / 2.0, cy + dia + 5.0 * d, 10.5, 500, look.fg, 0.7, 1);
+                            self.text(c, prefs::tr(ACCENT_NAMES.get(i).copied().unwrap_or("Tema")), sx + dia / 2.0, cy + dia + 5.0 * d, 10.5, 500, look.fg, 0.7, 1);
                         }
-                        let v = if i == 0 { nacre_core::settings::ACCENT_MULTI } else { (i - 1) as u8 };
+                        let v = if i == 0 { nacre_core::settings::ACCENT_MULTI } else if i > nacre_core::settings::ACCENTS.len() { ACCENT_KEEP } else { (i - 1) as u8 };
                         self.region(sx - 2.0 * d, y, dia + 4.0 * d, rh, Action::Accent(v));
                         sx += dia + gap;
                     }
@@ -710,6 +734,57 @@ impl Win {
                     self.text(c, &shown, bx + 12.0 * d, by + (bh - 16.0 * d) / 2.0 - 1.0, 12.5, 500, look.fg, op, 0);
                     self.region(bx, y, bw, rh, Action::EditText(*field));
                 }
+                RowDef::Order(label, on, idx, up, down) => {
+                    self.text(c, label, lx, y + (rh - 17.0 * d) / 2.0, 13.5, 400, look.fg, if *on { 0.95 } else { 0.55 }, 0);
+                    let (tw, th) = (46.0 * d, 22.0 * d);
+                    let (tx, ty) = (rx - tw, y + (rh - th) / 2.0);
+                    self.rect(c, tx, ty, tw, th, th / 2.0, if *on { col(accent, 255) } else { col(look.fg, 60) });
+                    let knob = th - 4.0 * d;
+                    let kw = knob * 1.55;
+                    let kx = if *on { tx + tw - kw - 2.0 * d } else { tx + 2.0 * d };
+                    self.rect(c, kx, ty + 2.0 * d, kw, knob, knob / 2.0, Color { A: 255, R: 255, G: 255, B: 255 });
+                    self.region(x0, y, cw, rh, Action::CapToggle(*idx));
+                    if *on {
+                        let bs = 26.0 * d;
+                        let by = y + (rh - bs) / 2.0;
+                        for (k, (glyph, can, up_dir)) in [("\u{2191}", *up, true), ("\u{2193}", *down, false)].into_iter().enumerate() {
+                            let bx = tx - 12.0 * d - (2 - k) as f32 * (bs + 6.0 * d);
+                            self.rect(c, bx, by, bs, bs, bs / 2.0, col(look.fg, if can { 30 } else { 12 }));
+                            self.text(c, glyph, bx + bs / 2.0, by + (bs - 17.0 * d) / 2.0, 13.0, 600, look.fg, if can { 0.9 } else { 0.3 }, 1);
+                            if can {
+                                self.region(bx - 2.0 * d, y, bs + 4.0 * d, rh, Action::CapMove(*idx, up_dir));
+                            }
+                        }
+                    }
+                }
+                RowDef::Theme(name, detail, state, act) => {
+                    let ny = if detail.is_empty() { y + (rh - 17.0 * d) / 2.0 } else { y + 5.0 * d };
+                    self.text(c, name, lx, ny, 13.5, 500, look.fg, 0.95, 0);
+                    if !detail.is_empty() {
+                        self.text(c, detail, lx, y + 23.0 * d, 11.0, 400, look.fg, 0.55, 0);
+                    }
+                    let (badge, rgb): (&str, [u8; 3]) = match state {
+                        0 => (prefs::tr("Valid"), [48, 209, 88]),
+                        1 => (prefs::tr("Sebagian"), [255, 159, 10]),
+                        _ => (prefs::tr("Ditolak"), [255, 69, 58]),
+                    };
+                    let mut bx = rx;
+                    if let Some(a) = act {
+                        let label = prefs::tr("Pakai");
+                        let vw = (measure(label, &Style { px: (12.5 * d).round() as i32, weight: 500 }).0 as f32 + 32.0 * d).max(72.0 * d);
+                        let bh = 26.0 * d;
+                        let by = y + (rh - bh) / 2.0;
+                        self.rect(c, rx - vw, by, vw, bh, bh / 2.0, col(look.fg, 30));
+                        self.text(c, label, rx - vw / 2.0, by + (bh - 16.0 * d) / 2.0 - 1.0, 12.5, 500, look.fg, 1.0, 1);
+                        self.region(rx - vw, y, vw, rh, *a);
+                        bx = rx - vw - 10.0 * d;
+                    }
+                    let bw = measure(badge, &Style { px: (11.0 * d).round() as i32, weight: 600 }).0 as f32 + 18.0 * d;
+                    let bh = 20.0 * d;
+                    let by = y + (rh - bh) / 2.0;
+                    self.rect(c, bx - bw, by, bw, bh, bh / 2.0, col(rgb, 40));
+                    self.text(c, badge, bx - bw / 2.0, by + (bh - 14.0 * d) / 2.0 - 1.0, 11.0, 600, rgb, 1.0, 1);
+                }
                 RowDef::Pick(label, value, act) => {
                     self.text(c, label, lx, y + (rh - 17.0 * d) / 2.0, 13.5, 400, look.fg, 0.95, 0);
                     let vw = (measure(value, &Style { px: (12.5 * d).round() as i32, weight: 500 }).0 as f32 + 44.0 * d).max(96.0 * d);
@@ -745,6 +820,30 @@ impl Win {
             }
             groups.push((Some(prefs::tr("Sesi fokus")), rows));
             groups.push((Some(prefs::tr("Rapat")), vec![RowDef::Toggle(prefs::tr("Pengingat rapat dari Kalender Windows"), s.meeting_companion, Action::Meeting)]));
+            if s.notch_idle == 0 {
+                use nacre_core::notch::glance::{Decor, Layout};
+                let mut rows = vec![
+                    RowDef::Seg(prefs::tr("Tata letak"), vec![(prefs::tr("Bergantian"), Action::CapLayout(Layout::Rotate)), (prefs::tr("Berdampingan"), Action::CapLayout(Layout::Split))], usize::from(s.capsule_layout == Layout::Split)),
+                    RowDef::Seg(
+                        prefs::tr("Hiasan"),
+                        vec![(prefs::tr("Tidak ada"), Action::CapDecor(Decor::None)), (prefs::tr("Titik aksen"), Action::CapDecor(Decor::Dot)), (prefs::tr("Kilau tepi"), Action::CapDecor(Decor::Edge))],
+                        match s.capsule_decor {
+                            Decor::None => 0,
+                            Decor::Dot => 1,
+                            Decor::Edge => 2,
+                        },
+                    ),
+                ];
+                if s.capsule_layout == Layout::Split && s.notch_scale < nacre_core::notch::glance::SPLIT_MIN_SCALE {
+                    rows.push(RowDef::Pick(prefs::tr("Visor kecil: modul tampil satu per satu"), prefs::tr("Besarkan").to_string(), Action::CapGrow));
+                }
+                let on = s.capsule.on as usize;
+                for (i, it) in s.capsule.order.iter().enumerate() {
+                    rows.push(RowDef::Order(prefs::tr(it.title()), i < on, i as u8, i < on && i > 0, i + 1 < on));
+                }
+                let at = groups.iter().position(|g| g.0 == Some(prefs::tr("Saat Visor diam"))).map_or(groups.len(), |i| i + 1);
+                groups.insert(at, (Some(prefs::tr("Modul Capsule")), rows));
+            }
         }
         if let Some(row) = screen_row(part, cur) {
             if let Some(g) = groups.first_mut() {
@@ -965,7 +1064,7 @@ impl Win {
                     IconStyle::Clear => 2,
                     IconStyle::Tinted => 3,
                 };
-                let accent_idx = if s.accent == nacre_core::settings::ACCENT_MULTI { 0 } else { s.accent as usize + 1 };
+                let accent_idx = if s.accent_rgb.is_some() { nacre_core::settings::ACCENTS.len() + 1 } else if s.accent == nacre_core::settings::ACCENT_MULTI { 0 } else { s.accent as usize + 1 };
                 let mut theme = vec![
                     RowDef::Swatches(prefs::tr("Warna"), accent_idx),
                     RowDef::Thumbs(
@@ -1055,6 +1154,31 @@ impl Win {
                         if s.font != prefs::launch_font() {
                             rows.insert(1, RowDef::Pick(prefs::tr("Font baru berlaku setelah ABRA dibuka ulang"), prefs::tr("Buka ulang").to_string(), Action::Relaunch));
                         }
+                        rows
+                    }),
+                    (Some(prefs::tr("Tema komunitas")), {
+                        let mut rows: Vec<RowDef> = crate::themes::list()
+                            .iter()
+                            .enumerate()
+                            .map(|(i, t)| {
+                                let (detail, state) = match &t.status {
+                                    crate::themes::Status::Valid => (if t.author.is_empty() { String::new() } else { format!("{} {}", prefs::tr("oleh"), t.author) }, 0u8),
+                                    crate::themes::Status::Partial(n) => (format!("{n} {}", prefs::tr("kunci diabaikan")), 1),
+                                    crate::themes::Status::Rejected(r) => (prefs::tr(r.reason()).to_string(), 2),
+                                };
+                                RowDef::Theme(t.name.clone(), detail, state, (state < 2).then_some(Action::ThemeUse(i as u8)))
+                            })
+                            .collect();
+                        if let Some((name, why)) = crate::themes::notice() {
+                            rows.insert(0, RowDef::Theme(name, prefs::tr(why.reason()).to_string(), 2, None));
+                        }
+                        if rows.is_empty() {
+                            rows.push(RowDef::Pick(prefs::tr("Belum ada tema"), prefs::tr("Buka folder").to_string(), Action::ThemeFolder));
+                        } else {
+                            rows.push(RowDef::Pick(prefs::tr("Folder tema"), prefs::tr("Buka folder").to_string(), Action::ThemeFolder));
+                        }
+                        rows.push(RowDef::Pick(prefs::tr("Impor tema (.abratheme)"), prefs::tr("Pilih berkas").to_string(), Action::ThemeImport));
+                        rows.push(RowDef::Pick(prefs::tr("Bagikan tampilanku sebagai tema"), prefs::tr("Ekspor").to_string(), Action::ThemeExport));
                         rows
                     }),
                 ]
@@ -1703,6 +1827,25 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 Some(Action::Font(f)) => prefs::update(|s| s.font = f),
                 Some(Action::ReduceMotion) => prefs::update(|s| s.reduce_motion = !s.reduce_motion),
                 Some(Action::Meeting) => prefs::update(|s| s.meeting_companion = !s.meeting_companion),
+                Some(Action::CapLayout(l)) => prefs::update(|s| s.capsule_layout = l),
+                Some(Action::CapDecor(d)) => prefs::update(|s| s.capsule_decor = d),
+                Some(Action::CapToggle(i)) => prefs::update(|s| s.capsule.toggle(i as usize)),
+                Some(Action::CapMove(i, up)) => prefs::update(|s| s.capsule.shift(i as usize, up)),
+                Some(Action::CapGrow) => prefs::update(|s| s.notch_scale = s.notch_scale.max(nacre_core::notch::glance::SPLIT_MIN_SCALE)),
+                Some(Action::ThemeUse(i)) => crate::themes::apply(i as usize),
+                Some(Action::ThemeFolder) => nacre_platform::launch::open(&crate::themes::dir().to_string_lossy()),
+                Some(Action::ThemeImport) => {
+                    if let Some(path) = nacre_platform::pick::open_file(prefs::tr("Impor tema"), &[(prefs::tr("Tema ABRA"), "*.abratheme")]) {
+                        crate::themes::import(std::path::Path::new(&path));
+                        with_win(|w| w.render());
+                    }
+                }
+                Some(Action::ThemeExport) => {
+                    if let Some(path) = crate::themes::export() {
+                        nacre_platform::launch::show("explorer.exe", &format!("/select,\"{}\"", path.display()));
+                        with_win(|w| w.render());
+                    }
+                }
                 Some(Action::Relaunch) => crate::mainwin::relaunch(),
                 Some(Action::Screen(part, v)) => prefs::update(|s| match part {
                     0 => s.deck_screen = v,
@@ -1726,7 +1869,11 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 Some(Action::StageRight(r)) => prefs::update(|s| s.stage_right = r),
                 Some(Action::StageIcons(m)) => prefs::update(|s| s.stage_icons = m),
                 Some(Action::MacKeys) => prefs::update(|s| s.mac_shortcuts = !s.mac_shortcuts),
-                Some(Action::Accent(i)) => prefs::update(|s| s.accent = i),
+                Some(Action::Accent(ACCENT_KEEP)) => {}
+                Some(Action::Accent(i)) => prefs::update(|s| {
+                    s.accent = i;
+                    s.accent_rgb = None;
+                }),
                 Some(Action::IconStyle(m)) => prefs::update(|s| {
                     s.icon_style = match m {
                         0 => nacre_core::settings::IconStyle::Default,

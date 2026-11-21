@@ -27,6 +27,7 @@ mod topmost;
 mod macshortcuts;
 mod single_instance;
 mod tasks;
+mod themes;
 mod updater;
 
 use nacre_core::visibility::policy::Mode;

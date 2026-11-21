@@ -80,6 +80,14 @@ It is one small native program: no Electron, no web view, no background services
 - **Meeting companion**: ten minutes before a meeting in your Windows Calendar the Visor shows a countdown and a **Join**
   button when the event has a Meet, Zoom or Teams link; during the meeting it shows the time and whether your mic or
   camera is on.
+- **Capsule modules**: choose what the idle Visor and Capsule show (greeting, clock, date, battery, CPU and RAM, Wi‑Fi
+  network and your next calendar event), put them in any order, and show them one at a time or **side by side** (the
+  first module stays on the left while the others take turns on the right). Add an accent dot or a soft edge glow
+  (*Settings → Visor → Capsule modules*).
+- **Community themes**: share your look as a small `.abratheme` text file and apply themes from others in one click
+  (*Settings → Appearance → Community themes*). A theme can only set appearance options (preset, accent colour, font,
+  visualizer, transparency, corners, glow, motion, decoration and Capsule modules). Every file is checked first: unknown
+  keys are ignored and named, numbers are kept in range, and nothing in a theme is ever run, opened or downloaded.
 - **Fonts**: Inter, Segoe UI, Bahnschrift or a monospace font, applied after a one‑click restart, plus **Reduce motion**
   to keep the visualizer, Aurora light and Visor morph still (*Settings → Appearance → Text and motion*).
 
