@@ -1286,16 +1286,19 @@ impl Bar {
         match id {
             CTRL => {
                 self.close_menu();
+                crate::traymenu::close();
                 nacre_platform::wins::focus::dismiss_shell_flyout();
                 crate::controlcenter::toggle(self.area.y + self.h);
             }
             STAGEI => prefs::update(|st| st.stage = !st.stage),
             SEARCH => {
                 crate::controlcenter::close();
+                crate::traymenu::close();
                 crate::spotlight::toggle();
             }
             WIFI => {
                 crate::controlcenter::close();
+                crate::traymenu::close();
                 nacre_platform::wins::focus::dismiss_shell_flyout();
                 if let Some((x, _)) = self.rect_of(WIFI) {
                     crate::netmenu::show(&self.comp, crate::netmenu::Which::Wifi, crate::netmenu::Anchor::Below(self.area.x + x as i32, self.area.y + self.h), self.dpi);
@@ -1307,11 +1310,13 @@ impl Bar {
                 nacre_platform::wins::focus::dismiss_shell_flyout();
                 if let Some((x, w)) = self.rect_of(TRAY) {
                     crate::traymenu::toggle(&self.comp, self.area.x + x as i32 + (w as i32) / 2, self.area.y + self.h, self.dpi);
+                    self.render();
                 }
             }
             BATT => launch::open("ms-settings:batterysaver"),
             CLOCK => {
                 crate::controlcenter::close();
+                crate::traymenu::close();
                 keys::chord(&[keys::WIN, 0x4E]);
             }
             _ => {}

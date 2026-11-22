@@ -7,6 +7,8 @@ use nacre_platform::{input, launch, monitors, sys};
 use nacre_ui::gfx::Gfx;
 use nacre_ui::glass::Tier;
 use std::cell::RefCell;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 use windows::core::w;
 use windows::UI::Color;
 use windows::UI::Composition::{CompositionStretch, Compositor, ContainerVisual, SpriteVisual};
@@ -19,6 +21,7 @@ use windows_numerics::{Vector2, Vector3};
 const WM_DISMISS: u32 = WM_APP + 145;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const T_HIDE: usize = 1;
+const T_LEAVE: usize = 2;
 
 const COLS: usize = 5;
 const CTX_OPEN: usize = 1;
@@ -40,15 +43,20 @@ struct Tray {
     ctx_idx: Option<usize>,
     apps: Vec<TrayApp>,
     cells: Vec<Cell>,
+    icons: Vec<Option<SpriteVisual>>,
     hover: Option<usize>,
     hl: Option<SpriteVisual>,
     label_layer: Option<ContainerVisual>,
     footer_y: f32,
     size: (f32, f32),
     pop_at: Vector3,
+    trigger_rect: (i32, i32, i32, i32),
+    outside_since: Option<Instant>,
     dpi: f32,
     closing: bool,
 }
+
+static OPEN: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
     static TRAY: RefCell<Option<Tray>> = const { RefCell::new(None) };
@@ -82,12 +90,15 @@ fn ensure(comp: &Compositor) -> bool {
             ctx_idx: None,
             apps: Vec::new(),
             cells: Vec::new(),
+            icons: Vec::new(),
             hover: None,
             hl: None,
             label_layer: None,
             footer_y: 0.0,
             size: (240.0, 120.0),
             pop_at: Vector3 { X: 120.0, Y: 0.0, Z: 0.0 },
+            trigger_rect: (0, 0, 0, 0),
+            outside_since: None,
             dpi: 1.0,
             closing: false,
         })
@@ -96,7 +107,11 @@ fn ensure(comp: &Compositor) -> bool {
 }
 
 pub fn is_open() -> bool {
-    with(|t| t.popup.is_visible() && !t.closing).unwrap_or(false)
+    OPEN.load(Ordering::Relaxed)
+}
+
+pub fn close() {
+    with(|t| t.close_animated());
 }
 
 pub fn toggle(comp: &Compositor, x: i32, y: i32, dpi: f32) {
@@ -124,11 +139,17 @@ impl Tray {
         self.dpi = dpi;
         self.hover = None;
         self.ctx_idx = None;
+        self.outside_since = None;
+        let half_w = (16.0 * dpi).round() as i32;
+        let bar_h = (28.0 * dpi).round() as i32;
+        self.trigger_rect = (anchor_x - half_w, top - bar_h, anchor_x + half_w, top + 6);
         let px = (22.0 * dpi).round().max(16.0) as u32;
         self.apps = trayicons::running_tray_apps(px);
+        OPEN.store(true, Ordering::Relaxed);
         self.build_grid(anchor_x, top);
-        let _ = crate::motion::pop_in(&self.comp, self.popup.root(), self.pop_at, 0.45, 1.025, 0, crate::motion::CC_OPEN_MS);
-        crate::menubar::refresh();
+        unsafe {
+            SetTimer(Some(self.popup.hwnd), T_LEAVE, 60, None);
+        }
     }
 
     fn build_grid(&mut self, anchor_x: i32, top: i32) {
@@ -160,6 +181,7 @@ impl Tray {
             let _ = ch.RemoveAll();
         }
         self.cells.clear();
+        self.icons.clear();
         self.size = (w, h);
         self.footer_y = pad + grid_h + 6.0 * d;
         self.pop_at = Vector3 { X: (anchor_x - px).clamp(16, wi - 16) as f32, Y: 0.0, Z: 0.0 };
@@ -191,6 +213,7 @@ impl Tray {
             let cx = start_x + col as f32 * (cell + gap);
             let cy = pad + row as f32 * (cell + gap);
             self.cells.push(Cell { x: cx, y: cy, w: cell, h: cell });
+            let mut icon_sp = None;
             if let Some(bmp) = &app.icon {
                 if let Ok(surf) = self.gfx.surface_from_bgra(bmp.w, bmp.h, &bmp.bgra) {
                     if let Ok(sp) = self.comp.CreateSpriteVisual() {
@@ -204,10 +227,13 @@ impl Tray {
                             Y: (cy + (cell - icon_sz) / 2.0).round(),
                             Z: 0.0,
                         });
+                        let _ = sp.SetCenterPoint(Vector3 { X: icon_sz / 2.0, Y: icon_sz / 2.0, Z: 0.0 });
                         let _ = self.popup.content.Children().and_then(|c| c.InsertAtTop(&sp));
+                        icon_sp = Some(sp);
                     }
                 }
             }
+            self.icons.push(icon_sp);
         }
 
         // Divider line above footer
@@ -227,6 +253,7 @@ impl Tray {
         }
         self.render_footer();
 
+        let _ = crate::motion::pop_in(&self.comp, self.popup.root(), self.pop_at, 0.82, 1.018, 0, 260);
         self.popup.show();
         unsafe {
             let _ = SetWindowPos(self.popup.hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
@@ -276,15 +303,36 @@ impl Tray {
         if self.hover == next {
             return;
         }
+        let prev = self.hover;
         self.hover = next;
+        if let Some(i) = prev {
+            if let Some(Some(sp)) = self.icons.get(i) {
+                let c = sp.CenterPoint().unwrap_or(Vector3 { X: 10.0, Y: 10.0, Z: 0.0 });
+                let _ = crate::motion::hover_pop(&self.comp, sp, c, 1.0);
+            }
+        }
+        if let Some(i) = next {
+            if let Some(Some(sp)) = self.icons.get(i) {
+                let c = sp.CenterPoint().unwrap_or(Vector3 { X: 10.0, Y: 10.0, Z: 0.0 });
+                let _ = crate::motion::hover_pop(&self.comp, sp, c, 1.12);
+            }
+        }
         if let Some(hl) = &self.hl {
             if let Some(i) = next {
                 if let Some(c) = self.cells.get(i) {
-                    let _ = hl.SetOffset(Vector3 { X: c.x, Y: c.y, Z: 0.0 });
-                    let _ = hl.SetOpacity(1.0);
+                    let to = Vector3 { X: c.x, Y: c.y, Z: 0.0 };
+                    if let Some(pi) = prev.and_then(|p| self.cells.get(p)) {
+                        let from = hl.Offset().unwrap_or(Vector3 { X: pi.x, Y: pi.y, Z: 0.0 });
+                        let _ = crate::motion::vec3(&self.comp, hl, "Offset", from, to, 140);
+                    } else {
+                        let _ = hl.SetOffset(to);
+                        let cur_op = hl.Opacity().unwrap_or(0.0);
+                        let _ = crate::motion::scalar(&self.comp, hl, "Opacity", cur_op, 1.0, 120);
+                    }
                 }
             } else {
-                let _ = hl.SetOpacity(0.0);
+                let cur_op = hl.Opacity().unwrap_or(1.0);
+                let _ = crate::motion::scalar(&self.comp, hl, "Opacity", cur_op, 0.0, 140);
             }
         }
         self.render_footer();
@@ -354,9 +402,23 @@ impl Tray {
 
     fn on_ctx_close(&mut self) {
         self.ctx_idx = None;
-        if self.popup.is_visible() && !self.closing {
-            let r = self.popup.rect;
+        if let Some(c) = self.ctx.as_mut() {
+            c.hide();
+        }
+        if !self.popup.is_visible() || self.closing {
+            return;
+        }
+        let r = self.popup.rect;
+        let mut pt = POINT::default();
+        let in_popup = unsafe { GetCursorPos(&mut pt).is_ok() }
+            && pt.x >= r.0
+            && pt.x <= r.0 + r.2
+            && pt.y >= r.1
+            && pt.y <= r.1 + r.3;
+        if in_popup {
             input::begin_dismiss((r.0, r.1, r.0 + r.2, r.1 + r.3), self.popup.hwnd.0 as isize, WM_DISMISS);
+        } else {
+            self.close_animated();
         }
     }
 
@@ -364,11 +426,16 @@ impl Tray {
         if !self.popup.is_visible() || self.closing {
             return;
         }
+        OPEN.store(false, Ordering::Relaxed);
+        self.outside_since = None;
+        unsafe {
+            let _ = KillTimer(Some(self.popup.hwnd), T_LEAVE);
+        }
         input::end_dismiss();
         if let Some(c) = self.ctx.as_mut() {
             c.hide();
         }
-        if crate::motion::pop_out(&self.comp, self.popup.root(), self.pop_at, 0.55, crate::motion::CC_CLOSE_MS).is_ok() {
+        if crate::motion::pop_out(&self.comp, self.popup.root(), self.pop_at, 0.8, crate::motion::CC_CLOSE_MS).is_ok() {
             self.closing = true;
             unsafe {
                 SetTimer(Some(self.popup.hwnd), T_HIDE, crate::motion::CC_CLOSE_MS + 20, None);
@@ -434,9 +501,38 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             });
             LRESULT(0)
         }
+        WM_TIMER if wp.0 == T_LEAVE => {
+            with(|t| {
+                if !t.popup.is_visible() || t.closing {
+                    let _ = KillTimer(Some(hwnd), T_LEAVE);
+                    return;
+                }
+                if t.ctx.as_ref().is_some_and(|c| c.is_open()) {
+                    t.outside_since = None;
+                    return;
+                }
+                let mut pt = POINT::default();
+                if GetCursorPos(&mut pt).is_ok() {
+                    let r = t.popup.rect;
+                    let tr = t.trigger_rect;
+                    let in_popup = pt.x >= r.0 - 2 && pt.x <= r.0 + r.2 + 2 && pt.y >= r.1 - 2 && pt.y <= r.1 + r.3 + 2;
+                    let in_trigger = pt.x >= tr.0 && pt.x <= tr.2 && pt.y >= tr.1 && pt.y <= tr.3;
+                    if in_popup || in_trigger {
+                        t.outside_since = None;
+                    } else {
+                        let since = *t.outside_since.get_or_insert_with(Instant::now);
+                        if since.elapsed() >= Duration::from_millis(180) {
+                            t.close_animated();
+                        }
+                    }
+                }
+            });
+            LRESULT(0)
+        }
         WM_TIMER if wp.0 == T_HIDE => {
             let _ = KillTimer(Some(hwnd), T_HIDE);
             with(|t| {
+                OPEN.store(false, Ordering::Relaxed);
                 t.closing = false;
                 t.popup.hide();
             });
