@@ -123,6 +123,7 @@ enum Action {
     Refraction,
     DockOn,
     StartMenuStyle(bool),
+    StartMenuAlign(u8),
     MenuBarOn,
     MenuBarClean,
     Clock24,
@@ -532,6 +533,9 @@ impl Win {
             11 => (50.0, 200.0, "%"),
             12 => (80.0, 130.0, "%"),
             13 => (0.0, 40.0, " dp"),
+            14 => (80.0, 140.0, "%"),
+            15 => (80.0, 140.0, "%"),
+            16 => (0.0, 40.0, " dp"),
             20..=23 => (5.0, 180.0, " mnt"),
             24..=27 => (0.0, 60.0, " mnt"),
             _ => (0.0, 100.0, "%"),
@@ -951,17 +955,33 @@ impl Win {
                     None,
                     vec![
                         RowDef::Toggle(prefs::tr("Aktifkan Deck"), s.dock_enabled, Action::DockOn),
-                        RowDef::Seg(
-                            prefs::tr("Menu Mulai"),
-                            vec![(prefs::tr("ABRA"), Action::StartMenuStyle(true)), (prefs::tr("Windows"), Action::StartMenuStyle(false))],
-                            if s.abra_start_menu { 0 } else { 1 },
-                        ),
                         RowDef::Seg(prefs::tr("Perilaku"), behaviors(true), beh_idx(s.dock)),
                         RowDef::Seg(prefs::tr("Efek minimize"), vec![(prefs::tr("Funnel"), Action::MinEffect(0)), (prefs::tr("Skala"), Action::MinEffect(1))], s.min_effect as usize),
                         RowDef::Toggle(prefs::tr("Ikon seragam (squircle)"), s.dock_plates, Action::DockPlates),
                         RowDef::Toggle(prefs::tr("Tumpukan Unduhan"), s.downloads_stack, Action::DownloadsStack),
                         RowDef::Toggle(prefs::tr("App terakhir dipakai"), s.recent_apps, Action::RecentApps),
                     ],
+                ),
+                (
+                    Some(prefs::tr("Menu Mulai")),
+                    {
+                        let mut rows = vec![RowDef::Seg(
+                            prefs::tr("Menu Mulai"),
+                            vec![(prefs::tr("ABRA"), Action::StartMenuStyle(true)), (prefs::tr("Windows"), Action::StartMenuStyle(false))],
+                            if s.abra_start_menu { 0 } else { 1 },
+                        )];
+                        if s.abra_start_menu {
+                            rows.push(RowDef::Seg(
+                                prefs::tr("Posisi"),
+                                vec![(prefs::tr("Tengah"), Action::StartMenuAlign(0)), (prefs::tr("Ikon Mulai"), Action::StartMenuAlign(1))],
+                                usize::from(s.start_menu_align == 1),
+                            ));
+                            rows.push(RowDef::Slider(prefs::tr("Lebar"), s.start_menu_w, 14));
+                            rows.push(RowDef::Slider(prefs::tr("Tinggi"), s.start_menu_h, 15));
+                            rows.push(RowDef::Slider(prefs::tr("Jarak dari Deck"), s.start_menu_gap, 16));
+                        }
+                        rows
+                    },
                 ),
                 (
                     Some(prefs::tr("Ukuran")),
@@ -1530,6 +1550,9 @@ impl Win {
                 11 => s.stage_speed = v,
                 12 => s.notch_scale = v,
                 13 => s.island_gap = v,
+                14 => s.start_menu_w = v,
+                15 => s.start_menu_h = v,
+                16 => s.start_menu_gap = v,
                 20..=23 => s.focus_mins[(id - 20) as usize] = v.clamp(5, 180),
                 24..=27 => s.break_mins[(id - 24) as usize] = v.min(60),
                 _ => s.dock_margin = v,
@@ -1961,6 +1984,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 Some(Action::Clock24) => prefs::update(|s| s.clock_24h = !s.clock_24h),
                 Some(Action::DockOn) => prefs::update(|s| s.dock_enabled = !s.dock_enabled),
                 Some(Action::StartMenuStyle(v)) => prefs::update(|s| s.abra_start_menu = v),
+                Some(Action::StartMenuAlign(a)) => prefs::update(|s| s.start_menu_align = a),
                 Some(Action::NotchOn) => prefs::update(|s| s.notch_enabled = !s.notch_enabled),
                 Some(Action::Refraction) => prefs::update(|s| s.refraction = !s.refraction),
                 Some(Action::Anim) => prefs::update(|s| s.anim = !s.anim),

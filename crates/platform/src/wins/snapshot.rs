@@ -2,8 +2,8 @@ use crate::icons::Bitmap;
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DwmSetWindowAttribute, DWMWINDOWATTRIBUTE};
 use windows::Win32::Graphics::Gdi::{
-    CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
-    DIB_RGB_COLORS, HGDIOBJ,
+    BitBlt, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
+    DIB_RGB_COLORS, HGDIOBJ, SRCCOPY,
 };
 use windows::Win32::Storage::Xps::{PrintWindow, PRINT_WINDOW_FLAGS};
 use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetDpiForWindow};
@@ -169,4 +169,73 @@ fn corner_alpha(x: f32, y: f32, w: f32, h: f32, r: f32) -> u8 {
     }
     let d = (dx * dx + dy * dy).sqrt();
     ((r - d + 0.5).clamp(0.0, 1.0) * 255.0) as u8
+}
+
+pub fn capture_screen_rect(x: i32, y: i32, w: i32, h: i32, radius: f32) -> Option<Bitmap> {
+    if w < 20 || h < 20 || w > 4096 || h > 4096 {
+        return None;
+    }
+    unsafe {
+        let screen = GetDC(None);
+        let dc = CreateCompatibleDC(Some(screen));
+        let info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: w,
+                biHeight: -h,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
+        let dib = CreateDIBSection(Some(screen), &info, DIB_RGB_COLORS, &mut bits, None, 0);
+        let Ok(dib) = dib else {
+            let _ = DeleteDC(dc);
+            ReleaseDC(None, screen);
+            return None;
+        };
+        if bits.is_null() {
+            let _ = DeleteObject(HGDIOBJ(dib.0));
+            let _ = DeleteDC(dc);
+            ReleaseDC(None, screen);
+            return None;
+        }
+        let old = SelectObject(dc, HGDIOBJ(dib.0));
+        let ok = BitBlt(dc, 0, 0, w, h, Some(screen), x, y, SRCCOPY).is_ok();
+        ReleaseDC(None, screen);
+        let src = std::slice::from_raw_parts(bits as *const u8, (w * h * 4) as usize);
+        let mut out = src.to_vec();
+        for px in out.chunks_exact_mut(4) {
+            px[3] = 255;
+        }
+        let band = (radius.ceil() as i32 + 1).min(w / 2).min(h / 2);
+        for (y_start, y_end) in [(0, band), (h - band, h)] {
+            for py in y_start..y_end {
+                for (x_start, x_end) in [(0, band), (w - band, w)] {
+                    for px in x_start..x_end {
+                        let a = corner_alpha(px as f32 + 0.5, py as f32 + 0.5, w as f32, h as f32, radius) as u32;
+                        let o = ((py * w + px) * 4) as usize;
+                        out[o] = (out[o] as u32 * a / 255) as u8;
+                        out[o + 1] = (out[o + 1] as u32 * a / 255) as u8;
+                        out[o + 2] = (out[o + 2] as u32 * a / 255) as u8;
+                        out[o + 3] = a as u8;
+                    }
+                }
+            }
+        }
+        SelectObject(dc, old);
+        let _ = DeleteObject(HGDIOBJ(dib.0));
+        let _ = DeleteDC(dc);
+        if !ok {
+            return None;
+        }
+        Some(Bitmap {
+            w: w as u32,
+            h: h as u32,
+            bgra: out,
+        })
+    }
 }

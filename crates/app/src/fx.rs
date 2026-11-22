@@ -70,6 +70,16 @@ struct Snap {
     hwnd: isize,
     rect: (i32, i32, i32, i32),
     surface: CompositionDrawingSurface,
+    bmp: std::sync::Arc<nacre_platform::icons::Bitmap>,
+}
+
+struct ActiveGenie {
+    tex: nacre_ui::genie::GenieTex,
+    win: (i32, i32, i32, i32),
+    icon: (i32, i32, i32, i32),
+    reverse: bool,
+    start: std::time::Instant,
+    ms: u32,
 }
 
 struct Fx {
@@ -78,11 +88,13 @@ struct Fx {
     gfx: Gfx,
     surface: Surface,
     screen: (i32, i32),
-    snap: Option<Snap>,
+    snaps: Vec<Snap>,
     parked: Vec<Snap>,
     current: isize,
     sprite: Option<SpriteVisual>,
     genie: Option<ContainerVisual>,
+    genie_pipe: Option<nacre_ui::genie::GeniePipe>,
+    active_genie: Option<ActiveGenie>,
     pending_restore: Option<(isize, isize)>,
     seen: HashSet<isize>,
     opened: HashSet<isize>,
@@ -101,6 +113,7 @@ struct ShadowWin {
 
 const T_SHADOW: usize = 5;
 const T_SHADOW_WATCH: usize = 6;
+const T_GENIE_TICK: usize = 9;
 const SHADOW_MARGIN: i32 = 44;
 
 thread_local! {
@@ -152,7 +165,8 @@ pub fn init(host: &Host) -> windows_core::Result<()> {
         )?;
             let _ = SetLayeredWindowAttributes(hwnd, windows::Win32::Foundation::COLORREF(0), 255, LWA_ALPHA);
         let surface = attach(&host.compositor, hwnd, (screen.0 as f32, screen.1 as f32))?;
-        let gfx = Gfx::shared(&host.compositor)?;
+        let gfx = Gfx::new_hardware(&host.compositor).or_else(|_| Gfx::shared(&host.compositor))?;
+        let genie_pipe = nacre_ui::genie::GeniePipe::new(&gfx).ok();
         FX_HWND.store(hwnd.0 as isize, Ordering::Relaxed);
         FX.with(|c| {
             *c.borrow_mut() = Some(Fx {
@@ -161,11 +175,13 @@ pub fn init(host: &Host) -> windows_core::Result<()> {
                 gfx,
                 surface,
                 screen,
-                snap: None,
+                snaps: Vec::new(),
                 parked: Vec::new(),
                 current: 0,
                 sprite: None,
                 genie: None,
+                genie_pipe,
+                active_genie: None,
                 pending_restore: None,
                 seen: HashSet::new(),
                 opened: HashSet::new(),
@@ -282,13 +298,29 @@ fn eligible(h: isize) -> bool {
         }
         let style = GetWindowLongPtrW(hw, GWL_STYLE) as u32;
         let ex = GetWindowLongPtrW(hw, GWL_EXSTYLE) as u32;
-        if style & WS_CAPTION.0 != WS_CAPTION.0 || ex & WS_EX_TOOLWINDOW.0 != 0 {
+        let has_frame = style & WS_CAPTION.0 == WS_CAPTION.0
+            || style & WS_MINIMIZEBOX.0 != 0
+            || style & WS_THICKFRAME.0 != 0;
+        if !has_frame || ex & WS_EX_TOOLWINDOW.0 != 0 || style & WS_CHILD.0 != 0 {
             return false;
         }
         let mut pid = 0u32;
         GetWindowThreadProcessId(hw, Some(&mut pid));
         pid != std::process::id()
     }
+}
+
+pub fn play_custom_genie(
+    bmp: std::sync::Arc<nacre_platform::icons::Bitmap>,
+    win: (i32, i32, i32, i32),
+    icon: (i32, i32, i32, i32),
+    opening: bool,
+    ms: u32,
+) -> bool {
+    if !enabled() || !genie_on() {
+        return false;
+    }
+    with_fx(|fx| fx.start_d3d_genie(&bmp, win, icon, opening, ms)).unwrap_or(false)
 }
 
 pub fn restore(target: isize, icon: (i32, i32, i32, i32), dock: isize) -> bool {
@@ -302,8 +334,8 @@ pub fn restore(target: isize, icon: (i32, i32, i32, i32), dock: isize) -> bool {
         let Some(pos) = fx.parked.iter().position(|p| p.hwnd == target) else { return false };
         let s = fx.parked.remove(pos);
         let (x, y, w, h) = s.rect;
-        fx.play(s.surface.clone(), icon, (x, y, w, h), Kind::Restore);
-        fx.snap = Some(s);
+        fx.play_snap(&s, icon, (x, y, w, h), Kind::Restore);
+        fx.store_snap(s);
         fx.pending_restore = Some((target, dock));
         unsafe {
             SetTimer(Some(fx.hwnd), T_RESTORE, START_DELAY + Kind::Restore.ms() - 30, None);
@@ -374,6 +406,123 @@ impl Fx {
         }
     }
 
+    fn start_d3d_genie(
+        &mut self,
+        bmp: &nacre_platform::icons::Bitmap,
+        win: (i32, i32, i32, i32),
+        icon: (i32, i32, i32, i32),
+        reverse: bool,
+        ms: u32,
+    ) -> bool {
+        if self.genie_pipe.is_none() {
+            self.genie_pipe = nacre_ui::genie::GeniePipe::new(&self.gfx).ok();
+        }
+        let Some(pipe) = self.genie_pipe.as_ref() else {
+            return false;
+        };
+        let Ok(tex) = pipe.prepare(&self.gfx, bmp.w, bmp.h, &bmp.bgra, win, icon) else {
+            return false;
+        };
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), T_GENIE_TICK);
+        }
+        self.active_genie = None;
+        if let Some(old) = self.genie.take() {
+            if let Ok(k) = self.surface.root.Children() {
+                let _ = k.Remove(&old);
+            }
+        }
+        if let Some(old) = self.sprite.take() {
+            if let Ok(k) = self.surface.root.Children() {
+                let _ = k.Remove(&old);
+            }
+        }
+
+        let p0 = if reverse { 1.0 } else { 0.0 };
+        let op0 = if reverse { 0.05 } else { 1.0 };
+        let _ = pipe.draw_frame(&self.gfx, &tex, win, icon, p0, op0);
+
+        let go = || -> windows_core::Result<SpriteVisual> {
+            let sp = self.comp.CreateSpriteVisual()?;
+            let b = self.comp.CreateSurfaceBrushWithSurface(&tex.surface)?;
+            b.SetStretch(CompositionStretch::Fill)?;
+            b.SetBitmapInterpolationMode(CompositionBitmapInterpolationMode::Linear)?;
+            sp.SetBrush(&b)?;
+            sp.SetOffset(Vector3 {
+                X: tex.canvas.0 as f32,
+                Y: tex.canvas.1 as f32,
+                Z: 0.0,
+            })?;
+            sp.SetSize(Vector2 {
+                X: tex.canvas.2 as f32,
+                Y: tex.canvas.3 as f32,
+            })?;
+            self.surface.root.Children()?.InsertAtTop(&sp)?;
+            Ok(sp)
+        };
+        let Ok(sp) = go() else {
+            return false;
+        };
+        self.sprite = Some(sp);
+        self.active_genie = Some(ActiveGenie {
+            tex,
+            win,
+            icon,
+            reverse,
+            start: std::time::Instant::now(),
+            ms,
+        });
+        unsafe {
+            self.cover();
+            let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
+            SetTimer(Some(self.hwnd), T_GENIE_TICK, 8, None);
+            SetTimer(Some(self.hwnd), T_HIDE, ms + 80, None);
+        }
+        true
+    }
+
+    fn tick_genie(&mut self) {
+        let Some(g) = self.active_genie.as_ref() else {
+            unsafe {
+                let _ = KillTimer(Some(self.hwnd), T_GENIE_TICK);
+            }
+            return;
+        };
+        let Some(pipe) = self.genie_pipe.as_ref() else {
+            return;
+        };
+        let elapsed = g.start.elapsed().as_secs_f32() * 1000.0;
+        let raw_t = (elapsed / g.ms.max(1) as f32).clamp(0.0, 1.0);
+        let p = if g.reverse { 1.0 - raw_t } else { raw_t };
+        let opacity = if g.reverse {
+            (raw_t / 0.22).clamp(0.05, 1.0)
+        } else if raw_t < 0.72 {
+            1.0
+        } else {
+            ((1.0 - raw_t) / 0.28).clamp(0.0, 1.0)
+        };
+        let _ = pipe.draw_frame(&self.gfx, &g.tex, g.win, g.icon, p, opacity);
+        if raw_t >= 1.0 {
+            unsafe {
+                let _ = KillTimer(Some(self.hwnd), T_GENIE_TICK);
+            }
+            self.active_genie = None;
+        }
+    }
+
+    fn play_snap(&mut self, s: &Snap, a: (i32, i32, i32, i32), b: (i32, i32, i32, i32), kind: Kind) {
+        if genie_on() && matches!(kind, Kind::Minimize | Kind::Restore) {
+            let (win, icon) = match kind {
+                Kind::Restore => (b, a),
+                _ => (a, b),
+            };
+            if self.start_d3d_genie(&s.bmp, win, icon, matches!(kind, Kind::Restore), kind.ms()) {
+                return;
+            }
+        }
+        self.play(s.surface.clone(), a, b, kind);
+    }
+
     fn play(&mut self, surface: CompositionDrawingSurface, a: (i32, i32, i32, i32), b: (i32, i32, i32, i32), kind: Kind) {
         let mut go = || -> windows_core::Result<()> {
             let (win, icon) = match kind {
@@ -382,12 +531,17 @@ impl Fx {
             };
             let (wx, wy, ww, wh) = (win.0 as f32, win.1 as f32, win.2.max(1) as f32, win.3.max(1) as f32);
             let (ix, iy, iw, ih) = (icon.0 as f32, icon.1 as f32, icon.2.max(1) as f32, icon.3.max(1) as f32);
+            unsafe {
+                let _ = KillTimer(Some(self.hwnd), T_GENIE_TICK);
+            }
+            self.active_genie = None;
             if let Some(old) = self.genie.take() {
                 let _ = self.surface.root.Children()?.Remove(&old);
             }
             if let Some(old) = self.sprite.take() {
                 let _ = self.surface.root.Children()?.Remove(&old);
             }
+            let ms = kind.ms();
             let sprite = self.comp.CreateSpriteVisual()?;
             let brush = self.comp.CreateSurfaceBrushWithSurface(&surface)?;
             brush.SetStretch(CompositionStretch::Fill)?;
@@ -401,7 +555,6 @@ impl Fx {
             let at_icon = Vector3 { X: ix + iw / 2.0 - ww / 2.0, Y: iy + ih / 2.0 - wh / 2.0, Z: 0.0 };
             let (sx, sy) = (iw / ww, ih / wh);
             let one = Vector3 { X: 1.0, Y: 1.0, Z: 1.0 };
-            let ms = kind.ms();
             match kind {
                 Kind::Minimize => {
                     sprite.SetOffset(at_win)?;
@@ -530,7 +683,12 @@ impl Fx {
                             o.playing = true;
                         }
                         self.play(surface.clone(), target, target, Kind::Open);
-                        self.snap = Some(Snap { hwnd: h, rect: target, surface });
+                        self.store_snap(Snap {
+                            hwnd: h,
+                            rect: target,
+                            surface,
+                            bmp: std::sync::Arc::new(shot.bmp),
+                        });
                         unsafe {
                             SetTimer(Some(self.hwnd), T_OPEN_END, START_DELAY + Kind::Open.ms() - 16, None);
                         }
@@ -553,18 +711,47 @@ impl Fx {
         }
     }
 
+    fn store_snap(&mut self, s: Snap) {
+        self.snaps.retain(|x| x.hwnd != s.hwnd && focus::is_alive(x.hwnd));
+        self.snaps.push(s);
+        if self.snaps.len() > 20 {
+            self.snaps.remove(0);
+        }
+    }
+
+    fn capture_hwnd(&mut self, h: isize) -> Option<Snap> {
+        let t0 = std::time::Instant::now();
+        let shot = snapshot::capture(h, 1)?;
+        let t_cap = t0.elapsed();
+        let surface = self.gfx.surface_from_bgra(shot.bmp.w, shot.bmp.h, &shot.bmp.bgra).ok()?;
+        log::line(
+            "fx",
+            &format!(
+                "tangkap hwnd={h} {}x{} (px {}x{}) ambil={}ms unggah={}ms",
+                shot.rect.2,
+                shot.rect.3,
+                shot.bmp.w,
+                shot.bmp.h,
+                t_cap.as_millis(),
+                (t0.elapsed() - t_cap).as_millis()
+            ),
+        );
+        let s = Snap {
+            hwnd: h,
+            rect: shot.rect,
+            surface,
+            bmp: std::sync::Arc::new(shot.bmp),
+        };
+        self.store_snap(s.clone());
+        Some(s)
+    }
+
     fn capture_current(&mut self) {
         let h = self.current;
         if h == 0 || !enabled() || !eligible(h) || focus::is_minimized(h) || park::is_parked(h) {
             return;
         }
-        let t0 = std::time::Instant::now();
-        let Some(shot) = snapshot::capture(h, 1) else { return };
-        let t_cap = t0.elapsed();
-        if let Ok(surface) = self.gfx.surface_from_bgra(shot.bmp.w, shot.bmp.h, &shot.bmp.bgra) {
-            log::line("fx", &format!("tangkap hwnd={h} {}x{} (px {}x{}) ambil={}ms unggah={}ms", shot.rect.2, shot.rect.3, shot.bmp.w, shot.bmp.h, t_cap.as_millis(), (t0.elapsed() - t_cap).as_millis()));
-            self.snap = Some(Snap { hwnd: h, rect: shot.rect, surface });
-        }
+        let _ = self.capture_hwnd(h);
     }
 
     fn icon_rect(&self, hwnd: isize) -> (i32, i32, i32, i32) {
@@ -584,24 +771,30 @@ impl Fx {
                     self.seen.insert(h);
                     self.current = h;
                     unsafe {
-                        SetTimer(Some(self.hwnd), T_CAPTURE, 350, None);
+                        SetTimer(Some(self.hwnd), T_CAPTURE, 150, None);
                     }
                 }
             }
             tracker::EV_MOVESIZE_END if h == self.current => unsafe {
-                SetTimer(Some(self.hwnd), T_CAPTURE, 350, None);
+                SetTimer(Some(self.hwnd), T_CAPTURE, 150, None);
             },
             tracker::EV_MINIMIZE_START => {
-                if let Some(s) = &self.snap {
-                    if s.hwnd == h && self.pending_restore.is_none() {
-                        let (surface, rect) = (s.surface.clone(), s.rect);
+                if self.pending_restore.is_none() {
+                    let s = self
+                        .snaps
+                        .iter()
+                        .rev()
+                        .find(|x| x.hwnd == h)
+                        .cloned()
+                        .or_else(|| if eligible(h) { self.capture_hwnd(h) } else { None });
+                    if let Some(s) = s {
+                        let rect = s.rect;
                         crate::dock::reveal_for(START_DELAY + Kind::Minimize.ms() + 450);
                         let icon = self.icon_rect(h);
-                        let keep = s.clone();
-                        self.play(surface, rect, icon, Kind::Minimize);
+                        self.play_snap(&s, rect, icon, Kind::Minimize);
                         self.parked.retain(|p| p.hwnd != h);
-                        self.parked.push(keep);
-                        if self.parked.len() > 2 {
+                        self.parked.push(s);
+                        if self.parked.len() > 24 {
                             self.parked.remove(0);
                         }
                     }
@@ -614,11 +807,10 @@ impl Fx {
                     self.opening = None;
                     hold_parked(None);
                 }
-                if let Some(s) = &self.snap {
-                    if s.hwnd == h && !focus::is_alive(h) {
-                        let (surface, rect) = (s.surface.clone(), s.rect);
-                        self.play(surface, rect, rect, Kind::Close);
-                        self.snap = None;
+                if let Some(pos) = self.snaps.iter().position(|x| x.hwnd == h) {
+                    let s = self.snaps.remove(pos);
+                    if !focus::is_alive(h) {
+                        self.play(s.surface, s.rect, s.rect, Kind::Close);
                         if self.current == h {
                             self.current = 0;
                         }
@@ -767,6 +959,10 @@ impl Fx {
     }
 
     fn hide_overlay(&mut self) {
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), T_GENIE_TICK);
+        }
+        self.active_genie = None;
         if let Some(old) = self.genie.take() {
             if let Ok(k) = self.surface.root.Children() {
                 let _ = k.Remove(&old);
@@ -803,7 +999,7 @@ impl Fx {
             } else {
                 let _ = KillTimer(Some(self.hwnd), T_REFRESH);
                 self.end_open();
-                self.snap = None;
+                self.snaps.clear();
                 self.hide_overlay();
                 restore_all();
             }
@@ -831,6 +1027,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 _ => {}
             }
             with_fx(|fx| match id {
+                T_GENIE_TICK => fx.tick_genie(),
                 T_SHADOW => {
                     let t = fx.shadow_target;
                     if t != 0 {

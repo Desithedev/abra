@@ -65,6 +65,14 @@ impl Gfx {
         Ok(Gfx { device, ctx, graphics })
     }
 
+    pub fn device(&self) -> &ID3D11Device {
+        &self.device
+    }
+
+    pub fn ctx(&self) -> &ID3D11DeviceContext {
+        &self.ctx
+    }
+
     pub fn d3d_device(&self) -> Result<windows::Graphics::DirectX::Direct3D11::IDirect3DDevice> {
         let dxgi: IDXGIDevice = self.device.cast()?;
         let insp = unsafe { windows::Win32::System::WinRT::Direct3D11::CreateDirect3D11DeviceFromDXGIDevice(&dxgi)? };

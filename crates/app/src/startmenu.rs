@@ -31,8 +31,11 @@ use windows_numerics::{Vector2, Vector3};
 
 const WM_DISMISS: u32 = WM_APP + 150;
 const WM_ICONS_READY: u32 = WM_APP + 151;
+const WM_APPS_READY: u32 = WM_APP + 152;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const T_HIDE: usize = 1;
+const T_REVEAL: usize = 2;
+const T_SNAP: usize = 3;
 
 const COLS: usize = 6;
 const VISIBLE_ROWS: usize = 3;
@@ -73,6 +76,7 @@ struct StartMenu {
     dpi: f32,
     size: (f32, f32),
     win_rect: (i32, i32, i32, i32),
+    last_anchor: (i32, i32, i32),
     pop_at: Vector3,
     closing: bool,
     all_apps: bool,
@@ -88,8 +92,10 @@ struct StartMenu {
     tracking: bool,
     text_cache: HashMap<String, (CompositionDrawingSurface, i32, i32)>,
     icon_cache: HashMap<String, Option<CompositionDrawingSurface>>,
+    cached_bmp: Option<std::sync::Arc<Bitmap>>,
 }
 
+static APPS_CACHE: Mutex<Option<Vec<App>>> = Mutex::new(None);
 static ICON_CACHE: Mutex<Option<HashMap<String, Option<Bitmap>>>> = Mutex::new(None);
 static ICON_TX: Mutex<Option<Sender<(String, String, i32, bool, nacre_core::settings::IconStyle, u8, bool, isize)>>> =
     Mutex::new(None);
@@ -134,6 +140,7 @@ fn ensure(comp: &Compositor) -> bool {
             dpi: 1.0,
             size: (540.0, 540.0),
             win_rect: (0, 0, 0, 0),
+            last_anchor: (0, 0, 0),
             pop_at: Vector3 {
                 X: 270.0,
                 Y: 540.0,
@@ -153,6 +160,7 @@ fn ensure(comp: &Compositor) -> bool {
             tracking: false,
             text_cache: HashMap::new(),
             icon_cache: HashMap::new(),
+            cached_bmp: None,
         });
     });
     true
@@ -170,7 +178,7 @@ pub fn close() {
     with(|m| m.close_animated());
 }
 
-pub fn toggle(comp: &Compositor, anchor_x: i32, bottom_y: i32, dpi: f32) {
+pub fn toggle(comp: &Compositor, start_x: i32, center_x: i32, bottom_y: i32, dpi: f32) {
     if !ensure(comp) {
         return;
     }
@@ -179,7 +187,7 @@ pub fn toggle(comp: &Compositor, anchor_x: i32, bottom_y: i32, dpi: f32) {
             m.close_animated();
             return;
         }
-        m.open(anchor_x, bottom_y, dpi);
+        m.open(start_x, center_x, bottom_y, dpi);
     });
 }
 
@@ -265,7 +273,45 @@ fn build_pinned(apps: &[App]) -> Vec<App> {
 }
 
 impl StartMenu {
-    fn open(&mut self, anchor_x: i32, bottom_y: i32, dpi: f32) {
+    fn apply_geometry(&mut self) {
+        let (start_x, center_x, bottom_y) = self.last_anchor;
+        let dpi = self.dpi;
+        let s = prefs::get();
+        let mon = monitors::at(center_x, bottom_y);
+        let work = mon.work;
+        let max_w = (work.size().0 as f32 - 24.0 * dpi).max(360.0);
+        let gap = (s.start_menu_gap as f32 * dpi).round() as i32;
+        let max_h = (bottom_y - gap - work.y - 8).max(320) as f32;
+        let w = (540.0 * dpi * (s.start_menu_w as f32 / 100.0))
+            .min(max_w)
+            .round();
+        let h = (536.0 * dpi * (s.start_menu_h as f32 / 100.0))
+            .min(max_h)
+            .round();
+        self.size = (w, h);
+
+        let wi = w as i32;
+        let hi = h as i32;
+        let desired_x = if s.start_menu_align == 1 {
+            start_x - (36.0 * dpi).round() as i32
+        } else {
+            center_x - wi / 2
+        };
+        let x = work.clamp_x(desired_x, wi, 8);
+        let y = work.clamp_y(bottom_y - gap - hi, hi, 8);
+        self.win_rect = (x, y, x + wi, y + hi);
+        self.pop_at = Vector3 {
+            X: (start_x as f32 - x as f32).clamp(24.0 * dpi, (w - 24.0 * dpi).max(24.0 * dpi)),
+            Y: (h - 4.0 * dpi).max(0.0),
+            Z: 0.0,
+        };
+
+        let glass = prefs::glass((10.0, 10.0), 20.0 * dpi, prefs::Role::Themed);
+        let _ = self.popup.panel.set_params(glass);
+        let _ = self.popup.set_rect(x, y, wi, hi);
+    }
+
+    fn open(&mut self, start_x: i32, center_x: i32, bottom_y: i32, dpi: f32) {
         if self.closing {
             self.closing = false;
             unsafe {
@@ -274,43 +320,90 @@ impl StartMenu {
             self.popup.hide();
         }
         self.dpi = dpi;
+        self.last_anchor = (start_x, center_x, bottom_y);
         self.all_apps = false;
         self.query.clear();
         self.scroll = 0;
         self.sel = None;
         self.hover = None;
 
-        self.apps = apps::snapshot();
+        let cached_apps = APPS_CACHE.lock().ok().and_then(|g| g.clone());
+        if let Some(list) = cached_apps {
+            self.apps = list;
+        } else {
+            let list = apps::snapshot();
+            if let Ok(mut g) = APPS_CACHE.lock() {
+                *g = Some(list.clone());
+            }
+            self.apps = list;
+        }
         self.names = self.apps.iter().map(|a| a.name.clone()).collect();
         self.pinned = build_pinned(&self.apps);
         self.rebuild_shown();
 
-        let mon = monitors::at(anchor_x, bottom_y);
-        let work = mon.work;
-        let max_w = (work.size().0 as f32 - 24.0 * dpi).max(360.0);
-        let max_h = (bottom_y - work.y - 16).max(320) as f32;
-        let w = (540.0 * dpi).min(max_w).round();
-        let h = (536.0 * dpi).min(max_h).round();
-        self.size = (w, h);
+        // Refresh installed apps in background so opening is always 0ms
+        let hwnd_raw = self.popup.hwnd.0 as isize;
+        std::thread::spawn(move || {
+            let fresh = apps::snapshot();
+            let changed = {
+                let mut g = APPS_CACHE.lock().unwrap();
+                let diff = g.as_ref().is_none_or(|old| old.len() != fresh.len());
+                *g = Some(fresh);
+                diff
+            };
+            if changed {
+                unsafe {
+                    let _ = PostMessageW(
+                        Some(HWND(hwnd_raw as *mut _)),
+                        WM_APPS_READY,
+                        WPARAM(0),
+                        LPARAM(0),
+                    );
+                }
+            }
+        });
 
-        let wi = w as i32;
-        let hi = h as i32;
-        let x = work.clamp_x(anchor_x - wi / 2, wi, 8);
-        let y = work.clamp_y(bottom_y - hi, hi, 8);
-        self.win_rect = (x, y, x + wi, y + hi);
-        self.pop_at = Vector3 {
-            X: w / 2.0,
-            Y: h,
-            Z: 0.0,
-        };
-
-        let glass = prefs::glass((10.0, 10.0), 20.0 * dpi, prefs::Role::Themed);
-        let _ = self.popup.panel.set_params(glass);
-        let _ = self.popup.set_rect(x, y, wi, hi);
-
+        self.apply_geometry();
         self.render();
-        self.animate_open();
-        let _ = self.popup.show();
+
+        let use_d3d_genie =
+            prefs::get().anim && !prefs::get().reduce_motion && prefs::get().min_effect == 0;
+        let (x, y, x1, y1) = self.win_rect;
+        let (wi, hi) = (x1 - x, y1 - y);
+        let mut played_d3d = false;
+        if use_d3d_genie {
+            let bmp = self
+                .cached_bmp
+                .clone()
+                .unwrap_or_else(|| self.fallback_bmp(wi as u32, hi as u32));
+            if crate::fx::play_custom_genie(bmp, (x, y, wi, hi), self.start_icon_rect(), true, 360)
+            {
+                played_d3d = true;
+                let _ = self.popup.root().SetOpacity(0.0);
+                let _ = self.popup.root().SetScale(Vector3 {
+                    X: 1.0,
+                    Y: 1.0,
+                    Z: 1.0,
+                });
+                let _ = self.popup.root().SetOffset(Vector3 {
+                    X: 0.0,
+                    Y: 0.0,
+                    Z: 0.0,
+                });
+                let _ = self.popup.show();
+                unsafe {
+                    let _ = SetTimer(Some(self.popup.hwnd), T_REVEAL, 345, None);
+                    let _ = SetTimer(Some(self.popup.hwnd), T_SNAP, 430, None);
+                }
+            }
+        }
+        if !played_d3d {
+            self.animate_open();
+            let _ = self.popup.show();
+            unsafe {
+                let _ = SetTimer(Some(self.popup.hwnd), T_SNAP, 380, None);
+            }
+        }
         unsafe {
             let _ = SetForegroundWindow(self.popup.hwnd);
             let _ = SetFocus(Some(self.popup.hwnd));
@@ -318,18 +411,116 @@ impl StartMenu {
         input::begin_dismiss(self.win_rect, self.popup.hwnd.0 as isize, WM_DISMISS);
     }
 
+    fn start_icon_rect(&self) -> (i32, i32, i32, i32) {
+        let sz = (44.0 * self.dpi).round() as i32;
+        (
+            self.last_anchor.0 - sz / 2,
+            self.last_anchor.2 + (8.0 * self.dpi).round() as i32,
+            sz,
+            sz,
+        )
+    }
+
+    fn fallback_bmp(&self, w: u32, h: u32) -> std::sync::Arc<Bitmap> {
+        let bw = (w / 2).clamp(64, 512);
+        let bh = (h / 2).clamp(64, 512);
+        let look = prefs::look(prefs::Role::Themed);
+        let (r, g, b, a) = if look.dark {
+            (28u32, 30u32, 36u32, 235u32)
+        } else {
+            (242u32, 244u32, 248u32, 238u32)
+        };
+        let mut bgra = vec![0u8; (bw * bh * 4) as usize];
+        let rad = (10.0 * self.dpi).max(4.0);
+        for y in 0..bh {
+            for x in 0..bw {
+                let dx = if (x as f32) < rad {
+                    rad - x as f32
+                } else if (x as f32) > bw as f32 - rad {
+                    x as f32 - (bw as f32 - rad)
+                } else {
+                    0.0
+                };
+                let dy = if (y as f32) < rad {
+                    rad - y as f32
+                } else if (y as f32) > bh as f32 - rad {
+                    y as f32 - (bh as f32 - rad)
+                } else {
+                    0.0
+                };
+                let ca = if dx == 0.0 || dy == 0.0 {
+                    a
+                } else {
+                    let d = (dx * dx + dy * dy).sqrt();
+                    ((rad - d + 0.5).clamp(0.0, 1.0) * a as f32) as u32
+                };
+                let o = ((y * bw + x) * 4) as usize;
+                bgra[o] = (b * ca / 255) as u8;
+                bgra[o + 1] = (g * ca / 255) as u8;
+                bgra[o + 2] = (r * ca / 255) as u8;
+                bgra[o + 3] = ca as u8;
+            }
+        }
+        std::sync::Arc::new(Bitmap { w: bw, h: bh, bgra })
+    }
+
+    fn capture_live(&mut self) {
+        if !self.popup.is_visible() || self.closing {
+            return;
+        }
+        let (x, y, x1, y1) = self.win_rect;
+        let (wi, hi) = (x1 - x, y1 - y);
+        if let Some(bmp) =
+            nacre_platform::wins::snapshot::capture_screen_rect(x, y, wi, hi, 20.0 * self.dpi)
+        {
+            self.cached_bmp = Some(std::sync::Arc::new(bmp));
+        }
+    }
+
     fn close_animated(&mut self) {
         if !self.popup.is_visible() || self.closing {
             return;
+        }
+        unsafe {
+            let _ = KillTimer(Some(self.popup.hwnd), T_REVEAL);
+            let _ = KillTimer(Some(self.popup.hwnd), T_SNAP);
         }
         if let Some(pm) = self.power_menu.as_mut() {
             pm.hide();
         }
         input::end_dismiss();
+
+        let use_d3d_genie =
+            prefs::get().anim && !prefs::get().reduce_motion && prefs::get().min_effect == 0;
+        if use_d3d_genie {
+            if self.cached_bmp.is_none() && self.popup.root().Opacity().unwrap_or(1.0) > 0.8 {
+                self.capture_live();
+            }
+            let (x, y, x1, y1) = self.win_rect;
+            let (wi, hi) = (x1 - x, y1 - y);
+            let bmp = self
+                .cached_bmp
+                .clone()
+                .unwrap_or_else(|| self.fallback_bmp(wi as u32, hi as u32));
+            self.closing = false;
+            self.popup.hide();
+            if crate::fx::play_custom_genie(bmp, (x, y, wi, hi), self.start_icon_rect(), false, 360)
+            {
+                return;
+            }
+        }
+
         self.closing = true;
         self.animate_close();
+        let ms = if !prefs::get().anim || prefs::get().reduce_motion {
+            10
+        } else if prefs::get().min_effect == 0 {
+            325
+        } else {
+            235
+        };
         unsafe {
-            let _ = SetTimer(Some(self.popup.hwnd), T_HIDE, 150, None);
+            let _ = SetTimer(Some(self.popup.hwnd), T_HIDE, ms, None);
         }
     }
 
@@ -341,46 +532,103 @@ impl StartMenu {
                 Y: 1.0,
                 Z: 1.0,
             });
+            let _ = self.popup.root().SetOffset(Vector3 {
+                X: 0.0,
+                Y: 0.0,
+                Z: 0.0,
+            });
             return;
         }
+        let genie = prefs::get().min_effect == 0;
         let go = || -> windows_core::Result<()> {
             let c = &self.comp;
-            let ease = CompositionEasingFunction::CreateCubicBezierEasingFunction(
+            let ease_out = CompositionEasingFunction::CreateCubicBezierEasingFunction(
                 c,
                 Vector2 { X: 0.16, Y: 1.0 },
                 Vector2 { X: 0.3, Y: 1.0 },
             )?;
+            let ease_genie = CompositionEasingFunction::CreateCubicBezierEasingFunction(
+                c,
+                Vector2 { X: 0.2, Y: 0.8 },
+                Vector2 { X: 0.2, Y: 1.0 },
+            )?;
             let _ = self.popup.root().SetCenterPoint(self.pop_at);
+            let _ = self.popup.root().SetOffset(Vector3 {
+                X: 0.0,
+                Y: 0.0,
+                Z: 0.0,
+            });
 
             let sc = c.CreateVector3KeyFrameAnimation()?;
-            sc.SetDuration(windows::Foundation::TimeSpan {
-                Duration: 200 * 10_000,
-            })?;
-            sc.InsertKeyFrameWithEasingFunction(
-                0.0,
-                Vector3 {
-                    X: 0.94,
-                    Y: 0.94,
-                    Z: 1.0,
-                },
-                &ease,
-            )?;
-            sc.InsertKeyFrameWithEasingFunction(
-                1.0,
-                Vector3 {
-                    X: 1.0,
-                    Y: 1.0,
-                    Z: 1.0,
-                },
-                &ease,
-            )?;
+            if genie {
+                sc.SetDuration(windows::Foundation::TimeSpan {
+                    Duration: 360 * 10_000,
+                })?;
+                sc.InsertKeyFrame(
+                    0.0,
+                    Vector3 {
+                        X: 0.10,
+                        Y: 0.10,
+                        Z: 1.0,
+                    },
+                )?;
+                sc.InsertKeyFrameWithEasingFunction(
+                    0.42,
+                    Vector3 {
+                        X: 0.50,
+                        Y: 0.88,
+                        Z: 1.0,
+                    },
+                    &ease_genie,
+                )?;
+                sc.InsertKeyFrameWithEasingFunction(
+                    1.0,
+                    Vector3 {
+                        X: 1.0,
+                        Y: 1.0,
+                        Z: 1.0,
+                    },
+                    &ease_out,
+                )?;
+            } else {
+                sc.SetDuration(windows::Foundation::TimeSpan {
+                    Duration: 300 * 10_000,
+                })?;
+                sc.InsertKeyFrame(
+                    0.0,
+                    Vector3 {
+                        X: 0.14,
+                        Y: 0.14,
+                        Z: 1.0,
+                    },
+                )?;
+                sc.InsertKeyFrameWithEasingFunction(
+                    0.70,
+                    Vector3 {
+                        X: 1.022,
+                        Y: 1.022,
+                        Z: 1.0,
+                    },
+                    &ease_out,
+                )?;
+                sc.InsertKeyFrameWithEasingFunction(
+                    1.0,
+                    Vector3 {
+                        X: 1.0,
+                        Y: 1.0,
+                        Z: 1.0,
+                    },
+                    &ease_out,
+                )?;
+            }
 
             let op = c.CreateScalarKeyFrameAnimation()?;
             op.SetDuration(windows::Foundation::TimeSpan {
-                Duration: 150 * 10_000,
+                Duration: 240 * 10_000,
             })?;
-            op.InsertKeyFrameWithEasingFunction(0.0, 0.0, &ease)?;
-            op.InsertKeyFrameWithEasingFunction(1.0, 1.0, &ease)?;
+            op.InsertKeyFrame(0.0, 0.0)?;
+            op.InsertKeyFrameWithEasingFunction(0.25, 0.92, &ease_out)?;
+            op.InsertKeyFrameWithEasingFunction(1.0, 1.0, &ease_out)?;
 
             let _ = self.popup.root().StartAnimation(&HSTRING::from("Scale"), &sc);
             let _ = self
@@ -397,34 +645,82 @@ impl StartMenu {
             self.popup.hide();
             return;
         }
+        let genie = prefs::get().min_effect == 0;
         let go = || -> windows_core::Result<()> {
             let c = &self.comp;
-            let ease = CompositionEasingFunction::CreateCubicBezierEasingFunction(
+            let ease_in = CompositionEasingFunction::CreateCubicBezierEasingFunction(
                 c,
-                Vector2 { X: 0.4, Y: 0.0 },
-                Vector2 { X: 1.0, Y: 1.0 },
+                Vector2 { X: 0.45, Y: 0.0 },
+                Vector2 { X: 0.2, Y: 1.0 },
+            )?;
+            let ease_pinch = CompositionEasingFunction::CreateCubicBezierEasingFunction(
+                c,
+                Vector2 { X: 0.3, Y: 0.0 },
+                Vector2 { X: 0.5, Y: 1.0 },
             )?;
             let _ = self.popup.root().SetCenterPoint(self.pop_at);
 
             let sc = c.CreateVector3KeyFrameAnimation()?;
-            sc.SetDuration(windows::Foundation::TimeSpan {
-                Duration: 130 * 10_000,
-            })?;
-            sc.InsertKeyFrameWithEasingFunction(
-                1.0,
-                Vector3 {
-                    X: 0.95,
-                    Y: 0.95,
-                    Z: 1.0,
-                },
-                &ease,
-            )?;
+            if genie {
+                sc.SetDuration(windows::Foundation::TimeSpan {
+                    Duration: 320 * 10_000,
+                })?;
+                sc.InsertKeyFrame(
+                    0.0,
+                    Vector3 {
+                        X: 1.0,
+                        Y: 1.0,
+                        Z: 1.0,
+                    },
+                )?;
+                sc.InsertKeyFrameWithEasingFunction(
+                    0.48,
+                    Vector3 {
+                        X: 0.50,
+                        Y: 0.84,
+                        Z: 1.0,
+                    },
+                    &ease_pinch,
+                )?;
+                sc.InsertKeyFrameWithEasingFunction(
+                    1.0,
+                    Vector3 {
+                        X: 0.10,
+                        Y: 0.10,
+                        Z: 1.0,
+                    },
+                    &ease_in,
+                )?;
+            } else {
+                sc.SetDuration(windows::Foundation::TimeSpan {
+                    Duration: 230 * 10_000,
+                })?;
+                sc.InsertKeyFrame(
+                    0.0,
+                    Vector3 {
+                        X: 1.0,
+                        Y: 1.0,
+                        Z: 1.0,
+                    },
+                )?;
+                sc.InsertKeyFrameWithEasingFunction(
+                    1.0,
+                    Vector3 {
+                        X: 0.14,
+                        Y: 0.14,
+                        Z: 1.0,
+                    },
+                    &ease_in,
+                )?;
+            }
 
             let op = c.CreateScalarKeyFrameAnimation()?;
             op.SetDuration(windows::Foundation::TimeSpan {
-                Duration: 120 * 10_000,
+                Duration: if genie { 310 } else { 220 } * 10_000,
             })?;
-            op.InsertKeyFrameWithEasingFunction(1.0, 0.0, &ease)?;
+            op.InsertKeyFrame(0.0, 1.0)?;
+            op.InsertKeyFrameWithEasingFunction(0.55, 0.82, &ease_in)?;
+            op.InsertKeyFrameWithEasingFunction(1.0, 0.0, &ease_in)?;
 
             let _ = self.popup.root().StartAnimation(&HSTRING::from("Scale"), &sc);
             let _ = self
@@ -1467,6 +1763,20 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             });
             LRESULT(0)
         }
+        WM_APPS_READY => {
+            with(|m| {
+                if let Some(list) = APPS_CACHE.lock().ok().and_then(|g| g.clone()) {
+                    m.apps = list;
+                    m.names = m.apps.iter().map(|a| a.name.clone()).collect();
+                    m.pinned = build_pinned(&m.apps);
+                    m.rebuild_shown();
+                    if m.popup.is_visible() && !m.closing {
+                        m.render();
+                    }
+                }
+            });
+            LRESULT(0)
+        }
         MENU_PICK => {
             with(|m| m.run_power_cmd(wp.0));
             LRESULT(0)
@@ -1497,14 +1807,32 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             });
             LRESULT(0)
         }
+        WM_TIMER if wp.0 == T_REVEAL => {
+            let _ = KillTimer(Some(hwnd), T_REVEAL);
+            with(|m| {
+                if m.popup.is_visible() && !m.closing {
+                    let _ = m.popup.root().SetOpacity(1.0);
+                }
+            });
+            LRESULT(0)
+        }
+        WM_TIMER if wp.0 == T_SNAP => {
+            let _ = KillTimer(Some(hwnd), T_SNAP);
+            with(|m| {
+                if m.popup.is_visible() && !m.closing && m.popup.root().Opacity().unwrap_or(1.0) > 0.8 {
+                    m.capture_live();
+                }
+            });
+            LRESULT(0)
+        }
         crate::prefs::WM_PREFS => {
             with(|m| {
-                let glass = prefs::glass((10.0, 10.0), 20.0 * m.dpi, prefs::Role::Themed);
-                let _ = m.popup.panel.set_params(glass);
                 m.text_cache.clear();
                 m.icon_cache.clear();
                 if m.popup.is_visible() && !m.closing {
+                    m.apply_geometry();
                     m.render();
+                    input::begin_dismiss(m.win_rect, m.popup.hwnd.0 as isize, WM_DISMISS);
                 }
             });
             LRESULT(0)

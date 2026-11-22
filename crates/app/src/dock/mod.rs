@@ -582,7 +582,7 @@ impl Dock {
     }
 
     fn interacting(&self) -> bool {
-        self.tracking || self.preview_hover || self.menu_open || self.dragging.is_some() || self.grace
+        self.tracking || self.preview_hover || self.menu_open || crate::startmenu::is_open() || self.dragging.is_some() || self.grace
     }
 
     fn card_screen_rect(&self) -> (i32, i32, i32, i32) {
@@ -634,6 +634,7 @@ impl Dock {
         if hide && self.shown {
             self.shown = false;
             self.hide_popups();
+            crate::startmenu::close();
             self.animate_stage(self.win.1 as f32 + 8.0);
             timer(self.hwnd, TIMER_HIDEWIN, 500);
             log::line("dock", "sembunyi");
@@ -1270,10 +1271,16 @@ impl Dock {
         self.apply(self.cursor, false);
     }
 
-    fn start_anchor(&self) -> (i32, i32) {
-        let x = self.area.x + self.screen.0 / 2;
-        let y = self.win_pos.1 + self.card_y as i32 - (10.0 * self.dpi).round() as i32;
-        (x, y)
+    fn start_anchor(&self) -> (i32, i32, i32) {
+        let start_x = self
+            .layout
+            .cells
+            .first()
+            .map(|c| self.win_pos.0 + (c.x + c.w / 2.0).round() as i32)
+            .unwrap_or(self.area.x + self.screen.0 / 2);
+        let center_x = self.area.x + self.screen.0 / 2;
+        let bottom_y = self.win_pos.1 + self.card_y as i32;
+        (start_x, center_x, bottom_y)
     }
 
     fn on_click(&mut self, x: f32) {
@@ -1281,9 +1288,12 @@ impl Dock {
         self.hide_popups();
         match entry {
             Entry::Start => {
+                if let Some(v) = self.views.get(idx) {
+                    let _ = v.bounce(self.icon_y);
+                }
                 if crate::prefs::get().abra_start_menu {
-                    let (ax, ay) = self.start_anchor();
-                    crate::startmenu::toggle(&self.comp, ax, ay, self.dpi);
+                    let (sx, cx, by) = self.start_anchor();
+                    crate::startmenu::toggle(&self.comp, sx, cx, by, self.dpi);
                 } else {
                     launch::toggle_start(self.start_open_at_press);
                 }
@@ -1610,8 +1620,8 @@ impl Dock {
                 } else if let Some(key) = info.special {
                     if key == START_KEY {
                         if crate::prefs::get().abra_start_menu {
-                            let (ax, ay) = self.start_anchor();
-                            crate::startmenu::toggle(&self.comp, ax, ay, self.dpi);
+                            let (sx, cx, by) = self.start_anchor();
+                            crate::startmenu::toggle(&self.comp, sx, cx, by, self.dpi);
                         } else {
                             launch::toggle_start(false);
                         }
