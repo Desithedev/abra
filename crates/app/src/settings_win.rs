@@ -159,6 +159,7 @@ enum Action {
     WidgetStyle(u8),
     WidgetGallery,
     BatteryPct(u8),
+    BrowserCycle,
 }
 
 struct Region {
@@ -886,7 +887,18 @@ impl Win {
         };
         match page {
             0 => vec![
-                (None, vec![RowDef::Seg(prefs::tr("Bahasa"), vec![("Indonesia", Action::Lang(Lang::Id)), ("English", Action::Lang(Lang::En))], if s.lang == Lang::Id { 0 } else { 1 })]),
+                (
+                    None,
+                    vec![RowDef::Seg(
+                        prefs::tr("Bahasa"),
+                        vec![("Indonesia", Action::Lang(Lang::Id)), ("English", Action::Lang(Lang::En)), ("Tiếng Việt", Action::Lang(Lang::Vi))],
+                        match s.lang {
+                            Lang::Id => 0,
+                            Lang::En => 1,
+                            Lang::Vi => 2,
+                        },
+                    )],
+                ),
                 (
                     Some(prefs::tr("Sistem")),
                     vec![
@@ -895,6 +907,7 @@ impl Win {
                         RowDef::Toggle(prefs::tr("Sembunyikan ikon desktop saat ABRA berjalan"), s.hide_desktop_icons, Action::HideIcons),
                         RowDef::Toggle(prefs::tr("Selalu di atas jendela layar penuh"), s.above_fullscreen, Action::AboveFull),
                         RowDef::Toggle(prefs::tr("Pintasan cepat (Alt+` ganti jendela app)"), s.mac_shortcuts, Action::MacKeys),
+                        RowDef::Pick(prefs::tr("Peramban bawaan"), prefs::tr(s.browser.title()).to_string(), Action::BrowserCycle),
                     ],
                 ),
                 (
@@ -908,8 +921,11 @@ impl Win {
                     Some(prefs::tr("Tentang")),
                     {
                         use crate::updater::Phase;
-                        let en = s.lang == Lang::En;
-                        let ver: &'static str = if en { concat!("Version ", env!("CARGO_PKG_VERSION"), " \u{00B7} Early Access") } else { concat!("Versi ", env!("CARGO_PKG_VERSION"), " \u{00B7} Early Access") };
+                        let ver: &'static str = match s.lang {
+                            Lang::Id => concat!("Versi ", env!("CARGO_PKG_VERSION"), " \u{00B7} Early Access"),
+                            Lang::En => concat!("Version ", env!("CARGO_PKG_VERSION"), " \u{00B7} Early Access"),
+                            Lang::Vi => concat!("Phiên bản ", env!("CARGO_PKG_VERSION"), " \u{00B7} Early Access"),
+                        };
                         let button = match crate::updater::phase() {
                             Phase::Idle => prefs::tr("Periksa pembaruan").to_string(),
                             Phase::Checking => prefs::tr("Memeriksa\u{2026}").to_string(),
@@ -1891,6 +1907,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 Some(Action::StageRight(r)) => prefs::update(|s| s.stage_right = r),
                 Some(Action::StageIcons(m)) => prefs::update(|s| s.stage_icons = m),
                 Some(Action::MacKeys) => prefs::update(|s| s.mac_shortcuts = !s.mac_shortcuts),
+                Some(Action::BrowserCycle) => prefs::update(|s| s.browser = s.browser.next()),
                 Some(Action::Accent(ACCENT_KEEP)) => {}
                 Some(Action::Accent(i)) => prefs::update(|s| {
                     s.accent = i;

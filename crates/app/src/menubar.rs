@@ -48,13 +48,14 @@ const LOGO: u32 = 1;
 const APP: u32 = 2;
 const PROF0: u32 = 30;
 const PROF_CMD: usize = 200_000;
-const GUIDE_URL: &str = "https://github.com/abdeealfarizi/abra/blob/main/docs/PANDUAN.md";
+const GUIDE_URL: &str = "https://github.com/Desithedev/abra/blob/main/docs/PANDUAN.md";
 const CLOCK: u32 = 10;
 const CTRL: u32 = 11;
 const SEARCH: u32 = 12;
 const WIFI: u32 = 13;
 const BATT: u32 = 14;
 const STAGEI: u32 = 15;
+const TRAY: u32 = 16;
 const NATIVE0: u32 = 50;
 const NATIVE_CMD: usize = 100_000;
 
@@ -107,6 +108,10 @@ fn with_bar<R>(f: impl FnOnce(&mut Bar) -> R) -> Option<R> {
     BAR.with(|c| c.try_borrow_mut().ok().and_then(|mut b| b.as_mut().map(|b| f(b))))
 }
 
+pub fn refresh() {
+    with_bar(|b| b.render());
+}
+
 pub fn refresh_radios() {
     with_bar(|b| {
         if let Some(r) = &b.radios {
@@ -115,8 +120,8 @@ pub fn refresh_radios() {
     });
 }
 
-fn english() -> bool {
-    prefs::get().lang == nacre_core::i18n::Lang::En
+fn lang() -> nacre_core::i18n::Lang {
+    prefs::get().lang
 }
 
 fn recolor(b: &Bitmap, rgb: [u8; 3]) -> Vec<u8> {
@@ -668,9 +673,9 @@ impl Bar {
             LItem { id: APP, width: t(&self.app_label(), APP_W) },
         ];
         if self.native.is_empty() {
-            let en = english();
+            let l = lang();
             for (i, m) in self.profile().iter().enumerate() {
-                left.push(LItem { id: PROF0 + i as u32, width: t(m.title(en), BAR_W) });
+                left.push(LItem { id: PROF0 + i as u32, width: t(m.title(l), BAR_W) });
             }
         } else {
             for (i, top) in self.native.iter().enumerate().take(20) {
@@ -693,6 +698,7 @@ impl Bar {
             let extra = if prefs::get().battery_pct == 2 { self.small_w(&format!("{pct}%"), 12.0, BAR_W) + 5.0 * d } else { 0.0 };
             right.push(LItem { id: BATT, width: 40.0 * d + extra });
         }
+        right.push(LItem { id: TRAY, width: 24.0 * d });
         let gap = services::notch_on(self.area).map(|(l, r, _)| Gap { left: l as f32, right: r as f32 });
         let (l, r) = lay::layout(self.screen.0 as f32, 6.0 * d, &left, &right, gap);
         self.left = l;
@@ -720,21 +726,17 @@ impl Bar {
         let lang = prefs::get().lang;
         let wd = nacre_core::island::calendar::weekday(n.year, n.month, n.day) as usize;
         let days = nacre_core::i18n::weekday_labels(lang, false, nacre_core::island::calendar::weekday_labels(false));
-        let months_en = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-        let months_id = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
-        let mon = match lang {
-            nacre_core::i18n::Lang::En => months_en[(n.month - 1) as usize % 12],
-            nacre_core::i18n::Lang::Id => months_id[(n.month - 1) as usize % 12],
-        };
+        let mon = nacre_core::i18n::month_short(lang, n.month);
         let time = if prefs::get().clock_24h {
-            format!("{:02}.{:02}", n.hour, n.minute)
+            let sep = if lang == nacre_core::i18n::Lang::Id { '.' } else { ':' };
+            format!("{:02}{sep}{:02}", n.hour, n.minute)
         } else {
             let (h12, ap) = (if n.hour % 12 == 0 { 12 } else { n.hour % 12 }, if n.hour < 12 { "AM" } else { "PM" });
             format!("{h12}:{:02} {ap}", n.minute)
         };
         match lang {
             nacre_core::i18n::Lang::En => format!("{} {} {}  {}", days[wd % 7], mon, n.day, time),
-            nacre_core::i18n::Lang::Id => format!("{} {} {}  {}", days[wd % 7], n.day, mon, time),
+            nacre_core::i18n::Lang::Id | nacre_core::i18n::Lang::Vi => format!("{} {} {}  {}", days[wd % 7], n.day, mon, time),
         }
     }
 
@@ -979,7 +981,7 @@ impl Bar {
                 LOGO => self.draw_logo(p.x, p.w),
                 APP => self.draw_text(&app, APP_W, p.x, p.w, 1.0),
                 n if (PROF0..PROF0 + 12).contains(&n) => {
-                    let title = self.profile().get((n - PROF0) as usize).map(|m| m.title(english())).unwrap_or("");
+                    let title = self.profile().get((n - PROF0) as usize).map(|m| m.title(lang())).unwrap_or("");
                     self.draw_text(title, BAR_W, p.x, p.w, 1.0)
                 }
                 n if n >= NATIVE0 && n < NATIVE0 + 20 => {
@@ -996,6 +998,7 @@ impl Bar {
                 CTRL => self.draw_glyph("\u{E9E9}", cx, 13.0, 0.95),
                 SEARCH => self.draw_glyph("\u{E721}", cx, 13.0, 0.95),
                 STAGEI => self.draw_glyph("\u{E8A0}", cx, 13.0, 0.95),
+                TRAY => self.draw_glyph(if crate::traymenu::is_open() { "\u{E70D}" } else { "\u{E70E}" }, cx, 11.0, 0.9),
                 WIFI => self.draw_wifi(cx),
                 BATT => {
                     if !self.shadow {
@@ -1029,7 +1032,7 @@ impl Bar {
         use windows::Foundation::TimeSpan;
         use windows::UI::Composition::{CompositionObject, CompositionEasingFunction};
         use windows_core::{Interface, HSTRING};
-        let cc = if crate::controlcenter::is_open() { Some(CTRL) } else { None };
+        let cc = if crate::controlcenter::is_open() { Some(CTRL) } else if crate::traymenu::is_open() { Some(TRAY) } else { None };
         let active = self.open.or(cc).or(self.hover).filter(|id| *id != CLOCK || self.open.is_none());
         let d = self.dpi;
         let ms = |v: u32| TimeSpan { Duration: v as i64 * 10_000 };
@@ -1253,15 +1256,15 @@ impl Bar {
                 ]
             }
             n if (PROF0..PROF0 + 12).contains(&n) => {
-                let en = english();
+                let l = lang();
                 let Some(m) = self.profile().get((n - PROF0) as usize) else { return vec![] };
                 m.lines
                     .iter()
                     .enumerate()
-                    .map(|(j, l)| match l {
+                    .map(|(j, line)| match line {
                         Line::Sep => Item::separator(),
                         Line::Cmd { accel, .. } => {
-                            let it = a(PROF_CMD + (n - PROF0) as usize * 100 + j, l.label(en));
+                            let it = a(PROF_CMD + (n - PROF0) as usize * 100 + j, line.label(l));
                             if accel.is_empty() { it } else { it.with_accel(accel) }
                         }
                     })
@@ -1296,6 +1299,14 @@ impl Bar {
                 nacre_platform::wins::focus::dismiss_shell_flyout();
                 if let Some((x, _)) = self.rect_of(WIFI) {
                     crate::netmenu::show(&self.comp, crate::netmenu::Which::Wifi, crate::netmenu::Anchor::Below(self.area.x + x as i32, self.area.y + self.h), self.dpi);
+                }
+            }
+            TRAY => {
+                self.close_menu();
+                crate::controlcenter::close();
+                nacre_platform::wins::focus::dismiss_shell_flyout();
+                if let Some((x, w)) = self.rect_of(TRAY) {
+                    crate::traymenu::toggle(&self.comp, self.area.x + x as i32 + (w as i32) / 2, self.area.y + self.h, self.dpi);
                 }
             }
             BATT => launch::open("ms-settings:batterysaver"),

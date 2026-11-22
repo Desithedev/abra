@@ -23,9 +23,26 @@ fn off_thread(job: impl FnOnce() + Send + 'static) {
     }
 }
 
+static BROWSER_EXE: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+
+pub fn set_browser(exe: Option<&str>) {
+    if let Ok(mut g) = BROWSER_EXE.write() {
+        *g = exe.map(|s| s.to_string());
+    }
+}
+
 pub fn open(path: &str) {
-    let path = path.split('?').next().unwrap_or(path).to_string();
+    let is_web = path.starts_with("http://") || path.starts_with("https://");
+    let path = if is_web { path.to_string() } else { path.split('?').next().unwrap_or(path).to_string() };
+    let browser = if is_web { BROWSER_EXE.read().ok().and_then(|g| g.clone()) } else { None };
     off_thread(move || unsafe {
+        if let Some(exe) = browser {
+            let r = ShellExecuteW(None, w!("open"), &HSTRING::from(exe.as_str()), &HSTRING::from(path.as_str()), None, SW_SHOWNORMAL);
+            if r.0 as isize > 32 {
+                return;
+            }
+            crate::log::line("launch", &format!("{exe} gagal dibuka (kode {}), kembali ke bawaan Windows", r.0 as isize));
+        }
         ShellExecuteW(None, w!("open"), &HSTRING::from(path.as_str()), None, None, SW_SHOWNORMAL);
     });
 }

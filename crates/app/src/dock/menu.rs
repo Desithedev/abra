@@ -31,13 +31,14 @@ pub struct Item {
     pub heading: bool,
     pub title: bool,
     pub lead: Option<(nacre_core::symbols::Sym, bool)>,
+    pub icon: Option<std::sync::Arc<nacre_platform::icons::Bitmap>>,
     pub trail: Vec<nacre_core::symbols::Sym>,
     pub keep_open: bool,
 }
 
 impl Item {
     pub fn action(id: usize, label: &str, enabled: bool) -> Item {
-        Item { id, label: label.to_string(), enabled, separator: false, accel: String::new(), sym: None, toggle: None, heading: false, title: false, lead: None, trail: Vec::new(), keep_open: false }
+        Item { id, label: label.to_string(), enabled, separator: false, accel: String::new(), sym: None, toggle: None, heading: false, title: false, lead: None, icon: None, trail: Vec::new(), keep_open: false }
     }
     pub fn separator() -> Item {
         Item { separator: true, ..Item::action(0, "", false) }
@@ -50,6 +51,10 @@ impl Item {
     }
     pub fn with_lead(mut self, s: nacre_core::symbols::Sym, on: bool) -> Item {
         self.lead = Some((s, on));
+        self
+    }
+    pub fn with_icon(mut self, bmp: Option<nacre_platform::icons::Bitmap>) -> Item {
+        self.icon = bmp.map(std::sync::Arc::new);
         self
     }
     pub fn with_trail(mut self, s: Vec<nacre_core::symbols::Sym>) -> Item {
@@ -317,8 +322,8 @@ impl Menu {
         let lead_d = 26.0 * d;
         let sw = (32.0 * d, 19.0 * d);
         let trail_px = 14.0 * d;
-        let label_x = |it: &Item| if it.lead.is_some() { pad + 8.0 * d + lead_d + 10.0 * d } else { pad + 12.0 * d + sym_w };
-        let rich = items.iter().any(|i| i.lead.is_some() || i.toggle.is_some());
+        let label_x = |it: &Item| if it.lead.is_some() || it.icon.is_some() { pad + 8.0 * d + lead_d + 10.0 * d } else { pad + 12.0 * d + sym_w };
+        let rich = items.iter().any(|i| i.lead.is_some() || i.icon.is_some() || i.toggle.is_some());
         let widest = items
             .iter()
             .filter(|i| !i.separator)
@@ -344,7 +349,7 @@ impl Menu {
                 sep_h
             } else if it.title {
                 34.0 * d
-            } else if it.lead.is_some() {
+            } else if it.lead.is_some() || it.icon.is_some() {
                 lead_d + 8.0 * d
             } else if it.heading {
                 26.0 * d
@@ -417,6 +422,19 @@ impl Menu {
                 s.SetOffset(Vector3 { X: (cx + (lead_d - n as f32) / 2.0).round(), Y: (cy + (lead_d - n as f32) / 2.0).round(), Z: 0.0 })?;
                 s.SetOpacity(if on { 1.0 } else { 0.85 })?;
                 rb.Children()?.InsertAtTop(&s)?;
+            }
+            if let Some(bmp) = &it.icon {
+                let sz = (22.0 * d).round();
+                let (cx, cy) = (pad + 8.0 * d + (lead_d - sz) / 2.0, ry + (rh - sz) / 2.0);
+                if let Ok(surf) = gfx.surface_from_bgra(bmp.w, bmp.h, &bmp.bgra) {
+                    let sp = comp.CreateSpriteVisual()?;
+                    let br = comp.CreateSurfaceBrushWithSurface(&surf)?;
+                    br.SetStretch(CompositionStretch::Fill)?;
+                    sp.SetBrush(&br)?;
+                    sp.SetSize(Vector2 { X: sz, Y: sz })?;
+                    sp.SetOffset(Vector3 { X: cx.round(), Y: cy.round(), Z: 0.0 })?;
+                    rb.Children()?.InsertAtTop(&sp)?;
+                }
             }
             if let Some(on) = it.toggle {
                 let (tx, ty) = (w - pad - 10.0 * d - sw.0, ry + (rh - sw.1) / 2.0);

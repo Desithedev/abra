@@ -26,6 +26,7 @@ pub fn launch_font() -> nacre_core::theme::FontChoice {
 pub fn init() {
     let s = std::fs::read_to_string(file()).map(|t| Settings::parse(&t)).unwrap_or_default();
     let _ = LAUNCH_FONT.set(s.font);
+    nacre_platform::launch::set_browser(s.browser.exe());
     log::line("prefs", &format!("dimuat: {s:?}"));
     *CUR.lock().unwrap() = Some(s);
 }
@@ -56,6 +57,7 @@ pub fn update_with(save: bool, f: impl FnOnce(&mut Settings)) {
         return;
     }
     *CUR.lock().unwrap() = Some(s);
+    nacre_platform::launch::set_browser(s.browser.exe());
     DIRTY.store(!save, std::sync::atomic::Ordering::Relaxed);
     if save {
         let _ = std::fs::create_dir_all(paths::config_dir());
@@ -126,7 +128,7 @@ pub fn glass(size: (f32, f32), radius: f32, role: Role) -> GlassParams {
 
 pub fn tr(src: &'static str) -> &'static str {
     let lang = get().lang;
-    if lang == nacre_core::i18n::Lang::En && !nacre_core::i18n::is_known(src) {
+    if lang != nacre_core::i18n::Lang::Id && !nacre_core::i18n::is_known(src) {
         note_missing(src);
     }
     nacre_core::i18n::tr(lang, src)

@@ -14,6 +14,7 @@ mod menubar;
 mod menulogo;
 mod widgets;
 mod netmenu;
+mod traymenu;
 mod mission;
 mod motion;
 mod spotlight;

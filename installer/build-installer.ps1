@@ -1,5 +1,5 @@
 param(
-  [string]$Version = "0.6.0",
+  [string]$Version = "0.6.1",
   [switch]$NoBuild
 )
 $ErrorActionPreference = "Stop"
@@ -34,7 +34,7 @@ foreach ($f in $files) {
   if (-not (Test-Path (Join-Path $Source $f))) { throw "Missing $f in $Source." }
 }
 
-$needles = @($env:USERNAME, $env:USERPROFILE, $root) | Where-Object { $_ -and $_.Length -ge 3 } | Select-Object -Unique
+$needles = @("\$($env:USERNAME)\", "/$($env:USERNAME)/", $env:USERPROFILE, $root) | Where-Object { $_ -and $_.Length -ge 3 } | Select-Object -Unique
 foreach ($f in $files) {
   $bytes = [IO.File]::ReadAllBytes((Join-Path $Source $f))
   $ascii = [Text.Encoding]::ASCII.GetString($bytes)

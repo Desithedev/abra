@@ -23,6 +23,7 @@ pub mod media;
 pub mod menus;
 pub mod monitors;
 pub mod net;
+pub mod trayicons;
 pub mod media_fake;
 pub mod log;
 pub mod osd;

@@ -58,25 +58,19 @@ pub fn add_days(y: i32, m: u32, d: u32, delta: i32) -> (i32, u32, u32) {
     (y, m, d as u32)
 }
 
-pub fn month_short(m: u32, en: bool) -> &'static str {
-    const ID: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
-    const EN: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    let i = (m.clamp(1, 12) - 1) as usize;
-    if en {
-        EN[i]
-    } else {
-        ID[i]
-    }
+pub fn month_short(m: u32, lang: crate::i18n::Lang) -> &'static str {
+    crate::i18n::month_short(lang, m)
 }
 
-pub fn weekday_short(wd: u32, en: bool) -> &'static str {
+pub fn weekday_short(wd: u32, lang: crate::i18n::Lang) -> &'static str {
     const ID: [&str; 7] = ["MIN", "SEN", "SEL", "RAB", "KAM", "JUM", "SAB"];
     const EN: [&str; 7] = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+    const VI: [&str; 7] = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"];
     let i = (wd % 7) as usize;
-    if en {
-        EN[i]
-    } else {
-        ID[i]
+    match lang {
+        crate::i18n::Lang::Id => ID[i],
+        crate::i18n::Lang::En => EN[i],
+        crate::i18n::Lang::Vi => VI[i],
     }
 }
 
@@ -131,9 +125,10 @@ mod tests {
         assert_eq!(add_days(2026, 3, 1, -1), (2026, 2, 28));
         assert_eq!(add_days(2024, 3, 1, -1), (2024, 2, 29));
         assert_eq!(add_days(2026, 1, 2, -40), (2025, 11, 23));
-        assert_eq!(weekday_short(weekday(2026, 11, 13), false), "JUM");
-        assert_eq!(weekday_short(4, true), "THU");
-        assert_eq!((month_short(8, false), month_short(8, true)), ("Agu", "Aug"));
+        assert_eq!(weekday_short(weekday(2026, 11, 13), crate::i18n::Lang::Id), "JUM");
+        assert_eq!(weekday_short(4, crate::i18n::Lang::En), "THU");
+        assert_eq!(weekday_short(4, crate::i18n::Lang::Vi), "T5");
+        assert_eq!((month_short(8, crate::i18n::Lang::Id), month_short(8, crate::i18n::Lang::En), month_short(8, crate::i18n::Lang::Vi)), ("Agu", "Aug", "Th8"));
     }
 
     #[test]

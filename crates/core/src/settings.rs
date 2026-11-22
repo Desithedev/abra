@@ -5,6 +5,102 @@ use crate::i18n::Lang;
 use crate::visibility::policy::Mode;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Browser {
+    #[default]
+    System,
+    Chrome,
+    Edge,
+    Brave,
+    Firefox,
+    Opera,
+    Vivaldi,
+    Arc,
+    Zen,
+    CocCoc,
+}
+
+impl Browser {
+    pub const ALL: [Browser; 10] = [
+        Browser::System,
+        Browser::Chrome,
+        Browser::Edge,
+        Browser::Brave,
+        Browser::Firefox,
+        Browser::Opera,
+        Browser::Vivaldi,
+        Browser::Arc,
+        Browser::Zen,
+        Browser::CocCoc,
+    ];
+
+    pub fn parse(s: &str) -> Option<Browser> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "system" | "default" | "windows" | "0" => Some(Browser::System),
+            "chrome" => Some(Browser::Chrome),
+            "edge" | "msedge" => Some(Browser::Edge),
+            "brave" => Some(Browser::Brave),
+            "firefox" => Some(Browser::Firefox),
+            "opera" => Some(Browser::Opera),
+            "vivaldi" => Some(Browser::Vivaldi),
+            "arc" => Some(Browser::Arc),
+            "zen" => Some(Browser::Zen),
+            "coccoc" | "coc_coc" => Some(Browser::CocCoc),
+            _ => None,
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Browser::System => "system",
+            Browser::Chrome => "chrome",
+            Browser::Edge => "edge",
+            Browser::Brave => "brave",
+            Browser::Firefox => "firefox",
+            Browser::Opera => "opera",
+            Browser::Vivaldi => "vivaldi",
+            Browser::Arc => "arc",
+            Browser::Zen => "zen",
+            Browser::CocCoc => "coccoc",
+        }
+    }
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Browser::System => "Bawaan Windows",
+            Browser::Chrome => "Chrome",
+            Browser::Edge => "Edge",
+            Browser::Brave => "Brave",
+            Browser::Firefox => "Firefox",
+            Browser::Opera => "Opera",
+            Browser::Vivaldi => "Vivaldi",
+            Browser::Arc => "Arc",
+            Browser::Zen => "Zen",
+            Browser::CocCoc => "Cốc Cốc",
+        }
+    }
+
+    pub fn exe(self) -> Option<&'static str> {
+        match self {
+            Browser::System => None,
+            Browser::Chrome => Some("chrome.exe"),
+            Browser::Edge => Some("msedge.exe"),
+            Browser::Brave => Some("brave.exe"),
+            Browser::Firefox => Some("firefox.exe"),
+            Browser::Opera => Some("opera.exe"),
+            Browser::Vivaldi => Some("vivaldi.exe"),
+            Browser::Arc => Some("arc.exe"),
+            Browser::Zen => Some("zen.exe"),
+            Browser::CocCoc => Some("browser.exe"),
+        }
+    }
+
+    pub fn next(self) -> Browser {
+        let i = Self::ALL.iter().position(|b| *b == self).unwrap_or(0);
+        Self::ALL[(i + 1) % Self::ALL.len()]
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Reveal {
     #[default]
     Quick,
@@ -388,6 +484,7 @@ pub struct Settings {
     pub dock_reveal: Reveal,
     pub rail_reveal: Reveal,
     pub notch_reveal: Reveal,
+    pub browser: Browser,
     pub notch_scale: u8,
     pub island_gap: u8,
     pub update_check: bool,
@@ -486,6 +583,7 @@ impl Default for Settings {
             dock_reveal: Reveal::Quick,
             rail_reveal: Reveal::Quick,
             notch_reveal: Reveal::Quick,
+            browser: Browser::System,
             notch_scale: 100,
             island_gap: 7,
             update_check: true,
@@ -723,6 +821,7 @@ impl Settings {
                 "dock_reveal" => s.dock_reveal = Reveal::parse(v).unwrap_or(s.dock_reveal),
                 "rail_reveal" => s.rail_reveal = Reveal::parse(v).unwrap_or(s.rail_reveal),
                 "notch_reveal" => s.notch_reveal = Reveal::parse(v).unwrap_or(s.notch_reveal),
+                "browser" => s.browser = Browser::parse(v).unwrap_or(s.browser),
                 "notch_scale" => s.notch_scale = v.trim_end_matches('%').parse::<u16>().map(|n| n.clamp(80, 130) as u8).unwrap_or(s.notch_scale),
                 "island_gap" => s.island_gap = v.parse::<u16>().map(|n| n.min(40) as u8).unwrap_or(s.island_gap),
                 "update_check" => s.update_check = parse_bool(v).unwrap_or(s.update_check),
@@ -764,7 +863,7 @@ impl Settings {
 
     pub fn serialize(&self) -> String {
         format!(
-            "# ABRA settings\ntakeover={}\ndock={}\nnotch={}\nblur={}\nstyle={}\ntransparency={}\ntheme={}\nlang={}\ndock_material={}\ndock_round={}\nnotch_material={}\nnotch_round={}\nautostart={}\ndock_size={}\ndock_gap={}\ndock_zoom={}\ndock_margin={}\nanim={}\nrefraction={}\ndock_enabled={}\nnotch_enabled={}\nnotch_hover_open={}\nwin_shadow={}\nmenubar={}\nclock_24h={}\nmenubar_glass={}\nhot_tl={}\nhot_tr={}\nhot_bl={}\nhot_br={}\nstage={}\nswitcher={}\nstage_right={}\nstage_size={}\nstage_gap={}\nstage_count={}\nstage_speed={}\nstage_desktop_click={}\nstage_media={}\nstage_icons={}\nstage_titles={}\nhide_desktop_icons={}\nmenubar_style={}\ndock_plates={}\nover_fullscreen={}\nclipboard_history={}\nicon_style={}\nicon_tint={}\naccent={}\nmac_shortcuts={}\ndownloads_stack={}\nrecent_apps={}\nicon_pack={}\nmenubar_material={}\nicon_variant={}\nmin_effect={}\nnotch_idle={}\ngreet_name={}\ngreet_text={}\nlyrics_compact={}\nlyrics_online={}\nnotch_downloads={}\nnotch_send={}\nui_scale={}\nnotch_island={}\nwidget_style={}\nbattery_pct={}\nrail={}\nnotch_scale={}\nisland_gap={}\nupdate_check={}\nnotch_glow={}\npill_devices={}\npill_notices={}\npill_reminders={}\ntodo_hotkey={}\ndeck_screen={}\nrail_screen={}\nnotch_screen={}\nwidget_screen={}\npreset={}\nvisualizer={}\nfont={}\nreduce_motion={}\nfocus_cat={}\nfocus_mins={}\nbreak_mins={}\nfocus_name={}\nmeeting_companion={}\ncapsule={}\ncapsule_layout={}\ncapsule_decor={}\naccent_rgb={}\ndock_reveal={}\nrail_reveal={}\nnotch_reveal={}\n",
+            "# ABRA settings\ntakeover={}\ndock={}\nnotch={}\nblur={}\nstyle={}\ntransparency={}\ntheme={}\nlang={}\ndock_material={}\ndock_round={}\nnotch_material={}\nnotch_round={}\nautostart={}\ndock_size={}\ndock_gap={}\ndock_zoom={}\ndock_margin={}\nanim={}\nrefraction={}\ndock_enabled={}\nnotch_enabled={}\nnotch_hover_open={}\nwin_shadow={}\nmenubar={}\nclock_24h={}\nmenubar_glass={}\nhot_tl={}\nhot_tr={}\nhot_bl={}\nhot_br={}\nstage={}\nswitcher={}\nstage_right={}\nstage_size={}\nstage_gap={}\nstage_count={}\nstage_speed={}\nstage_desktop_click={}\nstage_media={}\nstage_icons={}\nstage_titles={}\nhide_desktop_icons={}\nmenubar_style={}\ndock_plates={}\nover_fullscreen={}\nclipboard_history={}\nicon_style={}\nicon_tint={}\naccent={}\nmac_shortcuts={}\ndownloads_stack={}\nrecent_apps={}\nicon_pack={}\nmenubar_material={}\nicon_variant={}\nmin_effect={}\nnotch_idle={}\ngreet_name={}\ngreet_text={}\nlyrics_compact={}\nlyrics_online={}\nnotch_downloads={}\nnotch_send={}\nui_scale={}\nnotch_island={}\nwidget_style={}\nbattery_pct={}\nrail={}\nnotch_scale={}\nisland_gap={}\nupdate_check={}\nnotch_glow={}\npill_devices={}\npill_notices={}\npill_reminders={}\ntodo_hotkey={}\ndeck_screen={}\nrail_screen={}\nnotch_screen={}\nwidget_screen={}\npreset={}\nvisualizer={}\nfont={}\nreduce_motion={}\nfocus_cat={}\nfocus_mins={}\nbreak_mins={}\nfocus_name={}\nmeeting_companion={}\ncapsule={}\ncapsule_layout={}\ncapsule_decor={}\naccent_rgb={}\ndock_reveal={}\nrail_reveal={}\nnotch_reveal={}\nbrowser={}\n",
             self.takeover,
             self.dock.key(),
             self.notch.key(),
@@ -860,7 +959,8 @@ impl Settings {
             self.accent_rgb.map(hex).unwrap_or_default(),
             self.dock_reveal.key(),
             self.rail_reveal.key(),
-            self.notch_reveal.key()
+            self.notch_reveal.key(),
+            self.browser.key()
         )
     }
 }
@@ -1210,6 +1310,20 @@ menubar_material=true
         assert!(c.visor_edge_ms() > q.visor_edge_ms() && c.visor_open_ms() > q.visor_open_ms());
         assert_eq!((q.deck_ms(), q.rail_ms(), q.visor_edge_ms()), (200, 150, 200), "Cepat sama dengan perilaku lama");
         assert!(q.visor_open_ms() < 300, "Cepat membuka Visor lebih cepat dari 300 ms lama");
+    }
+
+    #[test]
+    fn browser_setting_round_trip_and_cycles() {
+        assert_eq!(Settings::default().browser, Browser::System);
+        let s = Settings::parse(&Settings::parse("browser=firefox\n").serialize());
+        assert_eq!(s.browser, Browser::Firefox);
+        assert_eq!(s.browser.exe(), Some("firefox.exe"));
+        assert_eq!(Settings::parse("browser=unknown\n").browser, Browser::System);
+        let mut b = Browser::System;
+        for _ in 0..Browser::ALL.len() {
+            b = b.next();
+        }
+        assert_eq!(b, Browser::System);
     }
 
     #[test]

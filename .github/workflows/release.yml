@@ -1,0 +1,63 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version (e.g. 0.6.1, without v prefix)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Resolve version
+        shell: pwsh
+        run: |
+          $v = if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            "${{ inputs.version }}"
+          } else {
+            "${{ github.ref_name }}".TrimStart("v")
+          }
+          "VERSION=$v" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Ensure Inno Setup 6
+        shell: pwsh
+        run: |
+          $found = (Get-Command iscc.exe -ErrorAction SilentlyContinue) -or
+                   (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe") -or
+                   (Test-Path "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe")
+          if (-not $found) {
+            choco install innosetup -y --no-progress
+          }
+
+      - name: Run unit tests
+        run: cargo test -p nacre-core
+
+      - name: Build installer and portable zip
+        shell: pwsh
+        run: .\installer\build-installer.ps1 -Version $env:VERSION
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION }}
+          name: ABRA ${{ env.VERSION }}
+          generate_release_notes: true
+          files: |
+            dist/ABRA-Setup-${{ env.VERSION }}.exe
+            dist/ABRA-${{ env.VERSION }}-win-x64.zip

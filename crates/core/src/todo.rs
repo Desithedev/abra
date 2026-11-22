@@ -53,22 +53,22 @@ fn span(tok: &str) -> Option<i64> {
     let unit = &lower[digits.len()..];
     let n = digits.parse::<i64>().ok().filter(|n| *n > 0 && *n <= 10_000)?;
     match unit {
-        "m" | "mnt" | "min" | "menit" => Some(n),
-        "j" | "jam" | "h" | "hr" | "hour" | "hours" => Some(n * 60),
+        "m" | "mnt" | "min" | "menit" | "p" | "phut" | "phút" => Some(n),
+        "j" | "jam" | "h" | "hr" | "hour" | "hours" | "g" | "gio" | "giờ" => Some(n * 60),
         _ => None,
     }
 }
 
 pub fn parse(input: &str, now: Civil) -> (String, Option<i64>) {
     let mut words: Vec<&str> = input.split_whitespace().collect();
-    if words.first().is_some_and(|w| matches!(w.to_lowercase().as_str(), "ingatkan" | "remind" | "reminder" | "pengingat")) {
+    if words.first().is_some_and(|w| matches!(w.to_lowercase().as_str(), "ingatkan" | "remind" | "reminder" | "pengingat" | "nhắc" | "nhac")) {
         words.remove(0);
     }
     let now_m = now.minutes();
     let mut due = None;
     let first = words.first().map(|w| w.to_lowercase());
     match first.as_deref() {
-        Some("besok") | Some("tomorrow") => {
+        Some("besok") | Some("tomorrow") | Some("mai") => {
             if let Some((h, m)) = words.get(1).and_then(|w| hhmm(w)) {
                 due = Some((days_from_civil(now.year, now.month, now.day) + 1) * 1440 + h as i64 * 60 + m as i64);
                 words.drain(..2);
@@ -99,15 +99,15 @@ pub fn parse(input: &str, now: Civil) -> (String, Option<i64>) {
     (text, due)
 }
 
-pub fn due_label(due: i64, now: Civil, english: bool) -> String {
+pub fn due_label(due: i64, now: Civil, lang: crate::i18n::Lang) -> String {
     let day = due.div_euclid(1440);
     let (h, m) = ((due.rem_euclid(1440)) / 60, due.rem_euclid(60));
     let today = days_from_civil(now.year, now.month, now.day);
     let t = format!("{h:02}:{m:02}");
     match day - today {
         0 => t,
-        1 => format!("{} {t}", if english { "Tomorrow" } else { "Besok" }),
-        -1 => format!("{} {t}", if english { "Yesterday" } else { "Kemarin" }),
+        1 => format!("{} {t}", crate::i18n::tr(lang, "Besok")),
+        -1 => format!("{} {t}", crate::i18n::tr(lang, "Kemarin")),
         _ => {
             let (y, mo, d) = civil_from_days(day);
             let _ = y;
@@ -259,10 +259,11 @@ mod tests {
     fn labels() {
         let n = now();
         let base = days_from_civil(2026, 11, 16) * 1440;
-        assert_eq!(due_label(base + 15 * 60 + 30, n, false), "15:30");
-        assert_eq!(due_label(base + 1440 + 8 * 60, n, false), "Besok 08:00");
-        assert_eq!(due_label(base + 1440 + 8 * 60, n, true), "Tomorrow 08:00");
-        assert_eq!(due_label(base + 3 * 1440, n, false), "19/11 00:00");
+        assert_eq!(due_label(base + 15 * 60 + 30, n, crate::i18n::Lang::Id), "15:30");
+        assert_eq!(due_label(base + 1440 + 8 * 60, n, crate::i18n::Lang::Id), "Besok 08:00");
+        assert_eq!(due_label(base + 1440 + 8 * 60, n, crate::i18n::Lang::En), "Tomorrow 08:00");
+        assert_eq!(due_label(base + 1440 + 8 * 60, n, crate::i18n::Lang::Vi), "Ngày mai 08:00");
+        assert_eq!(due_label(base + 3 * 1440, n, crate::i18n::Lang::Id), "19/11 00:00");
     }
 
     #[test]

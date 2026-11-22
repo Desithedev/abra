@@ -251,6 +251,10 @@ pub fn greeting(hour: u32, lang: Lang) -> &'static str {
         (Daypart::Morning, Lang::En) => "Good morning",
         (Daypart::Noon | Daypart::Afternoon, Lang::En) => "Good afternoon",
         (Daypart::Night, Lang::En) => "Good evening",
+        (Daypart::Morning, Lang::Vi) => "Chào buổi sáng",
+        (Daypart::Noon, Lang::Vi) => "Chào buổi trưa",
+        (Daypart::Afternoon, Lang::Vi) => "Chào buổi chiều",
+        (Daypart::Night, Lang::Vi) => "Chào buổi tối",
     }
 }
 

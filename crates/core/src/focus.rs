@@ -152,12 +152,14 @@ pub fn trim(entries: &mut Vec<Entry>, keep: usize) {
     }
 }
 
-pub fn duration_label(minutes: u32, en: bool) -> String {
+pub fn duration_label(minutes: u32, lang: crate::i18n::Lang) -> String {
     let (h, m) = (minutes / 60, minutes % 60);
-    match (h, en) {
+    match (h, lang) {
+        (0, crate::i18n::Lang::Vi) => format!("{m}p"),
         (0, _) => format!("{m}m"),
-        (_, false) => format!("{h}j {m}m"),
-        (_, true) => format!("{h}h {m}m"),
+        (_, crate::i18n::Lang::Id) => format!("{h}j {m}m"),
+        (_, crate::i18n::Lang::En) => format!("{h}h {m}m"),
+        (_, crate::i18n::Lang::Vi) => format!("{h}g {m}p"),
     }
 }
 
@@ -278,9 +280,11 @@ mod tests {
 
     #[test]
     fn labels_and_trim() {
-        assert_eq!(duration_label(85, false), "1j 25m");
-        assert_eq!(duration_label(85, true), "1h 25m");
-        assert_eq!(duration_label(40, false), "40m");
+        assert_eq!(duration_label(85, crate::i18n::Lang::Id), "1j 25m");
+        assert_eq!(duration_label(85, crate::i18n::Lang::En), "1h 25m");
+        assert_eq!(duration_label(85, crate::i18n::Lang::Vi), "1g 25p");
+        assert_eq!(duration_label(40, crate::i18n::Lang::Id), "40m");
+        assert_eq!(duration_label(40, crate::i18n::Lang::Vi), "40p");
         let mut v: Vec<Entry> = (0..10).map(|i| Entry { day: (2026, 1, 1), cat: 0, minutes: i + 1 }).collect();
         trim(&mut v, 4);
         assert_eq!(v.len(), 4);

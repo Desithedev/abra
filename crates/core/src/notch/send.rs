@@ -43,30 +43,30 @@ pub fn ascii_name(s: &str) -> String {
     }
 }
 
-pub fn human_size(b: u64, en: bool) -> String {
+pub fn human_size(b: u64, lang: crate::i18n::Lang) -> String {
     let f = b as f64;
     let (v, unit) = if f < 1000.0 * 1000.0 { (f / 1000.0, "KB") } else if f < 1e9 { (f / 1e6, "MB") } else { (f / 1e9, "GB") };
     let s = if v < 10.0 { format!("{v:.1}") } else { format!("{}", v.round() as u64) };
-    let s = if en { s } else { s.replace('.', ",") };
+    let s = if lang == crate::i18n::Lang::En { s } else { s.replace('.', ",") };
     format!("{s} {unit}")
 }
 
-pub fn page(token: &str, files: &[(String, u64)], en: bool) -> String {
-    let (title, hint, dl) = if en {
-        ("Sent from ABRA", "Tap a file to save it to this phone.", "Download")
-    } else {
-        ("Dikirim dari ABRA", "Ketuk berkas untuk menyimpannya ke HP ini.", "Unduh")
+pub fn page(token: &str, files: &[(String, u64)], lang: crate::i18n::Lang) -> String {
+    let (title, hint, dl) = match lang {
+        crate::i18n::Lang::Id => ("Dikirim dari ABRA", "Ketuk berkas untuk menyimpannya ke HP ini.", "Unduh"),
+        crate::i18n::Lang::En => ("Sent from ABRA", "Tap a file to save it to this phone.", "Download"),
+        crate::i18n::Lang::Vi => ("Gửi từ ABRA", "Chạm vào tệp để lưu vào điện thoại này.", "Tải xuống"),
     };
     let mut rows = String::new();
     for (i, (name, size)) in files.iter().enumerate() {
         rows.push_str(&format!(
             "<a class=\"f\" href=\"/{token}/f/{i}\" download><span class=\"n\">{}</span><span class=\"s\">{}</span><span class=\"b\">{dl}</span></a>\n",
             escape_html(name),
-            human_size(*size, en)
+            human_size(*size, lang)
         ));
     }
     format!(
-        "<!doctype html><html lang=\"{lang}\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
+        "<!doctype html><html lang=\"{lang_code}\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
 <title>ABRA</title><style>\
 body{{margin:0;font:16px -apple-system,system-ui,Segoe UI,Roboto,sans-serif;background:#0d0d10;color:#f2f2f5}}\
 main{{max-width:560px;margin:0 auto;padding:28px 18px}}h1{{font-size:22px;margin:0 0 4px}}p{{color:#9a9aa3;margin:0 0 22px}}\
@@ -74,7 +74,7 @@ main{{max-width:560px;margin:0 auto;padding:28px 18px}}h1{{font-size:22px;margin
 .n{{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}}.s{{color:#9a9aa3;font-size:14px}}\
 .b{{background:#0a84ff;color:#fff;border-radius:999px;padding:7px 14px;font-weight:600;font-size:14px}}\
 </style></head><body><main><h1>{title}</h1><p>{hint}</p>\n{rows}</main></body></html>",
-        lang = if en { "en" } else { "id" }
+        lang_code = lang.key()
     )
 }
 
@@ -105,16 +105,19 @@ mod tests {
         assert_eq!(pct("foto ü.jpg"), "foto%20%C3%BC.jpg");
         assert_eq!(ascii_name("foto ü\".jpg"), "foto __.jpg");
         assert_eq!(ascii_name("日本"), "__");
-        let html = page("tok", &[("<x>.pdf".into(), 1_234_567)], false);
+        let html = page("tok", &[("<x>.pdf".into(), 1_234_567)], crate::i18n::Lang::Id);
         assert!(html.contains("&lt;x&gt;.pdf") && html.contains("/tok/f/0") && html.contains("1,2 MB"));
         assert!(!html.contains("<script"), "tanpa skrip");
+        let html_vi = page("tok", &[("<x>.pdf".into(), 1_234_567)], crate::i18n::Lang::Vi);
+        assert!(html_vi.contains("lang=\"vi\"") && html_vi.contains("Gửi từ ABRA") && html_vi.contains("1,2 MB"));
     }
 
     #[test]
     fn sizes_and_fraction() {
-        assert_eq!(human_size(820_000, true), "820 KB");
-        assert_eq!(human_size(12_400_000, true), "12 MB");
-        assert_eq!(human_size(3_450_000, false), "3,5 MB");
+        assert_eq!(human_size(820_000, crate::i18n::Lang::En), "820 KB");
+        assert_eq!(human_size(12_400_000, crate::i18n::Lang::En), "12 MB");
+        assert_eq!(human_size(3_450_000, crate::i18n::Lang::Id), "3,5 MB");
+        assert_eq!(human_size(3_450_000, crate::i18n::Lang::Vi), "3,5 MB");
         assert_eq!(fraction(50, 200), 0.25);
         assert_eq!(fraction(500, 200), 1.0);
         assert_eq!(fraction(0, 0), 0.0);

@@ -141,23 +141,21 @@ fn hit(r: Rect, x: f32, y: f32) -> bool {
     x >= r.0 && x < r.0 + r.2 && y >= r.1 && y < r.1 + r.3
 }
 
-fn en() -> bool {
-    prefs::get().lang == nacre_core::i18n::Lang::En
-}
-
 fn month_label(m: u32) -> String {
-    const EN: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-    if en() {
-        EN[((m + 11) % 12) as usize].to_string()
-    } else {
-        calendar::month_name(m).to_string()
-    }
+    nacre_core::i18n::month_name(prefs::get().lang, m, calendar::month_name(m)).to_string()
 }
 
 fn weekday_label(wd: u32) -> String {
     const ID: [&str; 7] = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
     const EN: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-    if en() { EN[(wd % 7) as usize] } else { ID[(wd % 7) as usize] }.to_string()
+    const VI: [&str; 7] = ["Chủ nhật", "Thứ hai", "Thứ ba", "Thứ tư", "Thứ năm", "Thứ sáu", "Thứ bảy"];
+    let i = (wd % 7) as usize;
+    match prefs::get().lang {
+        nacre_core::i18n::Lang::Id => ID[i],
+        nacre_core::i18n::Lang::En => EN[i],
+        nacre_core::i18n::Lang::Vi => VI[i],
+    }
+    .to_string()
 }
 
 fn hhmm(h: u32, m: u32) -> String {
@@ -584,15 +582,17 @@ impl Mgr {
                 self.text(p, &format!("{} {}", month_label(n.month), n.year), 12.5 * d, 500, fg, 16.0 * d, h - 32.0 * d, 0, 0.6);
             }
             Kind::Month => {
-                let g = calendar::grid(n.year, n.month, !en());
+                let lang = prefs::get().lang;
+                let monday_first = lang != nacre_core::i18n::Lang::En;
+                let g = calendar::grid(n.year, n.month, monday_first);
                 self.text(p, &month_label(n.month).to_uppercase(), 11.0 * d, 700, RED, 14.0 * d, 11.0 * d, 0, 1.0);
-                let labels = calendar::weekday_labels(!en());
+                let labels = nacre_core::i18n::weekday_labels(lang, monday_first, calendar::weekday_labels(monday_first));
                 let (gx, gy) = (10.0 * d, 30.0 * d);
                 let cw = (w - 2.0 * gx) / 7.0;
                 let rows = g.rows.max(5) as f32;
                 let ch = (h - gy - 8.0 * d) / (rows + 1.0);
                 for (k, l) in labels.iter().enumerate() {
-                    let s: String = l.chars().take(1).collect();
+                    let s: String = if lang == nacre_core::i18n::Lang::Vi { (*l).to_string() } else { l.chars().take(1).collect() };
                     self.text(p, &s, 9.0 * d, 600, fg, gx + cw * (k as f32 + 0.5), gy, 1, 0.5);
                 }
                 for day in 1..=g.days {
