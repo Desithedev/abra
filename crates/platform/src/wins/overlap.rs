@@ -91,17 +91,30 @@ pub fn evaluate(fg: isize, own_pid: u32, dock: (i32, i32, i32, i32), area: nacre
         if cx < 0 || cy < 0 || cx >= screen.0 || cy >= screen.1 {
             return none;
         }
+        let mut wr = RECT::default();
+        let raw_ok = GetWindowRect(h, &mut wr).is_ok();
+        let no_overhang = raw_ok && {
+            let (wl, wt, wrr, wb) = (wr.left - area.x, wr.top - area.y, wr.right - area.x, wr.bottom - area.y);
+            wl >= -EDGE_SLACK && wt >= -EDGE_SLACK && wrr <= screen.0 + EDGE_SLACK && wb <= screen.1 + EDGE_SLACK
+        };
         let frame = (r.left, r.top, r.right, r.bottom);
         let zoomed = IsZoomed(h).as_bool();
         let caption = GetWindowLongW(h, GWL_STYLE) as u32 & WS_CAPTION.0 == WS_CAPTION.0;
         let work = work_area(h).map(|w| (w.0 - area.x, w.1 - area.y, w.2 - area.x, w.3 - area.y)).unwrap_or((0, 0, screen.0, screen.1));
-        let fullscreen = is_fullscreen(frame, screen, work, zoomed, caption) || exclusive_fullscreen();
+        let fullscreen = is_fullscreen(frame, screen, work, zoomed, caption)
+            || (covers(frame, screen) && (no_overhang || shell_fullscreen_busy()))
+            || exclusive_fullscreen();
         if fullscreen || zoomed {
             return Overlap { overlapped: true, fullscreen };
         }
         let hit = r.bottom > dock.1 && r.top < dock.3 && r.right > dock.0 && r.left < dock.2;
         Overlap { overlapped: hit, fullscreen: false }
     }
+}
+
+fn shell_fullscreen_busy() -> bool {
+    use windows::Win32::UI::Shell::{SHQueryUserNotificationState, QUNS_BUSY};
+    unsafe { SHQueryUserNotificationState().is_ok_and(|s| s == QUNS_BUSY) }
 }
 
 fn exclusive_fullscreen() -> bool {

@@ -122,7 +122,9 @@ enum Action {
     Anim,
     Refraction,
     DockOn,
+    StartMenuStyle(bool),
     MenuBarOn,
+    MenuBarClean,
     Clock24,
     BarStyle(u8),
     HotCycle(usize),
@@ -949,6 +951,11 @@ impl Win {
                     None,
                     vec![
                         RowDef::Toggle(prefs::tr("Aktifkan Deck"), s.dock_enabled, Action::DockOn),
+                        RowDef::Seg(
+                            prefs::tr("Menu Mulai"),
+                            vec![(prefs::tr("ABRA"), Action::StartMenuStyle(true)), (prefs::tr("Windows"), Action::StartMenuStyle(false))],
+                            if s.abra_start_menu { 0 } else { 1 },
+                        ),
                         RowDef::Seg(prefs::tr("Perilaku"), behaviors(true), beh_idx(s.dock)),
                         RowDef::Seg(prefs::tr("Efek minimize"), vec![(prefs::tr("Funnel"), Action::MinEffect(0)), (prefs::tr("Skala"), Action::MinEffect(1))], s.min_effect as usize),
                         RowDef::Toggle(prefs::tr("Ikon seragam (squircle)"), s.dock_plates, Action::DockPlates),
@@ -1042,6 +1049,7 @@ impl Win {
                     None,
                     vec![
                         RowDef::Toggle(prefs::tr("Aktifkan Rail"), s.menubar, Action::MenuBarOn),
+                        RowDef::Toggle(prefs::tr("Hanya logo (sembunyikan menu)"), s.menubar_clean, Action::MenuBarClean),
                         RowDef::Seg(
                             prefs::tr("Perilaku"),
                             [(prefs::tr("Tetap"), Behavior::Fixed), (prefs::tr("Menimpa"), Behavior::Overlay), (prefs::tr("Pintar"), Behavior::Smart)]
@@ -1896,6 +1904,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 Some(Action::WinShadow) => prefs::update(|s| s.win_shadow = !s.win_shadow),
                 Some(Action::HoverOpen) => prefs::update(|s| s.notch_hover_open = !s.notch_hover_open),
                 Some(Action::MenuBarOn) => prefs::update(|s| s.menubar = !s.menubar),
+                Some(Action::MenuBarClean) => prefs::update(|s| s.menubar_clean = !s.menubar_clean),
                 Some(Action::HotCycle(i)) => prefs::update(|s| s.hot[i] = s.hot[i].next()),
                 Some(Action::StageOn) => prefs::update(|s| s.stage = !s.stage),
                 Some(Action::SwitcherOn) => prefs::update(|s| s.switcher = !s.switcher),
@@ -1951,6 +1960,7 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 }),
                 Some(Action::Clock24) => prefs::update(|s| s.clock_24h = !s.clock_24h),
                 Some(Action::DockOn) => prefs::update(|s| s.dock_enabled = !s.dock_enabled),
+                Some(Action::StartMenuStyle(v)) => prefs::update(|s| s.abra_start_menu = v),
                 Some(Action::NotchOn) => prefs::update(|s| s.notch_enabled = !s.notch_enabled),
                 Some(Action::Refraction) => prefs::update(|s| s.refraction = !s.refraction),
                 Some(Action::Anim) => prefs::update(|s| s.anim = !s.anim),

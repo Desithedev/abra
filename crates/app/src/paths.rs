@@ -27,6 +27,10 @@ pub fn marker() -> PathBuf {
     config_dir().join("taskbar_hidden.flag")
 }
 
+pub fn pins() -> PathBuf {
+    config_dir().join("pins.txt")
+}
+
 pub fn log() -> PathBuf {
     config_dir().join("abra.log")
 }

@@ -1,6 +1,6 @@
 mod custom_icons;
 pub mod menu;
-mod pins;
+pub(crate) mod pins;
 mod preview;
 mod tooltip;
 mod view;
@@ -80,6 +80,7 @@ const CMD_TRASH_OPEN: usize = 9;
 const CMD_TRASH_EMPTY: usize = 10;
 const CMD_STACK_FOLDER: usize = 11;
 const CMD_FORGET: usize = 12;
+const CMD_START_STYLE: usize = 13;
 const CMD_STACK: usize = 100;
 const RECENTS_KEEP: usize = 8;
 const RECENTS_SHOW: usize = 3;
@@ -1269,11 +1270,24 @@ impl Dock {
         self.apply(self.cursor, false);
     }
 
+    fn start_anchor(&self) -> (i32, i32) {
+        let x = self.area.x + self.screen.0 / 2;
+        let y = self.win_pos.1 + self.card_y as i32 - (10.0 * self.dpi).round() as i32;
+        (x, y)
+    }
+
     fn on_click(&mut self, x: f32) {
         let Some((idx, entry)) = self.entry_at(x) else { return };
         self.hide_popups();
         match entry {
-            Entry::Start => launch::toggle_start(self.start_open_at_press),
+            Entry::Start => {
+                if crate::prefs::get().abra_start_menu {
+                    let (ax, ay) = self.start_anchor();
+                    crate::startmenu::toggle(&self.comp, ax, ay, self.dpi);
+                } else {
+                    launch::toggle_start(self.start_open_at_press);
+                }
+            }
             Entry::Launchpad => crate::launchpad::toggle(),
             Entry::App(i) => {
                 let Some(it) = self.items.get(i).cloned() else { return };
@@ -1367,6 +1381,13 @@ impl Dock {
             items.push(menu::Item::separator());
         } else if let Some(key) = info.special {
             items.push(menu::Item::action(CMD_OPEN, crate::prefs::tr(if key == START_KEY { "Buka menu Mulai" } else { "Buka Apps" }), true));
+            if key == START_KEY {
+                items.push(menu::Item::action(
+                    CMD_START_STYLE,
+                    crate::prefs::tr(if crate::prefs::get().abra_start_menu { "Gunakan Menu Windows bawaan" } else { "Gunakan Menu ABRA" }),
+                    true,
+                ));
+            }
             items.push(menu::Item::action(CMD_ICON, crate::prefs::tr("Ubah ikon…"), true));
             if custom_icons::has(key) {
                 items.push(menu::Item::action(CMD_ICON_RESET, crate::prefs::tr("Kembalikan ikon asli"), true));
@@ -1588,11 +1609,19 @@ impl Dock {
                     launch::open(&it.path);
                 } else if let Some(key) = info.special {
                     if key == START_KEY {
-                        launch::toggle_start(false);
+                        if crate::prefs::get().abra_start_menu {
+                            let (ax, ay) = self.start_anchor();
+                            crate::startmenu::toggle(&self.comp, ax, ay, self.dpi);
+                        } else {
+                            launch::toggle_start(false);
+                        }
                     } else {
                         crate::launchpad::toggle();
                     }
                 }
+            }
+            CMD_START_STYLE => {
+                crate::prefs::update(|s| s.abra_start_menu = !s.abra_start_menu);
             }
             CMD_CLOSE => {
                 if let Some(it) = &info.item {

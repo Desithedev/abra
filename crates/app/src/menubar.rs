@@ -670,16 +670,18 @@ impl Bar {
         let t = |s: &str, wgt: i32| self.text_w(s, wgt) + 2.0 * pad;
         let mut left = vec![
             LItem { id: LOGO, width: self.h as f32 * 1.05 },
-            LItem { id: APP, width: t(&self.app_label(), APP_W) },
         ];
-        if self.native.is_empty() {
-            let l = lang();
-            for (i, m) in self.profile().iter().enumerate() {
-                left.push(LItem { id: PROF0 + i as u32, width: t(m.title(l), BAR_W) });
-            }
-        } else {
-            for (i, top) in self.native.iter().enumerate().take(20) {
-                left.push(LItem { id: NATIVE0 + i as u32, width: t(&top.title, BAR_W) });
+        if !prefs::get().menubar_clean {
+            left.push(LItem { id: APP, width: t(&self.app_label(), APP_W) });
+            if self.native.is_empty() {
+                let l = lang();
+                for (i, m) in self.profile().iter().enumerate() {
+                    left.push(LItem { id: PROF0 + i as u32, width: t(m.title(l), BAR_W) });
+                }
+            } else {
+                for (i, top) in self.native.iter().enumerate().take(20) {
+                    left.push(LItem { id: NATIVE0 + i as u32, width: t(&top.title, BAR_W) });
+                }
             }
         }
         let icon_w = 30.0 * d;
@@ -1232,6 +1234,7 @@ impl Bar {
                 a(102, &prefs::tr("Toko Microsoft…")),
                 Item::separator(),
                 a(103, &prefs::tr("Pengaturan ABRA…")),
+                a(107, &format!("{}{}", if prefs::get().menubar_clean { "\u{2713} " } else { "" }, prefs::tr("Hanya logo (sembunyikan menu)"))),
                 a(105, &prefs::tr("Apps")).with_accel("Ctrl+Shift+Space"),
                 a(106, &prefs::tr("Overview")).with_accel("Ctrl+↑"),
                 a(104, &prefs::tr("Paksa Keluar…")),
@@ -1346,6 +1349,7 @@ impl Bar {
             104 => launch::show("taskmgr.exe", ""),
             105 => crate::launchpad::toggle(),
             106 => crate::mission::toggle(),
+            107 => prefs::update(|st| st.menubar_clean = !st.menubar_clean),
             110 => confirm_power("Tidur sekarang?", "rundll32.exe", "powrprof.dll,SetSuspendState 0,1,0"),
             111 => confirm_power("Mulai ulang komputer sekarang?", "shutdown.exe", "/r /t 0"),
             112 => confirm_power("Matikan komputer sekarang?", "shutdown.exe", "/s /t 0"),
@@ -1479,6 +1483,17 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                 if let Some(id) = b.id_at(x) {
                     b.press_feedback();
                     b.click(id);
+                }
+            });
+            LRESULT(0)
+        }
+        WM_RBUTTONUP => {
+            let (x, _) = xy(lp);
+            with_bar(|b| {
+                if let Some(id) = b.id_at(x) {
+                    if id == LOGO {
+                        b.click(LOGO);
+                    }
                 }
             });
             LRESULT(0)

@@ -18,6 +18,7 @@ mod traymenu;
 mod mission;
 mod motion;
 mod spotlight;
+mod startmenu;
 mod stage;
 mod switcher;
 mod mainwin;
