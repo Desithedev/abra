@@ -33,6 +33,7 @@ const WM_APPS: u32 = WM_APP + 80;
 const WM_CLOSE_SPOT: u32 = WM_APP + 81;
 const WM_FILES: u32 = WM_APP + 84;
 const WM_THUMBS: u32 = WM_APP + 85;
+const WM_ICON_READY: u32 = WM_APP + 86;
 const WM_MOUSELEAVE_SPOT: u32 = 0x02A3;
 const T_MORPH: usize = 1;
 const T_REGION: usize = 2;
@@ -730,28 +731,18 @@ impl Spot {
                 self.rows.truncate(9);
             }
             Mode::Apps if q.is_empty() => {
-                let push = |rows: &mut Vec<Row>, sections: &mut Vec<(String, std::ops::Range<usize>)>, title: String, idxs: Vec<usize>, apps: &[App]| {
-                    if idxs.is_empty() {
-                        return;
+                let mut added = vec![false; self.apps.len()];
+                for i in self.suggestions() {
+                    if let Some(a) = self.apps.get(i) {
+                        added[i] = true;
+                        self.rows.push(Row { kind: RKind::App, title: a.name.clone(), sub: String::new(), path: a.path.clone() });
                     }
-                    let start = rows.len();
-                    for i in idxs {
-                        rows.push(Row { kind: RKind::App, title: apps[i].name.clone(), sub: String::new(), path: apps[i].path.clone() });
-                    }
-                    sections.push((title, start..rows.len()));
-                };
-                let (mut rows, mut sections) = (Vec::new(), Vec::new());
-                let sugg = self.suggestions();
-                push(&mut rows, &mut sections, prefs::tr("Saran").to_string(), sugg, &self.apps);
-                for c in appcat::ALL {
-                    let mut v: Vec<usize> = (0..self.apps.len()).filter(|&i| appcat::guess(&self.apps[i].name, &self.apps[i].path) == c).collect();
-                    v.sort_by_key(|&i| self.apps[i].name.to_lowercase());
-                    push(&mut rows, &mut sections, prefs::tr(c.title()).to_string(), v, &self.apps);
                 }
-                self.rows = rows;
-                self.sections = sections;
-                if self.expanded.len() != self.sections.len() {
-                    self.expanded = vec![false; self.sections.len()];
+                let mut rest: Vec<usize> = (0..self.apps.len()).filter(|&i| !added[i]).collect();
+                rest.sort_by_key(|&i| self.apps[i].name.to_lowercase());
+                for i in rest {
+                    let a = &self.apps[i];
+                    self.rows.push(Row { kind: RKind::App, title: a.name.clone(), sub: String::new(), path: a.path.clone() });
                 }
             }
             Mode::Apps => {
@@ -957,22 +948,74 @@ impl Spot {
         if let Some(c) = self.icon_cache.get(&key) {
             return c.clone();
         }
-        let plates = prefs::get().dock_plates;
-        let s = icons::load(path, px).and_then(|mut b| {
-            if !icons::is_themed(path) {
-                if plates && b.w == b.h {
-                    b.bgra = nacre_core::iconplate::plate(&b.bgra, b.w);
-                }
-                let p = prefs::get();
-                b.bgra = nacre_core::iconplate::style_icon_v(&b.bgra, p.icon_style, p.icon_tint, prefs::icon_dark());
+        static APP_ICONS: std::sync::Mutex<Option<std::collections::HashMap<String, Option<Bitmap>>>> = std::sync::Mutex::new(None);
+        static ICON_TX: std::sync::Mutex<Option<std::sync::mpsc::Sender<(String, String, i32, bool, nacre_core::settings::IconStyle, u8, bool)>>> = std::sync::Mutex::new(None);
+        static ICON_ASKED: std::sync::Mutex<Option<std::collections::HashSet<String>>> = std::sync::Mutex::new(None);
+
+        let cached = APP_ICONS.lock().ok().and_then(|g| g.as_ref().and_then(|m| m.get(&key).cloned()));
+        if let Some(opt_bmp) = cached {
+            let s = opt_bmp.and_then(|b| self.gfx.surface_from_bgra(b.w, b.h, &b.bgra).ok());
+            if self.icon_cache.len() > 200 {
+                self.icon_cache.clear();
             }
-            self.gfx.surface_from_bgra(b.w, b.h, &b.bgra).ok()
-        });
-        if self.icon_cache.len() > 200 {
-            self.icon_cache.clear();
+            self.icon_cache.insert(key, s.clone());
+            return s;
         }
-        self.icon_cache.insert(key, s.clone());
-        s
+
+        let need_send = ICON_ASKED
+            .lock()
+            .map(|mut g| g.get_or_insert_with(Default::default).insert(key.clone()))
+            .unwrap_or(false);
+        if need_send {
+            let mut tx_g = ICON_TX.lock().unwrap_or_else(|e| e.into_inner());
+            if tx_g.is_none() {
+                let (tx, rx) = std::sync::mpsc::channel::<(String, String, i32, bool, nacre_core::settings::IconStyle, u8, bool)>();
+                let ctl_hwnd = CTL.with(|c| c.borrow().as_ref().map(|c| c.hwnd.0 as isize)).unwrap_or(0);
+                std::thread::spawn(move || unsafe {
+                    use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
+                    let com = CoInitializeEx(None, COINIT_MULTITHREADED).is_ok();
+                    while let Ok((k, p, sz, plates, style, tint, dark)) = rx.recv() {
+                        let mut load_one = |k: String, p: String, sz: i32, plates: bool, style: nacre_core::settings::IconStyle, tint: u8, dark: bool| {
+                            let bmp = icons::load(&p, sz).map(|mut b| {
+                                if !icons::is_themed(&p) {
+                                    if plates && b.w == b.h {
+                                        b.bgra = nacre_core::iconplate::plate(&b.bgra, b.w);
+                                    }
+                                    b.bgra = nacre_core::iconplate::style_icon_v(&b.bgra, style, tint, dark);
+                                }
+                                b
+                            });
+                            if let Ok(mut g) = APP_ICONS.lock() {
+                                g.get_or_insert_with(Default::default).insert(k, bmp);
+                            }
+                        };
+                        load_one(k, p, sz, plates, style, tint, dark);
+                        let mut count = 0;
+                        while count < 12 {
+                            match rx.try_recv() {
+                                Ok((k2, p2, sz2, pl2, st2, ti2, dk2)) => {
+                                    load_one(k2, p2, sz2, pl2, st2, ti2, dk2);
+                                    count += 1;
+                                }
+                                Err(_) => break,
+                            }
+                        }
+                        if ctl_hwnd != 0 {
+                            let _ = PostMessageW(Some(HWND(ctl_hwnd as *mut _)), WM_ICON_READY, WPARAM(0), LPARAM(0));
+                        }
+                    }
+                    if com {
+                        CoUninitialize();
+                    }
+                });
+                *tx_g = Some(tx);
+            }
+            if let Some(tx) = tx_g.as_ref() {
+                let p = prefs::get();
+                let _ = tx.send((key, path.to_string(), px, p.dock_plates, p.icon_style, p.icon_tint, prefs::icon_dark()));
+            }
+        }
+        None
     }
 
     fn sym(&mut self, parent: &ContainerVisual, s: Sym, cx: f32, cy: f32, size: f32, rgb: [u8; 3], op: f32) {
@@ -1217,7 +1260,6 @@ impl Spot {
         let _ = body.Children().and_then(|k| k.InsertAtTop(&area));
         let empty_q = self.query.trim().is_empty();
         match self.mode {
-            Mode::Apps if empty_q => self.draw_sections(&area, w, top, ph, fg, false),
             Mode::Apps => self.draw_grid(&area, w, top, fg),
             Mode::Files if empty_q => self.draw_sections(&area, w, top, ph, fg, true),
             _ => self.draw_rows(&area, w, top, 54.0 * d, ph, fg),
@@ -1725,6 +1767,14 @@ unsafe extern "system" fn ctl_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             finish_closing();
             LRESULT(0)
         }
+        WM_ICON_READY => {
+            with_spot(|s| {
+                if !s.morphing {
+                    s.render();
+                }
+            });
+            LRESULT(0)
+        }
         WM_THUMBS => {
             with_spot(|s| {
                 if s.mode == Mode::Files && s.query.trim().is_empty() && !s.morphing {
@@ -1884,7 +1934,7 @@ unsafe extern "system" fn spot_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
         WM_MOUSEWHEEL => {
             let delta = (wp.0 >> 16) as i16;
             with_spot(|s| {
-                if matches!(s.mode, Mode::Apps | Mode::Files) && s.query.trim().is_empty() {
+                if s.mode == Mode::Files && s.query.trim().is_empty() {
                     let max = (s.content_h - (s.view.1 - s.view.0)).max(0.0);
                     s.pscroll = (s.pscroll + if delta < 0 { 72.0 } else { -72.0 } * s.dpi).clamp(0.0, max);
                     s.render();

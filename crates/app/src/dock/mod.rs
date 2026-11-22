@@ -570,7 +570,9 @@ impl Dock {
             let rest = layout(&self.slots, None, self.win.0 as f32, &self.m);
             let cw = rest.total + 2.0 * self.pad_side;
             let cx = (self.win.0 as f32 - cw) / 2.0;
-            (cx as i32, self.card_y as i32, (cx + cw).ceil() as i32, (self.card_y + self.card_h).ceil() as i32)
+            let pad_x = (16.0 * self.dpi).ceil() as i32;
+            let top = (self.card_y - self.m.icon * 0.45).max(0.0) as i32;
+            ((cx as i32 - pad_x).max(0), top, ((cx + cw).ceil() as i32 + pad_x).min(self.win.0), self.win.1)
         };
         unsafe {
             let rgn = CreateRectRgn(l, t, r, b);
@@ -1176,7 +1178,7 @@ impl Dock {
     fn drag_update(&mut self, x: f32, y: f32) {
         let Some(p) = &self.press else { return };
         if self.dragging.is_none() {
-            let far = (x - p.x).abs().max((y - p.y).abs()) > 6.0 * self.dpi;
+            let far = (x - p.x).abs().max((y - p.y).abs()) > 12.0 * self.dpi;
             if !far || p.pinned_item.is_none() {
                 return;
             }
@@ -1226,7 +1228,10 @@ impl Dock {
         let press = self.press.take();
         match (self.dragging.take(), press) {
             (Some(_), Some(p)) => self.finish_drag(x, y, p),
-            (None, Some(_)) => self.on_click(x),
+            (None, Some(p)) => {
+                let target_x = if self.entry_at(x).is_some() { x } else { p.x };
+                self.on_click(target_x);
+            }
             _ => {}
         }
     }
